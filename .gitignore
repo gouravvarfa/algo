@@ -1,0 +1,8 @@
+.env
+angelone_credentials.json
+.venv/
+.cache/
+data/
+__pycache__/
+.provider_call_metrics.json
+*.log
