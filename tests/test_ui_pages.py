@@ -8,10 +8,15 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 WEB = Path(__file__).resolve().parents[1] / "web"
-PAGES = {"/": "index.html", "/top-bottom": "top_bottom.html", "/journal": "top_bottom.html", "/replay": "replay.html", "/simulator": "simulator.html",
+PAGES = {"/top-bottom": "top_bottom.html", "/journal": "top_bottom.html", "/simulator": "simulator.html",
          "/builder": "builder.html", "/backtesting": "builder.html", "/history": "builder.html", "/options": "options.html",
-         "/breakout15": "breakout15.html", "/settings": "settings.html"}
-NAV_ROUTES = ["/", "/top-bottom", "/simulator", "/builder", "/backtesting", "/history", "/options", "/replay", "/breakout15", "/settings"]
+         "/settings": "settings.html"}
+NAV_ROUTES = ["/top-bottom", "/simulator", "/builder", "/backtesting", "/history", "/options", "/settings"]
+
+
+def test_home_redirects_to_top_bottom(client):
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/top-bottom"
 
 
 @pytest.fixture(scope="module")

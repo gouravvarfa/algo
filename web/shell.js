@@ -22,9 +22,9 @@
 
   // flat navigation: every page is one click away
   var NAV = [
-    ["Dashboard", "/"], ["Top Bottom", "/top-bottom"], ["Options Simulator", "/simulator"], ["Strategy Builder", "/builder"],
+    ["Top Bottom", "/top-bottom"], ["Options Simulator", "/simulator"], ["Strategy Builder", "/builder"],
     ["Backtesting", "/backtesting"], ["History", "/history"], ["Option Chain", "/options"],
-    ["Index Replay", "/replay"], ["15-Min Breakout", "/breakout15"], ["Settings", "/settings"],
+    ["Settings", "/settings"],
   ];
   document.addEventListener("DOMContentLoaded", function () {
     var nav = document.querySelector("[data-shell]"); if (!nav) return;
@@ -37,7 +37,7 @@
     // every page gets the same top navigation bar: an old sidebar is replaced by it
     if (side) {
       var bar = document.createElement("header"); bar.className = "tnav";
-      bar.innerHTML = '<a class="logo" href="/"><i><b style="height:8px"></b><b style="height:13px"></b><b style="height:20px"></b><b style="height:16px"></b></i><span>Algo Trading</span></a>';
+      bar.innerHTML = '<a class="logo" href="/top-bottom"><i><b style="height:8px"></b><b style="height:13px"></b><b style="height:20px"></b><b style="height:16px"></b></i><span>Algo Trading</span></a>';
       bar.appendChild(nav);
       document.body.insertBefore(bar, document.body.firstChild);
       side.remove();

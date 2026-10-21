@@ -14,10 +14,8 @@ from pydantic import BaseModel
 
 from app.paper_trading.engine import DEFAULT_LOOKBACK_DAYS, TIMEFRAMES, PaperEngine, PaperError
 from app.providers.angelone_provider import AngelOneProvider
-from app.breakout15 import api as breakout15_api
 from app.options import api as options_api
 from app.options import collector as option_collector
-from app.replay import api as replay_api
 from app import auth
 from app.services import angelone_credential_store
 
@@ -32,9 +30,7 @@ async def lifespan(_: FastAPI):
     global engine
     provider = AngelOneProvider()
     engine = PaperEngine(provider)
-    breakout15_api.provider = provider
     options_api.provider = provider
-    replay_api.provider = provider  # replay downloads reuse the same Angel One session
     engine.start()
     asyncio.create_task(options_api.warm())
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
@@ -43,9 +39,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Top-Bottom Paper Trader", lifespan=lifespan)
-app.include_router(breakout15_api.router)
 app.include_router(options_api.router)
-app.include_router(replay_api.router)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
@@ -142,11 +136,6 @@ class AddInstrument(BaseModel):
     lookback_days: int | None = None
 
 
-@app.get("/replay")
-async def replay_page():
-    return FileResponse(WEB_DIR / "replay.html", headers={"Cache-Control": "no-store"})
-
-
 @app.get("/builder")
 @app.get("/backtesting")
 @app.get("/history")
@@ -172,12 +161,7 @@ async def options_page():
 
 @app.get("/")
 async def index():
-    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/breakout15")
-async def breakout15_page():
-    return FileResponse(WEB_DIR / "breakout15.html", headers={"Cache-Control": "no-store"})
+    return RedirectResponse("/top-bottom", status_code=307)   # the Dashboard page was removed; Top Bottom is the home page
 
 
 @app.get("/api/overview")

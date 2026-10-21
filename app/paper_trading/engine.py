@@ -471,7 +471,7 @@ class PaperEngine:
             self.feed.subscribe(c.exch_seg, c.token)
         first_day = (from_dt.date() if from_dt else now.date())
         gap_bars = await self._gap_bars(inst, from_dt, now)
-        from app.replay.engine import reconstruct_state
+        from app.strategy.top_bottom.warmup import reconstruct_state
 
         async def get_daily(c):
             df = await self._contract_daily(c, from_dt, now)
@@ -521,7 +521,7 @@ class PaperEngine:
             mins = trim_partial_first_day(merge_minutes(mins, self.feed.builder.minutes(inst.token)))   # REST is authoritative; ticks fill the closing / forming minute
             if len(mins) < 30:
                 return None
-            from app.replay.engine import reconstruct_state            # same warm-up the Index Replay uses
+            from app.strategy.top_bottom.warmup import reconstruct_state
             rows = [(t.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for t, r in confirmed.iterrows()]
             if len(rows) < 5:
                 return None
