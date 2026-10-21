@@ -251,7 +251,7 @@ class PaperEngine:
                 chain = await self._chain(inst, now, from_dt)
             except Exception:
                 log.exception("contract chain evaluation failed for %s; using the single-contract result", inst.symbol)
-        active, rolls, roll_marks = inst, [], []
+        active, rolls, roll_marks, prev_line = inst, [], [], None
         if chain is not None:
             signals, trades = [], chain.trades
             ac = chain.active
@@ -260,7 +260,14 @@ class PaperEngine:
             dates, closes = [t.to_pydatetime() for t in ad.index], [float(x) for x in ad["close"]]
             start_active = chain.segments[-1].start
             raw_active = (await self._contract_daily(ac, from_dt, now))
-            raw = pd.concat([chain.chart[chain.chart.index.date < start_active], raw_active[raw_active.index.date >= start_active]])
+            # the chart line is the ACTIVE contract's own price wherever it has history (its System Points are the ones the rules use);
+            # before that, the earlier contract. The earlier contract over the overlap is returned separately as a faint reference line.
+            first_active = raw_active.index[0] if len(raw_active) else None
+            older = chain.chart if first_active is None else chain.chart[chain.chart.index < first_active]
+            raw = pd.concat([older, raw_active]) if len(raw_active) else chain.chart
+            overlap = chain.chart if first_active is None else chain.chart[chain.chart.index >= first_active]
+            prev_line = {"contract": " + ".join(sg.contract.trading_symbol for sg in chain.segments[:-1]),
+                         "data": [{"time": _ts(t.to_pydatetime()), "value": float(r.close)} for t, r in overlap.iterrows()]}
             rolls = chain.rolls
             engine_note = (f"Contract chain: {' → '.join(sg.contract.trading_symbol for sg in chain.segments)}. A position still open at a contract's cutoff "
                            f"(8 days before expiry) is closed there and continued in the next contract as a fresh entry with that contract's own System Points; "
@@ -375,6 +382,10 @@ class PaperEngine:
             "engine_warning": engine_warn,
             "trades": rows[::-1],
             "candles": _candles_with_tick(raw, ltp if live_tick else None),
+            "prev_contract_line": prev_line,
+            # the System Points the rules use (active contract): the last few confirmed Tops / Bottoms, at their pivot day and close
+            "system_points": [{"time": _ts(sp.pivot_date.replace(hour=0, minute=0, second=0, microsecond=0)), "kind": sp.kind, "price": round(sp.price, 2)}
+                              for sp in sorted(tops[-3:] + bottoms[-3:], key=lambda x: x.pivot_date)],
             "feed": {"live": live_tick, "age_s": self.feed.age(active.token), "connected": self.feed.connected},
             "rolls": [{"time": _iso(r["time"]), "from": r["from"], "to": r["to"], "old_price": r["old_price"], "new_price": r["new_price"]} for r in rolls],
             "added_marker": _ts(added_at),

@@ -1,4 +1,6 @@
-/* Shared shell: theme (persistent, system-aware) + sidebar navigation. Loaded in <head> so the theme is applied before first paint. */
+/* Shared shell: theme (persistent, system-aware) + left sidebar navigation (icons, live index cards) + status bar.
+   Loaded in <head> so the theme is applied before first paint. Every page keeps its own <nav data-shell> placeholder;
+   the old per-page sidebar / top bar is replaced by this one shell. */
 (function () {
   var KEY = "theme", root = document.documentElement;
   function stored() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
@@ -26,59 +28,74 @@
     ["Backtesting", "/backtesting"], ["History", "/history"], ["Option Chain", "/options"],
     ["Settings", "/settings"],
   ];
+  var ICON = {
+    "/top-bottom": "M4 20V10M10 20V4M16 20v-7M22 20H2",
+    "/simulator": "M4 4h16v16H4zM8 15l3-4 3 2 3-5",
+    "/builder": "M6 4v16M18 4v16M6 8h12M6 16h12",
+    "/backtesting": "M3 3v18h18M7 14l4-4 3 3 5-6",
+    "/history": "M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7M3 4v4h4",
+    "/options": "M5 4h14v16H5zM9 9h6M9 13h6M9 17h3",
+    "/settings": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  };
+  function svg(d, cls) { return '<svg class="' + (cls || "ic") + '" viewBox="0 0 24 24" aria-hidden="true"><path d="' + d + '"/></svg>'; }
+  function fmt(v) { return v == null ? "–" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
   document.addEventListener("DOMContentLoaded", function () {
     var nav = document.querySelector("[data-shell]"); if (!nav) return;
     var here = location.pathname.replace(/\/+$/, "") || "/";
     if (here === "/journal") here = "/top-bottom";
+    nav.className = "sb-nav";
     nav.innerHTML = NAV.map(function (n) {
-      return '<a class="nav-link ' + (n[1] === here ? "active" : "") + '" href="' + n[1] + '"' + (n[1] === here ? ' aria-current="page"' : "") + ">" + n[0] + "</a>";
+      var on = n[1] === here;
+      return '<a class="nav-link' + (on ? " active" : "") + '" href="' + n[1] + '"' + (on ? ' aria-current="page"' : "") + ">" + svg(ICON[n[1]]) + "<span>" + n[0] + "</span></a>";
     }).join("");
-    var side = nav.closest(".sidebar");
-    // every page gets the same top navigation bar: an old sidebar is replaced by it
-    if (side) {
-      var bar = document.createElement("header"); bar.className = "tnav";
-      bar.innerHTML = '<a class="logo" href="/top-bottom"><i><b style="height:8px"></b><b style="height:13px"></b><b style="height:20px"></b><b style="height:16px"></b></i><span>Algo Trading</span></a>';
-      bar.appendChild(nav);
-      document.body.insertBefore(bar, document.body.firstChild);
-      side.remove();
-    }
-    var tbar = nav.closest(".tnav");
-    if (tbar) {
-      document.body.classList.add("has-tnav");
-      var st = document.createElement("div"); st.className = "nav-status";
-      st.innerHTML = '<span class="st" id="nav-mkt" title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected."><i></i><span>Market</span></span><span class="st paper" title="Paper trading and research only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>';
-      tbar.appendChild(st);
-      var pollMkt = function () {
-        fetch("/api/overview").then(function (r) { return r.ok ? r.json() : null; }).then(function (o) {
-          var el = document.getElementById("nav-mkt"); if (!el) return;
-          if (!o) { el.className = "st"; el.lastChild.textContent = "Market n/a"; return; }
-          el.className = "st" + (o.market_open ? " open" : ""); el.lastChild.textContent = o.market_open ? "Market open" : "Market closed";
-        }).catch(function () {});
-      };
-      pollMkt(); setInterval(pollMkt, 60000);
-      if (!document.getElementById("theme") && !tbar.querySelector(".themeb")) {   // pages with their own toggle (Dashboard) keep it
-        var tb = document.createElement("button"); tb.className = "themeb"; tb.setAttribute("aria-label", "Toggle theme"); tb.title = "Toggle light / dark theme";
-        var icon = function () { tb.textContent = isDark() ? "☀" : "☾"; };
-        tb.onclick = function () { setTheme(isDark() ? "light" : "dark"); icon(); };
-        window.addEventListener("themechange", icon); icon();
-        tbar.appendChild(tb);
-      }
-      return;
-    }
-    if (!side) return;
-    if (!document.getElementById("theme")) {   // pages with their own toggle (Dashboard) keep it
-      var box = document.createElement("div"); box.className = "side-foot";
-      box.innerHTML = '<div class="seg" role="group" aria-label="Theme"><button class="seg-btn" data-theme-btn="light">Light</button><button class="seg-btn" data-theme-btn="dark">Dark</button></div>';
-      side.appendChild(box);
-      box.querySelectorAll("[data-theme-btn]").forEach(function (b) { b.onclick = function () { setTheme(b.dataset.themeBtn); }; });
-    }
-    var c = document.createElement("button"); c.className = "side-collapse"; c.setAttribute("aria-label", "Collapse sidebar"); c.textContent = "«";
-    side.appendChild(c);
-    var app = side.closest(".app");
-    function col(on) { app.classList.toggle("collapsed", on); c.textContent = on ? "»" : "«"; try { localStorage.setItem("sidebar", on ? "1" : "0"); } catch (e) {} setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 200); }
-    c.onclick = function () { col(!app.classList.contains("collapsed")); };
-    var s = null; try { s = localStorage.getItem("sidebar"); } catch (e) {}
-    if (s === "1") col(true);
+
+    // one sidebar for every page: the page's old sidebar / top bar is removed, its content stays
+    var old = nav.closest(".sidebar") || nav.closest(".tnav");
+    var sb = document.createElement("aside"); sb.className = "sb";
+    sb.innerHTML = '<a class="sb-logo" href="/top-bottom"><i>' + svg("M4 20V10M10 20V4M16 20v-7M22 20H2", "ic w") + '</i><span>Algo Trading<small>Research · paper trading</small></span></a>';
+    sb.appendChild(nav);
+    var idx = document.createElement("div"); idx.className = "sb-idx";
+    idx.innerHTML = ["NIFTY", "BANKNIFTY"].map(function (s) {
+      return '<div class="iq" id="iq-' + s + '"><b>' + (s === "NIFTY" ? "NIFTY 50" : s) + '</b><span class="num p">–</span> <span class="num c"></span></div>';
+    }).join("");
+    sb.appendChild(idx);
+    var foot = document.createElement("div"); foot.className = "sb-foot";
+    foot.innerHTML = '<div class="seg" role="group" aria-label="Theme"><button class="seg-btn" data-theme-btn="light">Light</button><button class="seg-btn" data-theme-btn="dark">Dark</button></div>';
+    sb.appendChild(foot);
+    foot.querySelectorAll("[data-theme-btn]").forEach(function (b) { b.onclick = function () { setTheme(b.dataset.themeBtn); }; });
+    if (old) old.remove();
+    document.body.insertBefore(sb, document.body.firstChild);
+    document.body.classList.add("has-sb");
+
+    // thin status bar at the top of the content
+    var gb = document.createElement("div"); gb.className = "gbar";
+    gb.innerHTML = '<span class="gbar-title">' + (NAV.filter(function (n) { return n[1] === here; })[0] || [""])[0] + '</span><span class="sp"></span>'
+      + '<span class="st" id="nav-mkt" title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected."><i></i><span>Market</span></span>'
+      + '<span class="st paper" title="Paper trading and research only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>';
+    sb.parentNode.insertBefore(gb, sb.nextSibling);
     paint();
+
+    var pollMkt = function () {
+      fetch("/api/overview").then(function (r) { return r.ok ? r.json() : null; }).then(function (o) {
+        var el = document.getElementById("nav-mkt"); if (!el) return;
+        if (!o) { el.className = "st"; el.lastChild.textContent = "Market n/a"; return; }
+        el.className = "st" + (o.market_open ? " open" : ""); el.lastChild.textContent = o.market_open ? "Market open" : "Market closed";
+      }).catch(function () {});
+    };
+    var pollIdx = function () {
+      ["NIFTY", "BANKNIFTY"].forEach(function (s) {
+        fetch("/api/index/" + s).then(function (r) { return r.ok ? r.json() : null; }).then(function (q) {
+          var el = document.getElementById("iq-" + s); if (!el) return;
+          if (!q) { el.querySelector(".p").textContent = "n/a"; el.querySelector(".c").textContent = ""; return; }
+          el.querySelector(".p").textContent = fmt(q.price);
+          var c = el.querySelector(".c"); c.textContent = (q.pct >= 0 ? "+" : "") + q.pct.toFixed(2) + "%";
+          c.className = "num c " + (q.change >= 0 ? "pos" : "neg");
+          el.title = (q.live ? "Live tick" : "Last REST candle") + " · " + (q.change >= 0 ? "+" : "") + fmt(q.change) + " pts vs previous close";
+        }).catch(function () {});
+      });
+    };
+    pollMkt(); setInterval(pollMkt, 60000);
+    pollIdx(); setInterval(pollIdx, 15000);
   });
 })();

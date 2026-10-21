@@ -30,6 +30,7 @@ ROUTES = {
     "login": "/rest/auth/angelbroking/user/v1/loginByPassword",
     "candle_data": "/rest/secure/angelbroking/historical/v1/getCandleData",
     "logout": "/rest/secure/angelbroking/user/v1/logout",
+    "margin": "/rest/secure/angelbroking/margin/v1/batch",   # margin CALCULATOR only: it never places an order
 }
 
 AngelOneInterval = Literal[
@@ -194,5 +195,28 @@ async def get_candle_data(
             raise AngelOneApiError(body.get("message", "Unable to load candle data"), "data", retryable=False)
 
         return body.get("data") or []
+
+    return await _retry_async(_attempt)
+
+
+async def get_margin(session: AngelOneSession, positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Angel One's margin calculator for a basket (SPAN + exposure, with the hedge benefit of the whole basket).
+    `positions`: [{"exchange", "qty", "price", "productType", "token", "tradeType", "orderType"}]. Read-only: no order is placed."""
+
+    async def _attempt() -> dict[str, Any]:
+        call_metrics.record_angelone_call()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            try:
+                response = await client.post(
+                    BASE_URL + ROUTES["margin"],
+                    headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"},
+                    json={"positions": positions},
+                )
+            except httpx.HTTPError as exc:
+                raise AngelOneApiError(f"Could not reach Angel One: {exc}", "network", retryable=True) from exc
+        body = _parse_json_or_raise(response, "data")
+        if response.status_code != 200 or body.get("status") is not True:
+            raise AngelOneApiError(body.get("message", "Unable to calculate margin"), "data", retryable=False)
+        return body.get("data") or {}
 
     return await _retry_async(_attempt)

@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Options Simulator</title>
-<script src="/static/shell.js?v=20261026"></script>
-<link rel="stylesheet" href="/static/theme.css?v=20261026">
+<script src="/static/shell.js?v=20261027"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261027">
 <style>
   body { background: var(--bg-page); }
   /* ---- page ---- */
@@ -28,22 +28,53 @@
   .strip > div { padding: 10px 16px; min-width: 0; } .strip > div + div { border-left: 1px solid var(--border); }
   .strip .k { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
   .strip .v { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; } .strip .s { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  .main { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  /* compact chain: one-line header and legend, short rows, so many strikes fit on a small screen */
+  .main > .panel:first-child > .ph { padding: 10px 14px; flex-wrap: nowrap; gap: 6px; } .main > .panel:first-child > .ph h2 { font-size: 15px; white-space: nowrap; }
+  .main > .panel:first-child > .ph .chip { white-space: nowrap; }
+  .main > .panel:first-child .legend2 { padding: 6px 14px; gap: 10px; flex-wrap: nowrap; overflow-x: auto; }
+  table.oc tbody td { height: 30px; line-height: 1.15; padding-top: 2px !important; padding-bottom: 2px !important; } table.oc td.k small { font-size: 8.5px !important; line-height: 1; margin-top: 1px; }
+  .rcol .ph { min-width: 0; } .rcol .ph label.mult { min-width: 0; max-width: 100%; } .rcol .ph select { min-width: 0; max-width: 100%; width: 100%; }
+  .rcol .ph label.mult:has(#simpreset) { flex: 1 1 220px; }
+  @media (max-width: 1500px) { .main > .panel:first-child .legend2 .hint, .main > .panel:first-child > .ph .chip.calc { display: none; } table.oc td.ltp { min-width: 72px; } }
+  /* live mode */
+  .livebtn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 13px; border-radius: 999px; border: 1px solid var(--border-strong);
+    background: var(--bg-surface); color: var(--text-secondary); font: 700 12px var(--font-sans); letter-spacing: .04em; cursor: pointer; }
+  .livebtn i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+  .livebtn:hover { border-color: var(--danger); color: var(--danger); }
+  .livebtn.on { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+  .livebtn.on i { background: var(--danger); animation: lvpulse 1.2s ease-out infinite; }
+  @keyframes lvpulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 65%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+  .lv { display: inline-block; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+  .fl-up { animation: flup .9s ease-out; } .fl-dn { animation: fldn .9s ease-out; }
+  @keyframes flup { 0% { background: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success); } 100% { background: transparent; } }
+  @keyframes fldn { 0% { background: color-mix(in srgb, var(--danger) 40%, transparent); color: var(--danger); } 100% { background: transparent; } }
+  .stv { font-size: 8.5px; font-weight: 700; color: var(--text-muted); margin-left: 3px; }
+  body.live .actbar { opacity: .4; pointer-events: none; }
+  body.live #freq { background: var(--danger-soft); color: var(--danger); } body.live #freq::before { background: var(--danger); animation: lvpulse 1.2s ease-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .fl-up, .fl-dn, .livebtn.on i { animation: none; } }
+  .rcol { display: grid; gap: 14px; min-width: 0; align-content: start; }
+  /* the chain is pinned: it stays visible (premiums, B/S buttons) while positions and payoff on the right are scrolled */
+  .main > .panel:first-child { display: flex; flex-direction: column; position: sticky; top: calc(var(--gbar-h, 52px) + 10px);
+    height: calc(100vh - var(--gbar-h, 52px) - 168px); min-height: 420px; }
+  .main > .panel:first-child .chain-box { flex: 1 1 0; height: auto; min-height: 0; }
   .panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); min-width: 0; }
   .panel > .ph { display: flex; align-items: center; gap: 8px; padding: 14px 18px; flex-wrap: wrap; }
   .panel > .ph h2 { font-size: 16px; } .panel > .ph .spacer { flex: 1; } .panel > .pb { padding: 0 18px 16px; }
   .chip.hist { background: var(--warning-soft); color: var(--warning); } .chip.calc { background: var(--purple-soft); color: var(--purple); }
   /* chain */
   .chain-box { position: relative; height: 470px; overflow: auto; border-top: 1px solid var(--border); }
-  table.oc { font-size: 12.5px; } table.oc th, table.oc td { padding: 7px 8px; text-align: right; }
-  table.oc thead th { position: sticky; z-index: 2; } table.oc thead tr:first-child th { top: 0; } table.oc thead tr:nth-child(2) th { top: 29px; }
+  table.oc { font-size: 12.5px; width: 100%; } table.oc th, table.oc td { padding: 7px 6px; text-align: right; }
+  table.oc thead th { position: sticky; z-index: 2; } table.oc thead tr:first-child th { top: 0; height: 28px; padding-top: 0; padding-bottom: 0; } table.oc thead tr:nth-child(2) th { top: 27px; }
   table.oc th.side { text-align: center; font-size: 11px; letter-spacing: .1em; }
   table.oc td.k { text-align: center; font-weight: 700; background: var(--bg-hover); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
   table.oc td.k small { display: block; font-size: 9px; font-weight: 600; color: var(--text-muted); }
   table.oc td.itm { background: color-mix(in srgb, var(--warning) 9%, var(--bg-surface)); }
   table.oc tr.atm td { background: var(--accent-soft); } table.oc tr.atm td.k { color: var(--accent-soft-text); }
   table.oc td.na { color: var(--text-muted); }
-  table.oc td.ltp { position: relative; min-width: 104px; font-weight: 700; }
+  table.oc td.ltp { position: relative; min-width: 92px; font-weight: 700; }
+  @media (max-width: 1700px) { table.oc { font-size: 12px; } table.oc th, table.oc td { padding: 6px 4px; } table.oc td { padding-top: 3px; padding-bottom: 3px; } }
+  @media (max-width: 1400px) { table.oc td.ltp small { display: none; } }
   table.oc td.ltp small { font-weight: 500; color: var(--text-muted); font-size: 10.5px; }
   table.oc td.ltp .bs { position: absolute; top: 50%; transform: translateY(-50%); }
   table.oc td.ltp.ce .bs { left: 5px; } table.oc td.ltp.pe .bs { right: 5px; } table.oc td.ltp.pe { text-align: left; }
@@ -67,14 +98,16 @@
   .tabs2 button + button { border-left: 1px solid var(--border-strong); } .tabs2 button.on { background: var(--accent-soft); color: var(--accent-soft-text); }
   .plegend { display: flex; gap: 14px; font-size: 11px; color: var(--text-secondary); align-items: center; }
   .plegend i { display: inline-block; width: 14px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
-  #chartbox { position: relative; height: 380px; }
+  #chartbox { position: relative; height: 300px; }
   #chartbox svg { display: block; width: 100%; height: 100%; }
   #chartbox text { fill: var(--text-muted); font: 10.5px var(--font-sans); }
   .tip { position: absolute; pointer-events: none; background: var(--bg-surface); border: 1px solid var(--border-strong); box-shadow: var(--shadow-md); border-radius: var(--radius-sm); padding: 5px 8px; font-size: 11px; white-space: nowrap; }
-  .rk { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+  .rk { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
   .rk > div { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; display: flex; gap: 10px; align-items: center; min-width: 0; }
   .rk .ic { width: 28px; height: 28px; border-radius: 999px; display: grid; place-items: center; font-size: 14px; font-weight: 800; flex: none; }
   .rk .k { font-size: 11px; color: var(--text-muted); font-weight: 600; } .rk b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rk .mg-s { font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 1700px) { .rk { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .rk2 { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
   .rk2 b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
   /* advanced what-if */
@@ -126,7 +159,7 @@
   .toast { position: fixed; bottom: 76px; left: 50%; transform: translateX(-50%); background: var(--text-primary); color: var(--bg-surface); padding: 8px 14px; border-radius: var(--radius-md); font-size: 13px; z-index: 40; box-shadow: var(--shadow-md); }
   .toast[hidden] { display: none; }
   @media (max-width: 1200px) { .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } .strip > div:nth-child(4) { border-left: 0; } .strip > div:nth-child(n+4) { border-top: 1px solid var(--border); } }
-  @media (max-width: 1100px) { .main { grid-template-columns: minmax(0, 1fr); } .chain-box { height: 420px; } }
+  @media (max-width: 1100px) { .main { grid-template-columns: minmax(0, 1fr); } .main > .panel:first-child { position: static; height: auto; } .main > .panel:first-child .chain-box { flex: none; height: 420px; } }
   @media (max-width: 760px) {
     .tnav { padding: 0 12px; gap: 10px; } .tnav .logo span { display: none; }
     .wrap { padding: 12px 12px 140px; } .ctrl > label { flex: 1 1 45%; } .ctrl #sym, .ctrl #exp, .ctrl #date { width: 100%; }
@@ -169,6 +202,7 @@
       <label>Expiry<select id="exp"></select></label>
       <label>Historical date<div class="row"><input type="date" id="date"><button class="ib" id="dprev" title="Previous trading day">‹</button><button class="ib" id="dnext" title="Next trading day">›</button></div></label>
       <label>Lot<div class="lotv" id="lot">–</div></label>
+      <button class="livebtn" id="livebtn" title="Live chain from Angel One WebSocket ticks (paper only, no orders). Updates every second."><i></i>LIVE</button>
       <span class="eod" id="freq" title="NSE Bhavcopy end-of-day data. Not live.">EOD data</span>
     </div>
   </div>
@@ -191,7 +225,7 @@
         <table class="oc" id="chain"></table>
       </div>
       <div class="legend2">
-        <span>Hover a row, click <b style="color:var(--success)">B</b> / <b style="color:var(--danger)">S</b> to add</span>
+        <span class="hint">Hover a row, click <b style="color:var(--success)">B</b> / <b style="color:var(--danger)">S</b> to add</span>
         <span><i style="background:color-mix(in srgb, var(--warning) 25%, var(--bg-surface))"></i>ITM</span>
         <span><i style="background:var(--accent-soft);border:1px solid var(--accent)"></i>ATM</span>
         <span><b class="nt" style="margin:0">NT</b> not traded (NSE close)</span>
@@ -200,6 +234,17 @@
       </div>
     </div>
 
+    <div class="rcol">
+    <div class="panel">
+      <div class="ph"><h2>Positions <span class="sub" id="pcount" style="display:inline;margin-left:6px">0 open</span></h2><span class="spacer"></span>
+        <label class="mult" title="Adds all legs of a ready-made strategy at this date/time, at real chain prices">Preset <select id="simpreset" style="height:32px;padding:0 6px"></select></label>
+        <label class="mult" title="Stop-loss put on every leg you add (SELL: entry +x%, BUY: entry −x%). Empty = no stop.">Auto SL % <input type="number" id="autosl" min="1" max="500" step="1" style="width:58px"></label>
+        <label class="mult" title="Multiplies the lots of every open leg (simulation only)">Lot multiplier <input type="number" id="mult" min="1" max="100" step="1" value="1"></label>
+        <button class="secondary-button" id="exitall">Exit all</button><button class="secondary-button" id="clear">Clear</button><button class="secondary-button" id="export" title="Download the simulated positions as CSV">Export CSV</button></div>
+      <div style="overflow-x:auto"><table class="pt" id="plist"></table></div>
+      <div class="ptot"><span class="simnote">Simulated positions only, valued at the selected date's NSE close. No broker orders. For rule-based strategies use <a href="/builder">Strategy Builder</a>.</span><span class="spacer"></span>
+        <span>Net P&amp;L <span class="sub" id="r-pnl-s" style="display:inline"></span></span><span class="big" id="r-pnl">₹0</span></div>
+    </div>
     <div class="panel">
       <div class="ph"><h2>Strategy payoff</h2><span class="spacer"></span>
         <span class="plegend"><span><i style="background:color-mix(in srgb, var(--success) 25%, transparent)"></i>Profit</span><span><i style="background:color-mix(in srgb, var(--danger) 22%, transparent)"></i>Loss</span><span><i style="background:var(--accent);height:3px"></i>Expiry</span><span id="lg-tgt" hidden><i style="background:repeating-linear-gradient(90deg,var(--purple) 0 4px,transparent 4px 7px);height:3px"></i>Target date (est.)</span><span><i style="background:var(--text-primary);height:2px"></i>Spot</span></span>
@@ -210,8 +255,9 @@
           <div><span class="ic" style="background:var(--success-soft);color:var(--success)">↑</span><div style="min-width:0"><div class="k">Max profit</div><b id="r-mp">–</b></div></div>
           <div><span class="ic" style="background:var(--danger-soft);color:var(--danger)">↓</span><div style="min-width:0"><div class="k">Max loss</div><b id="r-ml">–</b></div></div>
           <div><span class="ic" style="background:var(--purple-soft);color:var(--purple)">◎</span><div style="min-width:0"><div class="k">Breakeven</div><b id="r-be">–</b></div></div>
+          <div title="Money blocked by the open legs. BUY legs: premium paid. With SELL legs: Angel One's margin calculator (SPAN + exposure, hedge benefit included), today's margin, listed contracts only."><span class="ic" style="background:var(--accent-soft);color:var(--accent)">₹</span><div style="min-width:0"><div class="k">Capital / margin</div><b id="r-mg">–</b><div class="mg-s" id="r-mg-s"></div></div></div>
         </div>
-        <div class="rk2"><span><span id="r-cred-k">Net credit / debit</span>: <b id="r-cred">–</b></span><span>Risk / reward: <b id="r-rr">–</b></span><span>Realized: <b id="r-real">–</b></span></div>
+        <div class="rk2"><span><span id="r-cred-k">Net credit / debit</span>: <b id="r-cred">–</b></span><span>Risk / reward: <b id="r-rr">–</b></span><span>Realized: <b id="r-real">–</b></span><span>Return on capital: <b id="r-roc">–</b></span></div>
         <p class="simnote" id="chartnote" style="margin-top:8px"></p>
         <details class="adv" id="adv">
           <summary>Advanced: target date, IV &amp; spot what-if, Greeks <span class="chip calc" style="font-size:9.5px">Black-Scholes estimate</span></summary>
@@ -236,18 +282,9 @@
         </details>
       </div>
     </div>
+    </div>
   </div>
 
-  <div class="panel">
-    <div class="ph"><h2>Positions <span class="sub" id="pcount" style="display:inline;margin-left:6px">0 open</span></h2><span class="spacer"></span>
-      <label class="mult" title="Adds all legs of a ready-made strategy at this date/time, at real chain prices">Preset <select id="simpreset" style="height:32px;padding:0 6px"></select></label>
-      <label class="mult" title="Stop-loss put on every leg you add (SELL: entry +x%, BUY: entry −x%). Empty = no stop.">Auto SL % <input type="number" id="autosl" min="1" max="500" step="1" style="width:58px"></label>
-      <label class="mult" title="Multiplies the lots of every open leg (simulation only)">Lot multiplier <input type="number" id="mult" min="1" max="100" step="1" value="1"></label>
-      <button class="secondary-button" id="exitall">Exit all</button><button class="secondary-button" id="clear">Clear</button><button class="secondary-button" id="export" title="Download the simulated positions as CSV">Export CSV</button></div>
-    <div style="overflow-x:auto"><table class="pt" id="plist"></table></div>
-    <div class="ptot"><span class="simnote">Simulated positions only, valued at the selected date's NSE close. No broker orders. For rule-based strategies use <a href="/builder">Strategy Builder</a>.</span><span class="spacer"></span>
-      <span>Net P&amp;L <span class="sub" id="r-pnl-s" style="display:inline"></span></span><span class="big" id="r-pnl">₹0</span></div>
-  </div>
 </div>
 
 <div class="actbar">
@@ -408,24 +445,48 @@ document.addEventListener('keydown', e => {
 });
 
 // ---------------- chain
-async function loadChain() {
+let live = false, liveTimer = null, liveBusy = false;
+const prevPx = new Map();
+async function loadChain(silent) {
   const tok = ++loadTok, d = dates[idx];
-  $('loading').hidden = false;
+  if (!silent) $('loading').hidden = false;
   try {
     let c;
     const ex = expPinned && curExp ? `&expiry=${curExp}` : '';
-    try { c = await api(useIntra() ? `/api/options/intraday/chain?symbol=${sym}&date=${d}&time=${tm}${ex}` : `/api/options/sim/chain?symbol=${sym}&date=${d}${ex}`); }
+    try { c = await api(live ? `/api/options/live/chain?symbol=${sym}${ex}` : useIntra() ? `/api/options/intraday/chain?symbol=${sym}&date=${d}&time=${tm}${ex}` : `/api/options/sim/chain?symbol=${sym}&date=${d}${ex}`); }
     catch (e) { if (tok !== loadTok) return; throw e; }
     if (tok !== loadTok) return;          // a newer date was requested meanwhile
     if (expPinned && c.expiry !== curExp) { expPinned = false; toast(`Expiry ${fmtD(curExp)} is not listed on ${fmtD(d)}; showing the nearest expiry`); }
     chain = c; curExp = c.expiry; if (c.mode !== 'intraday') spotCache.set(d, c.underlying);
-    renderSummary(); renderChain(); await revalue(tok);
+    renderSummary(); renderChain(silent); flashPrices(); await revalue(tok);
   } catch (e) {
+    if (silent && chain) return;          // keep the last live chain on a missed refresh
     chain = null;
-    $('chain').innerHTML = `<tr><td class="empty err">No data for ${fmtD(d)}: ${e.message}</td></tr>`;
+    $('chain').innerHTML = `<tr><td class="empty err">${live ? 'Live chain unavailable' : 'No data for ' + fmtD(d)}: ${e.message}</td></tr>`;
     ['c-spot', 'c-pcr', 'c-iv', 'c-pain', 'c-strd'].forEach(k => $(k).textContent = '–');
   } finally { if (tok === loadTok) $('loading').hidden = true; }
 }
+function flashPrices() {
+  // a price that moved since the previous refresh flashes green (up) or red (down)
+  document.querySelectorAll('#chain .lv').forEach(el => {
+    const id = el.dataset.id, v = +el.dataset.v, old = prevPx.get(id);
+    if (live && old != null && v !== old) { el.classList.remove('fl-up', 'fl-dn'); void el.offsetWidth; el.classList.add(v > old ? 'fl-up' : 'fl-dn'); }
+    prevPx.set(id, v);
+  });
+  const sp = $('c-spot'), v = chain && chain.underlying, old = prevPx.get('spot');
+  if (live && old != null && v !== old) { sp.classList.remove('fl-up', 'fl-dn'); void sp.offsetWidth; sp.classList.add(v > old ? 'fl-up' : 'fl-dn'); }
+  if (v != null) prevPx.set('spot', v);
+}
+function setLive(on) {
+  live = on; document.body.classList.toggle('live', on); $('livebtn').classList.toggle('on', on);
+  clearInterval(liveTimer); liveTimer = null; prevPx.clear(); expPinned = false;
+  if (on) {
+    liveTimer = setInterval(async () => { if (document.hidden || liveBusy) return; liveBusy = true; try { await loadChain(true); } finally { liveBusy = false; } }, 1000);
+    toast('LIVE: chain from Angel One ticks, updates every second. Paper only.');
+  }
+  loadChain();
+}
+$('livebtn').onclick = () => setLive(!live);
 async function prevSpot() {
   if (idx <= 0) return null;
   const p = dates[idx - 1];
@@ -436,19 +497,27 @@ function renderSummary() {
   const c = chain;
   $('c-spot').textContent = nf(c.underlying); $('c-pcr').textContent = c.pcr ?? '–';
   $('c-iv').textContent = c.atm_iv ? c.atm_iv + '%' : 'n/a'; $('c-pain').textContent = n0(c.max_pain);
-  const intra = c.mode === 'intraday';
+  const intra = c.mode === 'intraday' || c.mode === 'live';
   $('c-strd').textContent = c.straddle == null ? 'n/a' : '₹' + nf(c.straddle); $('c-strd-s').textContent = `ATM ${n0(c.atm)} CE + PE ${intra ? 'last trade' : 'close'}`;
   $('lot').textContent = c.lot_size ?? '–'; $('asof').textContent = intra ? `As of ${fmtD(c.date)} ${c.time} (1-min)` : `As of ${fmtD(c.date)} close`;
   $('c-pcr').parentElement.querySelector('.s').textContent = intra ? (c.oi_day ? `OI of ${fmtD(c.oi_day)} EOD (no OI in 1-min data)` : 'no OI available') : 'Put OI / Call OI, this expiry';
   $('c-pain').parentElement.querySelector('.s').textContent = intra ? 'from previous EOD OI' : "from this expiry's OI";
   $('chain-title').textContent = `Option chain · ${sym} · ${fmtD(c.expiry)}`;
+  if (c.mode === 'live') {
+    $('asof').textContent = `LIVE ${c.time} · ${c.live_legs} live legs`;
+    $('freq').textContent = c.feed_connected ? 'LIVE ticks' : 'feed offline';
+    $('freq').title = 'Angel One WebSocket ticks. A strike without a tick yet shows its last stored 1-minute close (marked st).';
+    $('c-pain').parentElement.querySelector('.s').textContent = 'not computed in live mode';
+    $('c-chg').innerHTML = c.spot_change == null ? '&nbsp;' : `<span class="${c.spot_change >= 0 ? 'pos' : 'neg'}">${c.spot_change >= 0 ? '▲ +' : '▼ '}${nf(c.spot_change)} (${c.spot_pct}%)</span> vs prev. close`;
+    return;
+  }
   $('exp').innerHTML = c.expiries.map(e => `<option value="${e}" ${e === c.expiry ? 'selected' : ''}>${fmtD(e)} (DTE ${dte(c.date, e)})</option>`).join('');
   $('c-chg').innerHTML = '&nbsp;';
   const tok = loadTok;
   prevSpot().then(p => { if (tok !== loadTok || p == null) return; const ch = c.underlying - p;
     $('c-chg').innerHTML = `<span class="${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '▲ +' : '▼ '}${nf(ch)} (${(ch / p * 100).toFixed(2)}%)</span> vs prev. close`; });
 }
-function renderChain() {
+function renderChain(keepScroll) {
   const c = chain, onlyLiquid = $('liquid').checked;
   const ai = c.rows.findIndex(r => r.strike === c.atm);
   const rows = c.rows.filter((r, i) => (strikeView === 'all' || Math.abs(i - ai) <= 10) && (!onlyLiquid || r.strike === c.atm || (r.CE?.volume > 0) || (r.PE?.volume > 0)));
@@ -457,7 +526,7 @@ function renderChain() {
     if (!l) return '<td class="na">–</td>';
     const v = l[k];
     if (v == null) return `<td class="na" title="${k === 'ltp' ? 'no trade in this contract yet today at this minute' : k === 'iv' || k === 'delta' ? 'IV could not be computed (no trade, or price outside no-arbitrage bounds)' : 'not available'}">–</td>`;
-    if (k === 'ltp') return `<td class="ltp ${opt.toLowerCase()}">${opt === 'PE' ? '' : bs(opt, strike, l)}<span title="Volume ${n0(l.volume)} · OI change ${n0(l.chg_oi)}">${nf(v)}</span>${l.delta != null ? ` <small>(${nf(l.delta, 2)})</small>` : ''}${chain.mode === 'intraday' ? (l.age_min > 1 ? `<span class="age" title="last trade at ${l.ts}">${l.age_min}m</span>` : '') : (l.volume ? '' : '<span class="nt" title="No trades this day. NSE close shown.">NT</span>')}${opt === 'PE' ? bs(opt, strike, l) : ''}</td>`;
+    if (k === 'ltp') return `<td class="ltp ${opt.toLowerCase()}">${opt === 'PE' ? '' : bs(opt, strike, l)}<span class="lv" data-id="${opt}${strike}" data-v="${v}" title="${chain.mode === 'live' ? (l.src === 'live' ? 'live tick ' + l.ts : 'no live tick yet: last stored 1-minute close ' + (l.ts || '')) : 'Volume ' + n0(l.volume) + ' · OI change ' + n0(l.chg_oi)}">${nf(v)}</span>${l.delta != null ? ` <small>(${nf(l.delta, 2)})</small>` : ''}${chain.mode === 'live' ? (l.src === 'stored' ? '<span class="stv">st</span>' : '') : chain.mode === 'intraday' ? (l.age_min > 1 ? `<span class="age" title="last trade at ${l.ts}">${l.age_min}m</span>` : '') : (l.volume ? '' : '<span class="nt" title="No trades this day. NSE close shown.">NT</span>')}${opt === 'PE' ? bs(opt, strike, l) : ''}</td>`;
     if (k === 'iv') return `<td>${nf(v, 1)}%</td>`;
     if (k === 'delta') return `<td>${nf(v, 2)}</td>`;
     return `<td>${lakh(v)}</td>`;
@@ -475,7 +544,7 @@ function renderChain() {
   }
   $('chain').innerHTML = h + '</tbody>';
   const box = $('chainbox'), a = box.querySelector('tr.atm');
-  if (a) box.scrollTop = a.offsetTop - box.clientHeight / 2 + a.offsetHeight / 2;
+  if (a && !keepScroll) box.scrollTop = a.offsetTop - box.clientHeight / 2 + a.offsetHeight / 2;
 }
 $('liquid').onchange = () => chain && renderChain();
 let strikeView = 'near';
@@ -486,15 +555,15 @@ window.addPos = (side, opt, k, quiet, slOverride) => {
   const l = chain.rows.find(r => r.strike === k)?.[opt];
   if (!l || !(l.ltp > 0)) { if (!quiet) toast('No valid price for that contract on this date'); return false; }
   if (!chain.lot_size) { toast('Lot size unknown for this expiry/date, so no position can be valued'); return false; }
-  const intra = chain.mode === 'intraday';
+  const intra = chain.mode === 'intraday' || chain.mode === 'live';
   const slp = slOverride || autoSL();
   positions.push({id: Date.now() + Math.random(), side, opt, strike: k, expiry: chain.expiry, lots: 1, lot_size: chain.lot_size, entry: l.ltp, entry_date: chain.date,
     sl_pct: slp, sl: slp ? +(side === 'SELL' ? l.ltp * (1 + slp / 100) : l.ltp * (1 - slp / 100)).toFixed(2) : null,
-    entry_time: intra ? chain.time : null, untraded_entry: intra ? false : !l.volume, stale_entry: intra && l.age_min > 5 ? l.age_min : null});
+    entry_time: intra ? chain.time.slice(0, 5) : null, live: chain.mode === 'live' || undefined, untraded_entry: intra ? false : !l.volume, stale_entry: intra && l.age_min > 5 ? l.age_min : null});
   if (quiet) return true;
   if (intra && l.age_min > 5) toast(`Note: last trade in this contract was ${l.age_min} min before ${chain.time}`);
   save(); revalue(loadTok);
-  toast(`Simulated ${side} ${n0(k)} ${opt} @ ₹${nf(l.ltp)} (${fmtD(chain.date)} close)`);
+  toast(`Simulated ${side} ${n0(k)} ${opt} @ ₹${nf(l.ltp)} (${chain.mode === 'live' ? 'live ' + chain.time : fmtD(chain.date) + (intra ? ' ' + chain.time : ' close')})`);
   return true;
 };
 // ready-made strategies (lots 1:1, offsets = strikes from ATM, + = OTM) - same definitions as the Strategy Builder presets
@@ -622,21 +691,42 @@ $('mult').onchange = () => { mult = Math.max(1, Math.min(100, parseInt($('mult')
 async function revalue(tok) {
   const d = dates[idx]; let open = positions.filter(p => !p.closed);
   mark = null;
-  await applyStops(tok);
+  if (!live) await applyStops(tok);
   if (tok !== loadTok) return;
   open = positions.filter(p => !p.closed);
   if (open.length) {
     try {
       const intra = useIntra();
-      const r = await api(intra ? '/api/options/intraday/mark' : '/api/options/sim/mark', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      const r = live ? await api('/api/options/live/mark', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: sym, positions: open.map(legBody)})})
+        : await api(intra ? '/api/options/intraday/mark' : '/api/options/sim/mark', {method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({date: d, ...(intra ? {time: tm} : {}), symbol: sym, positions: open.map(legBody)})});
       if (tok !== loadTok) return;
       mark = r; open.forEach((p, i) => Object.assign(p, r.positions[i]));
+      if (live) {                         // paper stop-loss on the live tick: SELL exits at/above its stop, BUY at/below
+        let hit = 0;
+        open.forEach(p => { if (p.sl && p.ltp != null && (p.side === 'SELL' ? p.ltp >= p.sl : p.ltp <= p.sl)) {
+          Object.assign(p, {closed: true, exit: p.ltp, exit_date: chain.date, exit_time: chain.time.slice(0, 5), realized: p.pnl, exit_reason: 'SL hit (live)'}); hit++; } });
+        if (hit) { save(); toast(`${hit} leg(s) hit the stop-loss on the live price`); }
+      }
     } catch (e) { open.forEach(p => Object.assign(p, {ltp: null, pnl: null, note: 'valuation failed: ' + e.message})); }
   }
+  await refreshMargin(tok, open);
+  if (tok !== loadTok) return;
   syncTargetBounds();
   renderPositions(); renderRisk(); drawChart();
   await refreshWhatIf(tok);
+}
+// capital / margin: fetched only when the set of open legs changes (not on every minute step); never estimated
+let margin = null, marginKey = '';
+async function refreshMargin(tok, open) {
+  const legs = open.map(legBody), key = JSON.stringify(legs.map(l => [l.side, l.opt, l.strike, l.expiry, l.lots, l.lot_size, l.entry]));
+  if (!legs.length) { margin = null; marginKey = ''; return; }
+  if (key === marginKey && margin) return;
+  try {
+    const r = await api('/api/options/sim/margin', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: sym, positions: legs})});
+    if (tok !== loadTok) return;
+    margin = r; marginKey = key;
+  } catch (e) { margin = {margin: null, note: 'margin request failed: ' + e.message}; marginKey = ''; }
 }
 function renderPositions() {
   const d = dates[idx], open = positions.filter(p => !p.closed);
@@ -685,6 +775,12 @@ function renderRisk() {
   $('r-pnl').innerHTML = positions.length ? rupee(unreal + real) : '₹0';
   $('r-pnl-s').textContent = !positions.length ? 'no positions' : `valued at ${fmtD(dates[idx])} close` + (missing ? ' · some legs have no price (excluded)' : '');
   $('r-real').innerHTML = positions.some(p => p.closed) ? rupee(real) : '–';
+  const m = open.length ? margin : null;
+  $('r-mg').innerHTML = !m ? '–' : m.margin != null ? '₹' + nf(m.margin) : '<span class="sub">n/a</span>';
+  $('r-mg-s').textContent = !m ? (open.length ? 'loading…' : 'no open legs') : m.margin == null ? (m.note || '') + (m.unlisted && m.unlisted.length ? ' (' + m.unlisted.join(', ') + ')' : '')
+    : m.has_sell ? `Angel One · today${m.hedge_benefit ? ' · hedge benefit ₹' + nf(m.hedge_benefit) : ''} · premium recv ₹${nf(m.premium_received)}` : 'premium paid';
+  $('r-mg-s').title = $('r-mg-s').textContent;
+  $('r-roc').innerHTML = m && m.margin ? `<span class="${unreal + real >= 0 ? 'pos' : 'neg'}">${((unreal + real) / m.margin * 100).toFixed(2)}%</span>` : '–';
   const p = mark?.payoff;
   if (!p) { ['r-cred', 'r-mp', 'r-ml', 'r-be', 'r-rr'].forEach(k => $(k).textContent = '–'); return; }
   $('r-cred-k').textContent = p.net_credit >= 0 ? 'Net credit' : 'Net debit';
@@ -778,8 +874,8 @@ function drawOI(svg, W, Hh) {
   svg.innerHTML = g;
 }
 
-function themeIcon() { $('themeb').textContent = window.Shell && Shell.isDark() ? '☀' : '☾'; }
-$('themeb').onclick = () => { Shell.setTheme(Shell.isDark() ? 'light' : 'dark'); themeIcon(); };
+function themeIcon() { const b = $('themeb'); if (b) b.textContent = window.Shell && Shell.isDark() ? '☀' : '☾'; }   // the shell sidebar owns the theme switch now
+if ($('themeb')) $('themeb').onclick = () => { Shell.setTheme(Shell.isDark() ? 'light' : 'dark'); themeIcon(); };
 window.addEventListener('themechange', themeIcon); themeIcon();
 init();
 </script>

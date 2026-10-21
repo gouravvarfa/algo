@@ -31,6 +31,7 @@ async def lifespan(_: FastAPI):
     provider = AngelOneProvider()
     engine = PaperEngine(provider)
     options_api.provider = provider
+    options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
     engine.start()
     asyncio.create_task(options_api.warm())
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)

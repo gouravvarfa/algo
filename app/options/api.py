@@ -8,6 +8,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException
 
 from app.options import bhavcopy, chain as oc, master
+from app.providers.angelone_client import get_margin
 
 router = APIRouter(prefix="/api/options")
 provider = None  # set by app.main lifespan
@@ -226,6 +227,58 @@ async def sim_mark(req: MarkReq):
             pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
     total = sum(x["pnl"] for x in out if x["pnl"] is not None)
     return {"underlying": und, "positions": out, "total": round(total, 2), "payoff": engine.payoff(pay, und) if pay else None}
+
+
+class MarginReq(BaseModel):
+    symbol: str = "NIFTY"
+    positions: list[Position]          # open legs only; lots already include the simulator's multiplier
+
+
+@router.post("/sim/margin")
+async def sim_margin(req: MarginReq):
+    """Capital needed by the open legs. BUY legs: the premium paid (exact). SELL legs: Angel One's own margin calculator for the
+    whole basket (SPAN + exposure with the hedge benefit), which only knows contracts that are still listed and gives TODAY's
+    margin. Nothing is estimated: legs Angel cannot price are reported, and the margin is then left out."""
+    sym = req.symbol.upper()
+    legs = [p for p in req.positions if p.lots > 0]
+    premium_paid = round(sum(p.entry * p.lots * p.lot_size for p in legs if p.side == "BUY"), 2)
+    premium_recv = round(sum(p.entry * p.lots * p.lot_size for p in legs if p.side == "SELL"), 2)
+    out = {"premium_paid": premium_paid, "premium_received": premium_recv, "has_sell": any(p.side == "SELL" for p in legs),
+           "margin": None, "span": None, "exposure": None, "hedge_benefit": None, "source": None, "note": None, "unlisted": []}
+    if not legs:
+        return out
+    if not out["has_sell"]:
+        out.update(margin=premium_paid, source="premium paid (buy-only basket)")
+        return out
+    if provider is None:
+        out["note"] = "broker provider not ready"
+        return out
+    try:
+        info = await asyncio.to_thread(master.load_underlying, sym)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    book = {(c.expiry.isoformat(), round(c.strike, 2), c.option_type): c for c in info.contracts}
+    basket = []
+    for p in legs:
+        c = book.get((p.expiry, round(p.strike, 2), p.opt))
+        if c is None:
+            out["unlisted"].append(f"{p.opt} {p.strike:g} {p.expiry}")
+            continue
+        basket.append({"exchange": "NFO", "qty": p.lots * p.lot_size, "price": 0, "productType": "CARRYFORWARD",
+                       "token": c.token, "tradeType": p.side, "orderType": "MARKET"})
+    if out["unlisted"]:
+        out["note"] = "Angel One's margin calculator only knows contracts that are still listed; expired legs cannot be margined, so no margin is shown"
+        return out
+    try:
+        session = await provider.get_session()
+        d = await get_margin(session, basket)
+    except Exception as exc:  # broker/network failure: report, never fabricate
+        out["note"] = f"margin calculator unavailable: {str(exc)[:120]}"
+        return out
+    comp = d.get("marginComponents") or {}
+    out.update(margin=d.get("totalMarginRequired"), span=comp.get("spanMargin"), exposure=comp.get("exposureMargin") if "exposureMargin" in comp else None,
+               hedge_benefit=comp.get("marginBenefit"), source="Angel One margin calculator (today's margin)", raw_components=comp)
+    return out
 
 
 class WhatIfReq(BaseModel):
@@ -668,3 +721,130 @@ async def backtest_get(bid: str):
     if not bid.replace("-", "").isalnum() or not f.exists():
         raise HTTPException(404, "not found")
     return json.loads(f.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------- live option chain (Angel One WebSocket ticks)
+live_engine = None          # set by app.main: the PaperEngine whose TickFeed and index_quote are shared (one WebSocket for the whole app)
+LIVE_STRIKES = 15           # ATM +/- this many strikes are subscribed per expiry
+LIVE_MAX_TOKENS = 400       # safety cap well under Angel One's per-connection token limit
+_LIVE_SUBS: set[str] = set()
+
+
+def _live_ready():
+    if live_engine is None:
+        raise HTTPException(503, "live feed not ready")
+    return live_engine.feed
+
+
+def _sub(feed, token: str) -> None:
+    if token in _LIVE_SUBS or len(_LIVE_SUBS) >= LIVE_MAX_TOKENS:
+        return
+    feed.subscribe("NFO", token)
+    _LIVE_SUBS.add(token)
+
+
+@router.get("/live/chain")
+async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
+    """Today's chain from live ticks. A strike with no tick yet (just subscribed, or market closed) shows its last stored 1-minute
+    close of today, labelled `stored`; nothing is filled or estimated. OI = previous day's Bhavcopy (ticks carry no OI)."""
+    feed = _live_ready()
+    sym = symbol.upper()
+    from app.paper_trading.engine import INDEX_TOKENS, now_ist
+    ex_i, tok_i = INDEX_TOKENS[sym]
+    feed.subscribe(ex_i, tok_i)
+    try:
+        q = await live_engine.index_quote(sym)
+    except Exception as exc:
+        raise HTTPException(502, f"index quote unavailable: {exc}")
+    spot = q["price"]
+    if not spot:
+        raise HTTPException(502, "no index price yet")
+    info = await asyncio.to_thread(master.load_underlying, sym)
+    now = now_ist()
+    exps = [e.isoformat() for e in master.expiries(info)][:6]
+    if not exps:
+        raise HTTPException(404, "no listed expiries")
+    expiry = expiry if expiry in exps else exps[0]
+    cons = [c for c in info.contracts if c.expiry.isoformat() == expiry]
+    strikes_all = sorted({c.strike for c in cons})
+    atm = min(strikes_all, key=lambda k: abs(k - spot))
+    ai = strikes_all.index(atm)
+    strikes = strikes_all[max(0, ai - LIVE_STRIKES): ai + LIVE_STRIKES + 1]
+    book = {(c.strike, c.option_type): c for c in cons if c.strike in strikes}
+    for c in book.values():
+        _sub(feed, c.token)
+    today = now.date().isoformat()
+    with _idb() as cdb:
+        stored = intraday.chain_at(cdb, sym, today, "15:30", expiry)
+    oi, oi_day, _lot = _prev_oi(sym, today, expiry)
+    lot = next(iter(book.values())).lot_size if book else None
+    exp_close = dt.datetime.combine(dt.date.fromisoformat(expiry), dt.time(15, 30))
+    t = max((exp_close - now.replace(tzinfo=None)).total_seconds(), 60) / (365 * 86400)
+    out, live_n = [], 0
+    for k in strikes:
+        rec = {}
+        for o in ("CE", "PE"):
+            c = book.get((k, o))
+            if c is None:
+                rec[o] = None
+                continue
+            tick = feed.latest.get(c.token)
+            if tick is not None and tick.exch_ts.date() == now.date():
+                ltp, src, age_s, ts = tick.ltp, "live", round(feed.age(c.token) or 0, 1), tick.exch_ts.strftime("%H:%M:%S")
+                live_n += 1
+            elif (k, o) in stored:
+                r = stored[(k, o)]
+                ltp, src, age_s, ts = r["ltp"], "stored", None, r["ts"]
+            else:
+                ltp, src, age_s, ts = None, None, None, None
+            iv = bs.implied_vol(ltp, spot, k, t, RATE, 0.0, o == "CE") if ltp else None
+            rec[o] = {"ltp": ltp, "src": src, "age_s": age_s, "ts": ts, "age_min": 0, "volume": None, "oi": oi.get((k, o)), "chg_oi": None,
+                      "iv": round(iv, 1) if iv else None,
+                      "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
+        out.append({"strike": k, **rec})
+    a = next(r for r in out if r["strike"] == atm)
+    ce_oi = sum((r.get("CE") or {}).get("oi") or 0 for r in out)
+    pe_oi = sum((r.get("PE") or {}).get("oi") or 0 for r in out)
+    ivs = [x for x in ((a.get("CE") or {}).get("iv"), (a.get("PE") or {}).get("iv")) if x]
+    ca, pa = (a.get("CE") or {}).get("ltp"), (a.get("PE") or {}).get("ltp")
+    return {"mode": "live", "date": today, "time": now.strftime("%H:%M:%S"), "expiry": expiry, "expiries": exps, "underlying": spot,
+            "spot_live": q.get("live"), "spot_change": q.get("change"), "spot_pct": q.get("pct"), "prev_close": q.get("prev_close"),
+            "lot_size": lot, "atm": atm, "dte": (dt.date.fromisoformat(expiry) - now.date()).days,
+            "pcr": round(pe_oi / ce_oi, 2) if ce_oi else None, "max_pain": None, "straddle": round(ca + pa, 2) if ca and pa else None,
+            "atm_iv": round(sum(ivs) / len(ivs), 1) if ivs else None, "oi_day": oi_day, "live_legs": live_n, "feed_connected": feed.connected,
+            "oi_note": f"OI is the NSE Bhavcopy OI of {oi_day} (live ticks carry no OI)" if oi_day else "no previous-day OI available",
+            "rows": out}
+
+
+class LiveMarkReq(BaseModel):
+    symbol: str = "NIFTY"
+    positions: list[Position]
+
+
+@router.post("/live/mark")
+async def live_mark(req: LiveMarkReq):
+    """Value open legs at their latest live tick (legs are subscribed on first sight). No tick yet = no price, never a guess."""
+    feed = _live_ready()
+    sym = req.symbol.upper()
+    info = await asyncio.to_thread(master.load_underlying, sym)
+    book = {(c.expiry.isoformat(), round(c.strike, 2), c.option_type): c for c in info.contracts}
+    q = await live_engine.index_quote(sym)
+    out, pay = [], []
+    for p in req.positions:
+        qty, sign = p.lots * p.lot_size, (1 if p.side == "BUY" else -1)
+        c = book.get((p.expiry, round(p.strike, 2), p.opt))
+        ltp, note = None, ""
+        if c is None:
+            note = "contract not listed any more"
+        else:
+            _sub(feed, c.token)
+            tick = feed.latest.get(c.token)
+            if tick is None:
+                note = "waiting for the first live tick"
+            else:
+                ltp = tick.ltp
+        out.append({"ltp": ltp, "pnl": round((ltp - p.entry) * qty * sign, 2) if ltp is not None else None, "note": note})
+        pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
+    total = sum(x["pnl"] for x in out if x["pnl"] is not None)
+    und = q.get("price")
+    return {"underlying": und, "positions": out, "total": round(total, 2), "payoff": engine.payoff(pay, und) if pay and und else None}
