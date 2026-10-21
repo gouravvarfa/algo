@@ -75,7 +75,7 @@
         <div class="panel">
           <div class="ph">
             <h2 id="ctitle">BANKNIFTY · 1D</h2>
-            <div class="legend"><span><i style="background:var(--accent)"></i>Close</span><span><i style="background:repeating-linear-gradient(90deg,var(--success) 0 5px,transparent 5px 8px)"></i>Entry</span><span><i style="background:repeating-linear-gradient(90deg,var(--danger) 0 5px,transparent 5px 8px)"></i>Stop-loss</span><span>▲ BUY ▼ SELL · <b style="color:var(--warning)">●</b> System Point (TOP / BOTTOM of the active contract)</span><span><i style="background:repeating-linear-gradient(90deg,var(--text-muted) 0 3px,transparent 3px 6px)"></i>previous contract</span></div>
+            <div class="legend"><span><i style="background:var(--accent)"></i>Close</span><span><i style="background:repeating-linear-gradient(90deg,var(--success) 0 5px,transparent 5px 8px)"></i>Entry</span><span><i style="background:repeating-linear-gradient(90deg,var(--danger) 0 5px,transparent 5px 8px)"></i>Stop-loss</span><span>▲ BUY ▼ SELL · <b style="color:var(--warning)">●</b> latest TOP / BOTTOM</span></div>
             <span class="spacer"></span>
             <div class="seg" id="ctype" title="Chart type"><button class="on" data-c="line">Line</button><button data-c="candle">Candles</button></div>
             <button class="secondary-button tb" id="fit">Fit</button>
@@ -119,7 +119,7 @@ const dt = s => s ? s.replace('T', ' ').slice(0, 16) : '–';
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 async function api(url, opt) { const r = await fetch(url, opt); const b = await r.json().catch(() => ({})); if (!r.ok) throw new Error(b.detail || r.status); return b; }
 
-let chart, candle, lineS, prevS, plines = [], firstFit = true, lastSnap = null, timer = null, showAll = false;
+let chart, candle, lineS, plines = [], firstFit = true, lastSnap = null, timer = null, showAll = false;
 let ctype = 'line'; try { ctype = localStorage.getItem('dash.ctype') === 'candle' ? 'candle' : 'line'; } catch (e) {}
 
 function buildChart() {
@@ -131,7 +131,6 @@ function buildChart() {
     timeScale: {timeVisible: false, borderColor: c.grid, rightOffset: 6}, rightPriceScale: {borderColor: c.grid, scaleMargins: {top: 0.08, bottom: 0.08}},
     localization: {priceFormatter: p => p.toLocaleString('en-IN', {maximumFractionDigits: 0})},
   });
-  prevS = chart.addLineSeries({color: css('--text-muted'), lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false});   // earlier contract, reference only
   lineS = chart.addLineSeries({color: css('--accent'), lineWidth: 2, priceLineStyle: 2, lastValueVisible: true, priceLineVisible: true});
   candle = chart.addCandlestickSeries({upColor: c.up, downColor: c.down, borderUpColor: c.up, borderDownColor: c.down, wickUpColor: c.up, wickDownColor: c.down, priceLineStyle: 2, visible: false});
   plines = [];
@@ -155,9 +154,10 @@ function draw(s, fit) {
   lineS.setData(s.candles.map(k => ({time: k.time, value: k.close})));
   candle.setData(s.candles.map(k => ({time: k.time, open: k.open, high: k.high, low: k.low, close: k.close})));
   drawLevels(s);
-  prevS.setData(s.prev_contract_line ? s.prev_contract_line.data : []);
   // only trades, rolls and the System Points are drawn; other events (entry-day stop, round trip, ...) live in the tables below
-  const sp = (s.system_points || []).map(p => ({time: p.time, position: p.kind === 'TOP' ? 'aboveBar' : 'belowBar', shape: 'circle', color: css('--warning'),
+  // only the System Points the rules use now: the latest TOP and the latest BOTTOM
+  const pts = s.system_points || [], lastOf = k => pts.filter(p => p.kind === k).slice(-1);
+  const sp = [...lastOf('TOP'), ...lastOf('BOTTOM')].map(p => ({time: p.time, position: p.kind === 'TOP' ? 'aboveBar' : 'belowBar', shape: 'circle', size: 0.6, color: css('--warning'),
     text: (p.kind === 'TOP' ? 'TOP ' : 'BOTTOM ') + num(p.price)}));
   const mk = s.markers.filter(m => /^(BUY|SELL) |^ROLL [A-Z]{3}→/.test(m.text)).map(m => ({...m, text: m.text.replace(/\.\d+$/, '')})).concat(sp).sort((a, b) => a.time - b.time);
   lineS.setMarkers(ctype === 'line' ? mk : []); candle.setMarkers(ctype === 'candle' ? mk : []);
