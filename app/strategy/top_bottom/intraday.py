@@ -61,6 +61,10 @@ BREAKEVEN_EVENT = "2% PROFIT → BREAKEVEN SL"
 WHIPSAW_EVENT = "WHIPSAW (entered and stopped out the same day)"
 NEW_SP_EVENT = "NEW SYSTEM POINT confirmed before +2% \u2192 structural trailing only"
 BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
+ENTRY_DAY_STOP_EXIT = "ENTRY_DAY_STOP_EXIT"
+ENTRY_DAY_STOP_PCT = 0.01   # the live engine passes this: entry-day stop = entry price -/+ 1%
+CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
+STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
 FIRST_15_START, FIRST_15_END = dt.time(9, 15), dt.time(9, 30)
 
 
@@ -102,10 +106,28 @@ def run_intraday(
     initial: IntradayInitial | None = None,
     first15: dict[dt.date, FirstCandle] | None = None,
     min_separation: float | None = None,
+    entry_day_stop_pct: float | None = None,
+    struct_cap_distance: float | None = None,
+    roll_in: str | None = None,
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
-    last minute day; a day's own daily candle is never used on that day."""
+    last minute day; a day's own daily candle is never used on that day.
+
+    entry_day_stop_pct (optional, OFF when None): on the day a position is ENTERED (including a stop-and-reverse entry) its stop is
+    exactly entry -/+ this fraction (BUY below, SELL above), replacing the structural stop for that day only. If it is hit the
+    position closes (ENTRY_DAY_STOP_EXIT) and the strategy stays FLAT, like after a breakeven exit: no reverse, and a new entry
+    needs a System Point confirmed after the exit. From the next day the ordinary structural / trailing stop applies again.
+
+    roll_in ("BUY" / "SELL", optional): the position of the PREVIOUS contract is being rolled into this one. On the very first minute of the first
+    day in `minutes` (if still flat) a fresh entry in that direction is taken at that minute's open, with this contract's OWN System Points:
+    the stop is this contract's latest opposite point, the 2% breakeven counts from this entry, and the entry-day 1% stop applies. If this
+    contract has no such System Point yet, no entry is taken (no guessing).
+
+    struct_cap_distance (optional, needs entry_day_stop_pct): from the day AFTER entry, every day, if the structural stop (latest opposite
+    System Point, trailed as usual) is this fraction or MORE away from the ENTRY price, the stop stays at entry -/+ entry_day_stop_pct
+    instead (fixed, never trails); once the structural stop is closer than that, it takes over. If the 1% stop is hit the position closes
+    (CAPPED_1_PERCENT_STOP_EXIT) and the strategy stays FLAT until a System Point confirmed after the exit is crossed (no reverse)."""
     swings = detect_confirmed_swings(daily_dates, daily_closes, 1, 1)
     by_day: dict[dt.date, list[Minute]] = {}
     for m in minutes:
@@ -120,6 +142,7 @@ def run_intraday(
     blocked_seen: set[tuple[str, str, str]] = set()
     open_t: Trade | None = initial.trade if initial else None
     sw_ptr, cur_top, cur_bot = 0, None, None
+    rolled_done = False
     cur_top_ci = cur_bot_ci = -1  # confirmation index of the latest Top / Bottom
     # After a 2%-breakeven exit the strategy stays FLAT until a System Point confirmed AFTER that
     # exit (confirmed_index > block_after) is crossed; every point existing at the exit is consumed.
@@ -131,6 +154,12 @@ def run_intraday(
             signal_date=ts, entry_date=ts, entry_price=fill, system_point=level, initial_sl=anchor, active_stop=anchor,
             reversal_event_id="", stop_history=[(ts, anchor)], entry_index=day_i, signal_price=level, gap_state=gap_state,
         )
+        t.struct_stop = anchor
+        if entry_day_stop_pct:
+            t.entry_day_sl = round(fill * (1 - entry_day_stop_pct) if direction == "BUY" else fill * (1 + entry_day_stop_pct), 2)
+            t.active_stop = t.entry_day_sl
+            t.stop_history.append((ts, t.entry_day_sl))
+            t.events.append((ts, f"ENTRY-DAY STOP {entry_day_stop_pct * 100:g}%: stop {t.entry_day_sl:,.2f} for today only (structural stop {anchor:,.2f} applies from the next day)"))
         return t
 
     def close_trade(t: Trade, ts: dt.datetime, fill: float, signal: float | None, reason: str, ambiguous: bool = False) -> None:
@@ -192,8 +221,35 @@ def run_intraday(
                     open_t.new_sp_date, open_t.new_sp_price = sw.confirmed_date, sw.price
                     open_t.events.append((sw.confirmed_date, NEW_SP_EVENT))
                     break
+        cap_rule = open_t is not None and bool(struct_cap_distance) and open_t.entry_day_sl is not None and open_t.entry_date.date() < day
+        if cap_rule:
+            # capped-stop rule: track the structural stop on its own, then pick the stop for today (structural, or entry +/- 1% if it is too far)
+            t = open_t
+            buy_t = t.direction == "BUY"
+            struct = t.struct_stop if t.struct_stop is not None else t.initial_sl
+            if buy_t and bot is not None and bot > struct:
+                struct = bot
+            elif not buy_t and top is not None and top < struct:
+                struct = top
+            t.struct_stop = struct
+            far = abs(t.entry_price - struct) / t.entry_price >= struct_cap_distance
+            eff = t.entry_day_sl if far else struct
+            if t.breakeven_date is not None:                                 # the 2% breakeven stop is never loosened
+                eff = max(eff, t.entry_price) if buy_t else min(eff, t.entry_price)
+            if far != t.capped and t.breakeven_date is None:
+                t.events.append((first.ts, (f"STOP CAPPED AT {entry_day_stop_pct * 100:g}%: the structural stop {struct:,.2f} is {abs(t.entry_price - struct) / t.entry_price * 100:.2f}% from entry "
+                                            f"(>= {struct_cap_distance * 100:g}%), so the stop stays at {t.entry_day_sl:,.2f}") if far else
+                                 f"STOP BACK TO STRUCTURAL: the structural stop {struct:,.2f} is now within {struct_cap_distance * 100:g}% of entry"))
+            t.capped = far and t.breakeven_date is None
+            if eff != t.active_stop:
+                t.active_stop = eff
+                t.stop_history.append((first.ts, eff))
+        # an entry-day stop lives for ONE day: from the next day the structural stop (then the usual trailing) applies again
+        if open_t is not None and not cap_rule and open_t.entry_day_sl is not None and open_t.entry_date.date() < day and open_t.active_stop == open_t.entry_day_sl:
+            open_t.active_stop = open_t.initial_sl
+            open_t.stop_history.append((first.ts, open_t.initial_sl))
         # trail the stop with swings confirmed through the previous day
-        if open_t is not None:
+        if open_t is not None and not cap_rule:
             if open_t.direction == "BUY" and bot is not None and bot > open_t.active_stop:
                 open_t.active_stop = bot
                 open_t.stop_history.append((first.ts, bot))
@@ -201,6 +257,18 @@ def run_intraday(
                 open_t.active_stop = top
                 open_t.stop_history.append((first.ts, top))
 
+        if roll_in and open_t is None and not rolled_done:
+            rolled_done = True
+            anchor_r = bot if roll_in == "BUY" else top
+            level_r = top if roll_in == "BUY" else bot
+            if anchor_r is not None:
+                open_t = new_trade(roll_in, level_r if level_r is not None else first.open, first.open, anchor_r, first.ts, i)
+                open_t.rolled_in = True
+                open_t.events.append((first.ts, f"ROLL IN: {roll_in} continued in this contract at {_f(first.open)} (stop {_f(anchor_r)} from this contract's own System Point)"))
+                block_after = None
+            else:
+                notes.append({"kind": "ROLL_NO_ANCHOR", "side": roll_in, "pct": 0.0, "time": first.ts.isoformat(), "title": "Roll skipped: no System Point",
+                              "detail": f"The {roll_in} position could not be continued in this contract because it has no confirmed {'Bottom' if roll_in == 'BUY' else 'Top'} yet. The strategy stays flat."})
         # ---- does the gap protocol apply today? ------------------------------
         mode, mode_side, mode_level, mode_anchor = None, None, None, None
         gap_pct = ((day_open - prev_close) / prev_close * 100.0) if prev_close else 0.0
@@ -317,6 +385,18 @@ def run_intraday(
                             # The 2%-profit BREAKEVEN stop was hit (not a structurally better stop): close, stay FLAT,
                             # never reverse, wait for a System Point confirmed after this exit.
                             close_trade(open_t, c.ts, fill, stop, BREAKEVEN_EXIT)
+                            open_t = None
+                            block_after = i - 1
+                            if buy:
+                                used_low = True
+                            else:
+                                used_high = True
+                            break
+                        if open_t.entry_day_sl is not None and stop == open_t.entry_day_sl and open_t.breakeven_date is None and (open_t.entry_date.date() == day or open_t.capped):
+                            # the percentage stop (entry day, or capped while the structural stop is too far): close, stay FLAT, never reverse,
+                            # wait for a System Point confirmed after this exit
+                            close_trade(open_t, c.ts, fill, stop, ENTRY_DAY_STOP_EXIT if open_t.entry_date.date() == day else CAPPED_STOP_EXIT,
+                                        ambiguous=open_t.entry_date == c.ts or stopouts > 0)
                             open_t = None
                             block_after = i - 1
                             if buy:

@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Top-Bottom Paper Trader</title>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-<link rel="stylesheet" href="/static/theme.css">
+<script src="/static/shell.js?v=20261026"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261026">
 <style>
   .pt { display:grid; grid-template-columns:320px minmax(0,1fr); gap:18px; align-items:start; }
   .pt form { display:grid; gap:10px; margin-bottom:18px; }
@@ -25,17 +26,15 @@
   .empty { color:var(--text-muted); padding:40px; text-align:center; }
   tr.replay td { color:var(--text-muted); }
   .stats { margin-bottom:18px; }
-  @media (max-width: 980px) { .pt { grid-template-columns:1fr; } }
+  .pt > * { min-width:0; }
+  @media (max-width: 980px) { .pt { grid-template-columns:minmax(0,1fr); } }
 </style>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <div class="brand"><span class="brand-logo">T</span>Top-Bottom</div>
-    <nav class="nav">
-      <a href="/" class="active">Paper Trader</a>
-      <a href="/replay">Index Replay</a>
-    </nav>
+    <nav class="nav" data-shell></nav>
   </aside>
   <div class="content">
     <div class="topbar">

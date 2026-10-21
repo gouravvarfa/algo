@@ -1,0 +1,16 @@
+[Unit]
+Description=Algo Trading app (paper trading + options research)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=algo
+WorkingDirectory=/opt/algo-trading
+EnvironmentFile=/etc/algo-trading.env
+ExecStart=/opt/algo-trading/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8020
+Restart=always
+RestartSec=5
+Environment=TZ=Asia/Kolkata
+
+[Install]
+WantedBy=multi-user.target

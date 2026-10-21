@@ -25,9 +25,15 @@ import pandas as pd
 from pydantic import BaseModel
 
 from app.indicators.confirmed_bars import drop_incomplete_trailing_bars, drop_incomplete_trailing_daily_bar
+from app.live import candle_store
+from app.live import chain_eval
+from app.live.chain_eval import ContractRef
+from app.live.contracts import cutoff as contract_cutoff
+from app.live.ticks import TickFeed, merge_minutes
 from app.providers import angelone_scrip_master as scrip_master
 from app.providers.angelone_provider import AngelOneProvider
 from app.strategy.top_bottom.gap_protocol import Bar15
+from app.strategy.top_bottom.intraday import ENTRY_DAY_STOP_PCT, Minute, STRUCT_CAP_DISTANCE, run_intraday
 from app.strategy.top_bottom.backtest import SWING_LEFT_BARS, SWING_RIGHT_BARS, run_top_bottom_backtest
 from app.strategy.top_bottom.strategy import _build_level_lines
 from app.strategy.top_bottom.swing_detection import detect_confirmed_swings
@@ -35,6 +41,12 @@ from app.strategy.top_bottom.swing_detection import detect_confirmed_swings
 log = logging.getLogger("paper")
 IST = ZoneInfo("Asia/Kolkata")
 STATE_PATH = Path("data/watchlist.json")
+# The Oct contract's history was approved as shown on 2026-10-21 (1-minute rules from this day, daily-close rules before it); the contract rule must not
+# rewrite it, so its intraday window is pinned here instead of sliding with the REST window.
+FIRST_CONTRACT_MINUTES_FROM = dt.date(2026, 10, 12)
+CONTRACTS_PATH = Path("data/paper_trading/contracts.json")      # every futures contract seen per symbol (expired ones disappear from Angel One's master)
+JOURNAL_PATH = Path("data/paper_trading/journal.jsonl")         # append-only log of live events
+JOURNAL_SEEN = Path("data/paper_trading/journal_seen.json")     # last known state per live trade (no duplicates after restart)
 
 # timeframe -> (Angel One interval, bar minutes, max days one request may span)
 TIMEFRAMES: dict[str, tuple[str, int | None, int]] = {
@@ -45,6 +57,14 @@ TIMEFRAMES: dict[str, tuple[str, int | None, int]] = {
     "1H": ("ONE_HOUR", 60, 380),
     "1D": ("ONE_DAY", None, 1900),
 }
+LIVE_MINUTES_DAYS = 12          # calendar days of 1-minute candles used for the live intraday rules
+LIVE_MINUTES_REFRESH_SECONDS = 30
+CANDLE_CALL_GAP = 0.7                 # seconds between any two Angel One candle requests
+LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
+DAILY_RAW_CACHE_WITH_FEED = 120
+INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
+LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
+LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
 GAP_15M_REFRESH_SECONDS = 600  # 15m bars for the daily gap protocol are re-fetched at most this often
 DEFAULT_LOOKBACK_DAYS = {"1m": 3, "5m": 10, "15m": 20, "30m": 40, "1H": 90, "1D": 365}
 
@@ -78,6 +98,29 @@ def market_open(now: dt.datetime | None = None) -> bool:
     return now.weekday() < 5 and dt.time(9, 15) <= now.time() <= dt.time(15, 30)
 
 
+def trim_partial_first_day(mins: list) -> list:
+    """The REST window starts N days back at the current time of day, so its FIRST day is usually only a partial session. A
+    partial first day hides the morning crossings that happened before the window began (the engine then 'enters' on the
+    window's first minute, at a wrong price and time, and the result changes every time the window moves). Drop leading minutes
+    until the first complete session (it must start by 09:20); earlier history is rebuilt from the daily candles instead."""
+    if not mins:
+        return mins
+    first_day = mins[0].ts.date()
+    if mins[0].ts.time() <= dt.time(9, 20):
+        return mins
+    rest = [m for m in mins if m.ts.date() > first_day]
+    return rest if rest and rest[0].ts.time() <= dt.time(9, 20) else []
+
+
+def _candles_with_tick(raw: pd.DataFrame, tick_ltp: float | None) -> list[dict]:
+    """Chart candles from Angel One; the forming (last) candle's close/high/low follow the live tick so the chart is current."""
+    out = [{"time": _ts(t.to_pydatetime()), "open": r.open, "high": r.high, "low": r.low, "close": r.close} for t, r in raw.iterrows()]
+    if out and tick_ltp is not None:
+        last = out[-1]
+        last["close"], last["high"], last["low"] = tick_ltp, max(last["high"], tick_ltp), min(last["low"], tick_ltp)
+    return out
+
+
 def _ts(d: dt.datetime) -> int:
     # IST wall-clock encoded as if UTC, so the chart axis reads in IST.
     return calendar.timegm(d.timetuple())
@@ -97,6 +140,13 @@ class PaperEngine:
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._bars15: dict[str, tuple[dt.datetime, dict]] = {}  # instrument id -> (fetched at, date -> [Bar15])
+        self._minutes: dict[str, tuple[dt.datetime, list]] = {}  # instrument id -> (fetched at, 1-minute candles)
+        self.feed = TickFeed(provider.get_session, provider.reset_session)
+        self._raw_cache: dict[str, tuple[dt.datetime, pd.DataFrame]] = {}
+        self._prev_close: dict[str, tuple] = {}
+        self._live_good: dict[str, tuple[dt.datetime, list, str]] = {}  # instrument id -> (evaluated at, trades, note) of the last SUCCESSFUL intraday run
+        self._cooldown_until: dict = {}
+        self._chain_cache: dict = {}
         self._load()
 
     # ---- persistence -----------------------------------------------------
@@ -147,13 +197,20 @@ class PaperEngine:
         )
         self.instruments[inst.id] = inst
         self._save()
+        self.feed.subscribe(inst.exch_seg, inst.token)
         await self.refresh_one(inst)
         return inst
 
     def remove(self, instrument_id: str) -> None:
-        self.instruments.pop(instrument_id, None)
+        gone = self.instruments.pop(instrument_id, None)
+        if gone is not None and not any(i.token == gone.token for i in self.instruments.values()):
+            self.feed.unsubscribe_all_for(gone.token)
+        self._raw_cache.pop(instrument_id, None)
         self.snapshots.pop(instrument_id, None)
         self._bars15.pop(instrument_id, None)
+        self._minutes.pop(instrument_id, None)
+        self._live_good.pop(instrument_id, None)
+        self._cooldown_until.pop(instrument_id, None)
         self.errors.pop(instrument_id, None)
         self._save()
 
@@ -169,7 +226,13 @@ class PaperEngine:
                 f"Running longer than Angel One serves {inst.timeframe} history ({max_days} days) — remove and re-add this instrument."
             )
 
-        raw = await self.provider.get_intraday_ohlc(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
+        rc = self._raw_cache.get(inst.id)
+        ttl = DAILY_RAW_CACHE_WITH_FEED if self.feed.healthy(inst.token) else 15
+        if rc and (now - rc[0]).total_seconds() < ttl:
+            raw = rc[1]
+        else:
+            raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
+            self._raw_cache[inst.id] = (now, raw)
         raw = raw[raw.index >= from_dt]
         if raw.empty:
             raise PaperError("No candle data returned by Angel One")
@@ -182,11 +245,47 @@ class PaperEngine:
         # Daily timeframe: real 15-minute candles drive the gap protocol (only
         # for days Angel One still serves; older days use the close rules).
         intraday = await self._gap_bars(inst, from_dt, now) if minutes is None else None
-        signals, trades = run_top_bottom_backtest(
-            inst.symbol, inst.trading_symbol, inst.expiry, "STOCK", inst.quantity, dates, closes, list(confirmed["open"]),
-            intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]],
-        )
+        chain = None
+        if minutes is None and inst.instrument_type == "FUTURE" and inst.symbol in INDEX_TOKENS:
+            try:
+                chain = await self._chain(inst, now, from_dt)
+            except Exception:
+                log.exception("contract chain evaluation failed for %s; using the single-contract result", inst.symbol)
+        active, rolls, roll_marks = inst, [], []
+        if chain is not None:
+            signals, trades = [], chain.trades
+            ac = chain.active
+            active = inst.model_copy(update={"token": ac.token, "trading_symbol": ac.trading_symbol, "expiry": ac.expiry.isoformat(), "exch_seg": ac.exch_seg})
+            ad = chain.active_daily
+            dates, closes = [t.to_pydatetime() for t in ad.index], [float(x) for x in ad["close"]]
+            start_active = chain.segments[-1].start
+            raw_active = (await self._contract_daily(ac, from_dt, now))
+            raw = pd.concat([chain.chart[chain.chart.index.date < start_active], raw_active[raw_active.index.date >= start_active]])
+            rolls = chain.rolls
+            engine_note = (f"Contract chain: {' → '.join(sg.contract.trading_symbol for sg in chain.segments)}. A position still open at a contract's cutoff "
+                           f"(8 days before expiry) is closed there and continued in the next contract as a fresh entry with that contract's own System Points; "
+                           f"real intraday rules (1% entry-day stop, capped stop, breakeven, gap) apply in each contract")
+            engine_warn = bool(chain.warnings)
+            if chain.warnings:
+                engine_note = "WARNING: " + "; ".join(chain.warnings) + ". " + engine_note
+        else:
+            signals, trades = run_top_bottom_backtest(
+                inst.symbol, inst.trading_symbol, inst.expiry, "STOCK", inst.quantity, dates, closes, list(confirmed["open"]),
+                intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]],
+            )
+            engine_note, engine_warn = "Daily-close rules only", False
+            if minutes is None:
+                live = await self._live_intraday(inst, confirmed, trades, now)
+                if live is not None:
+                    trades, engine_note = live
+                    engine_warn = engine_note.startswith("WARNING")
+                else:
+                    engine_note, engine_warn = "WARNING: intraday (1-minute) data unavailable right now, showing the daily-close result. A stop touched today may not be reflected until the next successful update", True
         ltp = float(raw["close"].iloc[-1])
+        tick = self.feed.latest.get(active.token)
+        live_tick = self.feed.healthy(active.token) and tick is not None
+        if live_tick:
+            ltp = tick.ltp
 
         swings = detect_confirmed_swings(dates, closes, SWING_LEFT_BARS, SWING_RIGHT_BARS)
         tops = [s for s in swings if s.kind == "TOP"]
@@ -203,6 +302,8 @@ class PaperEngine:
                 "n": n,
                 "direction": t.direction,
                 "live": t.entry_date >= added_at,
+                "contract": t.contract or inst.trading_symbol,
+                "rolled_in": t.rolled_in,
                 "status": "OPEN" if is_open else ("WIN" if pts > 0 else "LOSS" if pts < 0 else "BREAKEVEN"),
                 "entry_date": _iso(t.entry_date),
                 "entry_price": round(t.entry_price, 2),
@@ -224,7 +325,7 @@ class PaperEngine:
                 position = row
 
         # After a 2%-breakeven exit the strategy stays flat and waits for a NEW System Point (no reversal).
-        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") == "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
+        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") in ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT")
         live_closed = [r for r in rows if r["live"] and r["status"] != "OPEN"]
         wins = [r for r in live_closed if r["pnl_amount"] > 0]
         stats = {
@@ -241,6 +342,9 @@ class PaperEngine:
         bt = (lambda d: _ts(d.replace(hour=0, minute=0, second=0, microsecond=0))) if minutes is None else _ts
         system_line, stop_line = _build_level_lines(trades)
         markers = []
+        for r in rolls:
+            markers.append({"time": bt(r["time"]), "position": "inBar", "shape": "circle", "color": "#f59e0b",
+                            "text": f"ROLL {r['from'][-8:-3]}→{r['to'][-8:-3]}"})
         for t in trades:
             markers.append({
                 "time": bt(t.entry_date), "position": "belowBar" if t.direction == "BUY" else "aboveBar",
@@ -258,7 +362,7 @@ class PaperEngine:
             return [{"time": k, "value": v} for k, v in sorted(out.items())]
 
         return {
-            "instrument": inst.model_dump(),
+            "instrument": active.model_dump(),
             "ltp": round(ltp, 2),
             "last_confirmed_bar": _iso(dates[-1]),
             "updated_at": _iso(now),
@@ -267,26 +371,183 @@ class PaperEngine:
             "position": position,
             "waiting": waiting,
             "stats": stats,
+            "engine_note": engine_note,
+            "engine_warning": engine_warn,
             "trades": rows[::-1],
-            "candles": [
-                {"time": _ts(t.to_pydatetime()), "open": r.open, "high": r.high, "low": r.low, "close": r.close}
-                for t, r in raw.iterrows()
-            ],
+            "candles": _candles_with_tick(raw, ltp if live_tick else None),
+            "feed": {"live": live_tick, "age_s": self.feed.age(active.token), "connected": self.feed.connected},
+            "rolls": [{"time": _iso(r["time"]), "from": r["from"], "to": r["to"], "old_price": r["old_price"], "new_price": r["new_price"]} for r in rolls],
             "added_marker": _ts(added_at),
             "system_line": _line(system_line),
             "stop_line": _line(stop_line),
             "markers": sorted(markers, key=lambda m: m["time"]),
         }
 
+    async def _candles(self, *args, **kwargs):
+        """Every Angel One candle request goes through here: at most one at a time and at least CANDLE_CALL_GAP seconds apart,
+        so the startup burst (daily + 15m + 1m + index) cannot trip the rate limit."""
+        import time as _t
+        if not hasattr(self, "_rest_lock"):
+            self._rest_lock, self._rest_last = asyncio.Lock(), 0.0
+        async with self._rest_lock:
+            wait = CANDLE_CALL_GAP - (_t.monotonic() - self._rest_last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                return await self.provider.get_intraday_ohlc(*args, **kwargs)
+            finally:
+                self._rest_last = _t.monotonic()
+
+    # ---- multi-contract chain (Oct -> Nov -> Dec ...) --------------------------
+    async def _known_contracts(self, inst: Instrument) -> list[ContractRef]:
+        """Live contracts from Angel One's master plus the ones remembered from earlier runs (an expired contract is no longer in the master)."""
+        try:
+            known = json.loads(CONTRACTS_PATH.read_text()) if CONTRACTS_PATH.exists() else {}
+        except ValueError:
+            known = {}
+        mine = {c["trading_symbol"]: c for c in known.get(inst.symbol, [])}
+        try:
+            for c in await scrip_master.get_future_contracts(inst.symbol):
+                if c.underlying == inst.symbol:
+                    mine[c.trading_symbol] = {"trading_symbol": c.trading_symbol, "token": c.token, "exch_seg": c.exch_seg, "expiry": c.expiry, "lot_size": c.lot_size}
+        except Exception:
+            log.warning("could not refresh the futures contract list for %s; using the remembered one", inst.symbol)
+        known[inst.symbol] = sorted(mine.values(), key=lambda c: c["expiry"])
+        CONTRACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONTRACTS_PATH.write_text(json.dumps(known, indent=1))
+        first = inst.expiry or ""
+        return [ContractRef(c["trading_symbol"], c["token"], c["exch_seg"], dt.date.fromisoformat(c["expiry"]), c["lot_size"])
+                for c in known[inst.symbol] if c["expiry"] >= first]
+
+    async def _contract_daily(self, c: ContractRef, from_dt: dt.datetime, now: dt.datetime) -> pd.DataFrame:
+        """Daily candles of one contract: Angel One when it answers, merged with (and falling back to) the local store."""
+        key = ("d", c.token)
+        hit = self._chain_cache.get(key)
+        if hit and (now - hit[0]).total_seconds() < DAILY_RAW_CACHE_WITH_FEED:
+            return hit[1]
+        stored = candle_store.get(c.token, "ONE_DAY", from_dt)
+        try:
+            fresh = await self._candles(c.exch_seg, c.token, "ONE_DAY", (now - from_dt).days + 2, include_partial=True)
+            candle_store.put(c.token, "ONE_DAY", fresh)
+        except Exception as exc:
+            log.warning("daily candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
+            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        df = candle_store.merge(stored, fresh)
+        df = df[df.index >= from_dt]
+        self._chain_cache[key] = (now, df)
+        return df
+
+    async def _contract_minutes(self, c: ContractRef, first_day: dt.date, now: dt.datetime, pin: dt.date | None = None) -> list:
+        key = ("m", c.token)
+        hit = self._chain_cache.get(key)
+        refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(c.token) else LIVE_MINUTES_REFRESH_SECONDS
+        if hit and (now - hit[0]).total_seconds() < refresh:
+            base = hit[1]
+        else:
+            since = dt.datetime.combine(first_day, dt.time(9, 0))
+            stored = candle_store.get(c.token, "ONE_MINUTE", since)
+            days = max(LIVE_MINUTES_DAYS, min(TIMEFRAMES["1m"][2] - 1, (now.date() - first_day).days + 3))
+            try:
+                fresh = await self._candles(c.exch_seg, c.token, "ONE_MINUTE", days, include_partial=True)
+                fresh = drop_incomplete_trailing_bars(fresh, 1, now)
+                candle_store.put(c.token, "ONE_MINUTE", fresh)
+            except Exception as exc:
+                log.warning("1-minute candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
+                if "too many requests" in str(exc).lower():
+                    self._cooldown_until[("c", c.token)] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
+                fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            df = candle_store.merge(stored, fresh)
+            base = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
+            self._chain_cache[key] = (now, base)
+        out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)))
+        return [m for m in out if m.ts.date() >= pin] if pin else out
+
+    async def _chain(self, inst: Instrument, now: dt.datetime, from_dt: dt.datetime):
+        """Run the strategy across consecutive contracts (see app/live/chain_eval.py). None = no cutoff has passed yet: single-contract path."""
+        contracts = await self._known_contracts(inst)
+        if len(contracts) < 2:
+            return None
+        for c in contracts:
+            self.feed.subscribe(c.exch_seg, c.token)
+        first_day = (from_dt.date() if from_dt else now.date())
+        gap_bars = await self._gap_bars(inst, from_dt, now)
+        from app.replay.engine import reconstruct_state
+
+        async def get_daily(c):
+            df = await self._contract_daily(c, from_dt, now)
+            return drop_incomplete_trailing_daily_bar(df, now) if len(df) else df
+
+        async def get_minutes(c):
+            if c.token == contracts[0].token:
+                return await self._contract_minutes(c, FIRST_CONTRACT_MINUTES_FROM, now, FIRST_CONTRACT_MINUTES_FROM)
+            return await self._contract_minutes(c, contract_cutoff(contracts[0].expiry), now)
+
+        def daily_engine(c, df):
+            _sig, trs = run_top_bottom_backtest(inst.symbol, c.trading_symbol, c.expiry.isoformat(), "STOCK", inst.quantity,
+                                                [t.to_pydatetime() for t in df.index], [float(x) for x in df["close"]], list(df["open"]),
+                                                gap_bars if c.token == inst.token else None, [float(h) for h in df["high"]], [float(x) for x in df["low"]])
+            return trs
+
+        return await chain_eval.evaluate(
+            contracts=contracts, from_dt=from_dt, now=now, symbol=inst.symbol, get_daily=get_daily, get_minutes=get_minutes,
+            daily_engine=daily_engine, reconstruct=reconstruct_state, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=STRUCT_CAP_DISTANCE)
+
+    async def _live_intraday(self, inst: Instrument, confirmed: pd.DataFrame, daily_trades: list, now: dt.datetime):
+        """Live version of the replay's hybrid mode. Structure (System Points) still comes from confirmed DAILY closes;
+        the last LIVE_MINUTES_DAYS days are executed on real 1-minute candles, so a stop touch exits at the stop and the
+        position reverses at once (always-reversing), breakeven and the 15-minute gap rules fire intraday, exactly as in the
+        Index Replay. Earlier history keeps the daily-close result. Returns (trades, note) or None to keep the daily result
+        (any failure here must never take the instrument down)."""
+        good = self._live_good.get(inst.id)
+
+        def reuse(why: str):
+            if good and (now - good[0]).total_seconds() < LIVE_REUSE_MAX_SECONDS:
+                return good[1], f"WARNING: {why}. Showing the last successful intraday evaluation from {good[0]:%H:%M:%S}"
+            return None
+
+        cool = self._cooldown_until.get(inst.id)
+        if cool and now < cool:
+            return reuse("Angel One rate limit, waiting before the next 1-minute request")
+        try:
+            cached = self._minutes.get(inst.id)
+            refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(inst.token) else LIVE_MINUTES_REFRESH_SECONDS
+            if cached and (now - cached[0]).total_seconds() < refresh:
+                mins = cached[1]
+            else:
+                df = await self._candles(inst.exch_seg, inst.token, "ONE_MINUTE", LIVE_MINUTES_DAYS, include_partial=True)
+                df = drop_incomplete_trailing_bars(df, 1, now)
+                mins = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
+                self._minutes[inst.id] = (now, mins)
+            mins = trim_partial_first_day(merge_minutes(mins, self.feed.builder.minutes(inst.token)))   # REST is authoritative; ticks fill the closing / forming minute
+            if len(mins) < 30:
+                return None
+            from app.replay.engine import reconstruct_state            # same warm-up the Index Replay uses
+            rows = [(t.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for t, r in confirmed.iterrows()]
+            if len(rows) < 5:
+                return None
+            first_day = mins[0].ts.date()      # run_intraday never uses a day's own daily candle on that day, so no filtering is needed
+            initial, _warn = reconstruct_state(rows, first_day)
+            res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=STRUCT_CAP_DISTANCE)
+            older = [t for t in daily_trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
+            note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {STRUCT_CAP_DISTANCE * 100:g}%+ away); earlier history uses daily closes"
+            out = older + res.trades
+            self._live_good[inst.id] = (now, out, note)
+            return out, note
+        except Exception as exc:
+            log.warning("live intraday evaluation failed for %s: %s", inst.symbol, exc)
+            if "too many requests" in str(exc).lower() or "rate" in str(exc).lower():
+                self._cooldown_until[inst.id] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
+            return reuse(f"intraday data fetch failed ({str(exc)[:60]})")
+
     async def _gap_bars(self, inst: Instrument, from_dt: dt.datetime, now: dt.datetime) -> dict | None:
         """Completed 15m candles grouped by day, cached for a few minutes. A
         failure here never blocks the instrument: the close rules still run."""
         cached = self._bars15.get(inst.id)
-        if cached and (now - cached[0]).total_seconds() < GAP_15M_REFRESH_SECONDS:
+        if cached and not self._new_15m_candle_closed(cached[0], now) and (now - cached[0]).total_seconds() < GAP_15M_REFRESH_SECONDS:
             return cached[1]
         try:
             days = min((now - from_dt).days + 2, TIMEFRAMES["15m"][2])
-            df = await self.provider.get_intraday_ohlc(inst.exch_seg, inst.token, "FIFTEEN_MINUTE", days)
+            df = await self._candles(inst.exch_seg, inst.token, "FIFTEEN_MINUTE", days)
         except Exception:
             log.exception("15m fetch for gap protocol failed for %s", inst.symbol)
             return cached[1] if cached else None
@@ -297,10 +558,68 @@ class PaperEngine:
         self._bars15[inst.id] = (now, out)
         return out
 
+    @staticmethod
+    def _new_15m_candle_closed(fetched_at: dt.datetime, now: dt.datetime) -> bool:
+        """True once a 15-minute candle has completed after the last fetch (+20 s for Angel One to publish it), so the
+        gap protocol sees the 09:15-09:30 candle (and every later one) right after it closes, not up to 10 minutes late."""
+        if not market_open(now):
+            return False
+        boundary = now.replace(minute=now.minute - now.minute % 15, second=0, microsecond=0)
+        return fetched_at < boundary + dt.timedelta(seconds=20) <= now
+
+    # ---- live journal ------------------------------------------------------
+    def _journal(self, inst: Instrument, snap: dict) -> None:
+        """Append ENTRY / EXIT / SL->BREAKEVEN / GAP events for LIVE trades the first time they are seen.
+        Append-only: a later recomputation never rewrites what was recorded."""
+        try:
+            seen = json.loads(JOURNAL_SEEN.read_text()) if JOURNAL_SEEN.exists() else {}
+        except ValueError:
+            seen = {}
+        first_run = inst.id not in seen                 # events found on the very first pass are history, not "just happened"
+        mine = seen.setdefault(inst.id, {})
+        events, now = [], _iso(now_ist())
+        for r in snap["trades"]:
+            if not r["live"]:
+                continue
+            key = f"{r['entry_date']}|{r['direction']}"
+            old = mine.get(key)
+            base = {"at": now, "backfill": first_run, "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
+                    "direction": r["direction"], "entry_date": r["entry_date"], "entry_price": r["entry_price"], "quantity": inst.quantity}
+            if old is None:
+                events.append({**base, "event": "ENTRY", "initial_sl": r["initial_sl"], "active_stop": r["active_stop"]})
+                if r["status"] != "OPEN":
+                    events.append({**base, "event": "EXIT", "exit_date": r["exit_date"], "exit_price": r["exit_price"],
+                                   "reason": r["exit_reason"], "pnl_amount": r["pnl_amount"]})
+            else:
+                if old["status"] == "OPEN" and r["status"] != "OPEN":
+                    events.append({**base, "event": "EXIT", "exit_date": r["exit_date"], "exit_price": r["exit_price"],
+                                   "reason": r["exit_reason"], "pnl_amount": r["pnl_amount"]})
+                if r["breakeven"] and not old.get("breakeven"):
+                    events.append({**base, "event": "SL_TO_BREAKEVEN", "active_stop": r["active_stop"]})
+                if r.get("gap_state") and r.get("gap_state") != old.get("gap_state"):
+                    events.append({**base, "event": "GAP", "gap_state": r["gap_state"], "protective_sl": r.get("protective_sl")})
+            mine[key] = {"status": r["status"], "breakeven": r["breakeven"], "gap_state": r.get("gap_state")}
+        JOURNAL_SEEN.parent.mkdir(parents=True, exist_ok=True)
+        if not events:
+            JOURNAL_SEEN.write_text(json.dumps(seen))
+            return
+        with JOURNAL_PATH.open("a", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+                log.info("JOURNAL %s %s %s", e["event"], e["symbol"], e.get("reason") or e.get("gap_state") or e.get("entry_price"))
+        JOURNAL_SEEN.write_text(json.dumps(seen))
+
+    def journal(self, limit: int = 300) -> list[dict]:
+        if not JOURNAL_PATH.exists():
+            return []
+        lines = JOURNAL_PATH.read_text(encoding="utf-8").splitlines()[-limit:]
+        return [json.loads(x) for x in reversed(lines) if x.strip()]
+
     async def refresh_one(self, inst: Instrument) -> None:
         try:
             self.snapshots[inst.id] = await self._build_snapshot(inst)
             self.errors.pop(inst.id, None)
+            self._journal(inst, self.snapshots[inst.id])
         except Exception as exc:  # one bad symbol must never stop the others
             log.exception("refresh failed for %s", inst.symbol)
             self.errors[inst.id] = str(exc) or exc.__class__.__name__
@@ -318,14 +637,48 @@ class PaperEngine:
                 await self.refresh_all()
             except Exception:
                 log.exception("tick failed")
-            await asyncio.sleep(20 if market_open() else 300)
+            if market_open() and self.feed.healthy():
+                try:                                         # a new tick arrived: re-check stops / entries (at most about once a second)
+                    await asyncio.wait_for(self.feed.updated.wait(), 5)
+                except asyncio.TimeoutError:
+                    pass
+                self.feed.updated.clear()
+                await asyncio.sleep(1.0)
+            else:
+                await asyncio.sleep(20 if market_open() else 300)
 
     def start(self) -> None:
+        for inst in self.instruments.values():
+            self.feed.subscribe(inst.exch_seg, inst.token)
+        for ex, tok in INDEX_TOKENS.values():        # index prices for the day-change display
+            self.feed.subscribe(ex, tok)
+        self.feed.start()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        await self.feed.stop()
         if self._task:
             self._task.cancel()
+
+    async def index_quote(self, name: str) -> dict:
+        """Index price with today's change in points and % versus the previous trading day's close (real Angel One data)."""
+        ex, tok = INDEX_TOKENS[name]
+        now = now_ist()
+        cached = self._prev_close.get(name)
+        if cached is None or (now - cached[0]).total_seconds() > 600:
+            df = await self._candles(ex, tok, "ONE_DAY", 10, include_partial=True)
+            prev = None if df is None or df.empty else df[df.index.date < now.date()]
+            prev_close = float(prev["close"].iloc[-1]) if prev is not None and not prev.empty else None
+            last_close = float(df["close"].iloc[-1]) if df is not None and not df.empty else None
+            self._prev_close[name] = cached = (now, prev_close, last_close)
+        prev_close, last_close = cached[1], cached[2]
+        tick = self.feed.latest.get(tok)
+        live = self.feed.healthy(tok) and tick is not None
+        price = tick.ltp if live else last_close
+        change = None if price is None or prev_close is None else round(price - prev_close, 2)
+        return {"symbol": name, "price": price, "prev_close": prev_close, "change": change,
+                "pct": None if change is None or not prev_close else round(change / prev_close * 100, 2),
+                "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
 
     # ---- views -----------------------------------------------------------
     def overview(self) -> dict:
@@ -343,6 +696,7 @@ class PaperEngine:
         trades = sum(s["live_trades"] for s in stats)
         wins = sum(s["live_wins"] for s in stats)
         return {
+            "feed": self.feed.status(),
             "market_open": market_open(),
             "last_tick": _iso(self.last_tick),
             "items": items,

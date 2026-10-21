@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BankNifty Index Replay · Top-Bottom</title>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-<link rel="stylesheet" href="/static/theme.css">
+<script src="/static/shell.js?v=20261026"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261026">
+<style>html.embed .tnav, html.embed .topbar, html.embed .sidebar { display: none !important; } html.embed body.has-tnav .app { min-height: 0; }</style>
+<script>if (new URLSearchParams(location.search).get("embed")) document.documentElement.classList.add("embed");</script>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <div class="brand"><span class="brand-logo">T</span>Top-Bottom</div>
-    <nav class="nav">
-      <a href="/">Paper Trader</a>
-      <a href="/replay" class="active">Index Replay</a>
-    </nav>
+    <nav class="nav" data-shell></nav>
   </aside>
   <div class="content">
     <div class="topbar">
@@ -29,8 +29,8 @@
       <div class="alert" id="err" role="alert"></div>
 
       <div class="grid2">
-        <section class="card">
-          <div class="card-head"><div><h2>1 · Data availability</h2><p class="sub">BankNifty INDEX · NSE · token <span id="token">99926009</span> — futures data is never used</p></div></div>
+        <details class="card" id="dataCard">
+          <summary class="card-head" style="cursor:pointer;list-style:none"><div><h2>1 · Data availability <span class="chip muted" id="dataHint" style="margin-left:6px">click to open: coverage, download, CSV import</span></h2><p class="sub">BankNifty INDEX · NSE · token <span id="token">99926009</span> — futures data is never used</p></div></summary>
           <div class="scroll"><table><thead><tr><th>Interval</th><th>Source</th><th>From</th><th>To</th><th>Candles</th><th>Incomplete days</th></tr></thead><tbody id="cov"></tbody></table></div>
           <div class="form-row" style="margin-top:14px">
             <label>Interval<select id="dlIv"><option>1D</option><option>15m</option><option>1m</option><option>5m</option><option>30m</option><option>1H</option></select></label>
@@ -42,7 +42,7 @@
           <p class="note" id="dlStatus" role="status"></p>
           <p class="note" id="impReport"></p>
           <p class="note">Downloads are chunked, rate-limited and resumable; nothing downloads until you press the button. Missing candles are reported, never filled. <b>For the gap-up / gap-down 15-minute rule, also download 15m data</b> for the same dates.</p>
-        </section>
+        </details>
 
         <section class="card">
           <div class="card-head"><div><h2>2 · Replay</h2><p class="sub">The backend picks the dates and loads the history it needs. Nothing to configure.</p></div></div>

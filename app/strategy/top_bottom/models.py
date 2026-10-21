@@ -13,7 +13,7 @@ from typing import Literal
 
 Direction = Literal["BUY", "SELL"]
 InstrumentClass = Literal["STOCK", "INDEX"]
-ExitReason = Literal["TRAILING_STOP_REVERSAL", "GAP_EXIT_15M", "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "END_OF_BACKTEST"]
+ExitReason = Literal["TRAILING_STOP_REVERSAL", "GAP_EXIT_15M", "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT", "ROLLED_TO_NEXT_CONTRACT", "END_OF_BACKTEST"]
 
 @dataclass(frozen=True)
 class SwingPoint:
@@ -90,6 +90,11 @@ class Trade:
     carried_in: bool = False  # position opened BEFORE the replay window, reconstructed from Daily candles
     round_trip_date: dt.datetime | None = None  # first 1-min close back through the entry level (information only)
     entry_ambiguous: bool = False  # ambiguity known at entry time (the replay shows only this while the trade is open)
+    entry_day_sl: float | None = None  # optional rule: stop used ONLY on the entry day (entry +/- a fixed %); None = rule not applied
+    struct_stop: float | None = None   # the structural (System Point) stop, tracked separately while the capped-stop rule is on
+    contract: str | None = None         # trading symbol of the futures contract this leg lives in (set by the live engine)
+    rolled_in: bool = False             # this leg was opened by a contract roll (same direction as the leg it replaced)
+    capped: bool = False               # True while the stop is the entry +/- 1% level because the structural stop is >= 2% from entry
 
     @property
     def is_open(self) -> bool:

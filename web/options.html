@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options · Chain & EOD data</title>
+<script src="/static/shell.js?v=20261026"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261026">
+<style>
+  table.oc { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  table.oc th, table.oc td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.oc td.k { text-align: center; font-weight: 700; background: var(--bg-hover); }
+  table.oc tr.atm td { background: var(--accent-soft); }
+  table.oc td.itm { background: var(--warning-soft); }
+  td.bad { color: var(--danger); font-weight: 600; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .row select, .row input { padding: 6px 8px; }
+  .msgs li { font-size: 12px; } .err { color: var(--danger); } .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-logo">T</span>Top-Bottom</div>
+    <nav class="nav" data-shell></nav>
+  </aside>
+  <div class="content">
+    <div class="topbar">
+      <h1>Options</h1>
+      <span class="chip">Read-only · real data</span><span class="chip muted">No broker orders</span>
+    </div>
+
+    <div class="card">
+      <h2>Live option chain (Angel One)</h2>
+      <div class="row">
+        <select id="sym"><option>BANKNIFTY</option><option>NIFTY</option></select>
+        <select id="exp"><option value="nearest">nearest</option></select>
+        <label>Strikes ± <input id="n" type="number" value="10" min="1" max="30" style="width:60px"></label>
+        <button class="primary-button" id="go">Fetch chain</button>
+        <label><input type="checkbox" id="auto"> auto-refresh 15s</label>
+      </div>
+      <div class="row" id="stats"></div>
+      <ul class="msgs" id="msgs"></ul>
+      <div class="scroll"><table class="oc" id="tbl"></table></div>
+      <p class="muted" style="font-size:12px">Shaded = ITM. Red cell = flagged leg (illiquid / stale / bad). Greeks marked * are Black-Scholes fallback, not broker.</p>
+    </div>
+
+    <div class="card">
+      <h2>NSE Bhavcopy EOD data</h2>
+      <div id="bsum" class="muted">loading…</div>
+      <div class="row" style="margin-top:10px">
+        <label>From <input type="date" id="lf"></label><label>To <input type="date" id="lt"></label>
+        <button class="secondary-button" id="load">Download &amp; load</button><span id="lmsg" class="muted"></span>
+      </div>
+      <div class="row">
+        <select id="bsym"><option>BANKNIFTY</option><option>NIFTY</option></select>
+        <input type="date" id="bd"><select id="bexp"></select>
+        <button class="secondary-button" id="bgo">Show EOD chain</button><span id="binfo" class="muted"></span>
+      </div>
+      <div class="scroll"><table class="oc" id="btbl"></table></div>
+    </div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const f = (v, d = 2) => v == null ? '–' : Number(v).toLocaleString('en-IN', {maximumFractionDigits: d, minimumFractionDigits: d});
+const i = v => v == null ? '–' : Number(v).toLocaleString('en-IN');
+async function j(url, opt) { const r = await fetch(url, opt); const b = await r.json(); if (!r.ok) throw new Error(b.detail || r.status); return b; }
+
+async function loadExp() {
+  try {
+    const d = await j(`/api/options/expiries?symbol=${$('sym').value}`);
+    $('exp').innerHTML = '<option value="nearest">nearest</option>' + d.expiries.map(e => `<option>${e}</option>`).join('');
+  } catch (e) { $('msgs').innerHTML = `<li class="err">${e.message}</li>`; }
+}
+async function chain() {
+  $('go').disabled = true; $('msgs').innerHTML = '<li class="muted">fetching…</li>';
+  try {
+    const d = await j(`/api/options/chain?symbol=${$('sym').value}&expiry=${$('exp').value}&strikes=${$('n').value}`);
+    $('stats').innerHTML = [['Spot', f(d.spot)], ['ATM', i(d.atm)], ['VIX', f(d.vix)], ['PCR', f(d.pcr, 2)], ['Expiry', d.expiry],
+      ['Lot', d.lot_size], ['Market', d.market_open ? 'OPEN' : 'CLOSED'], ['Fetched', d.fetched_at.slice(11, 19)]]
+      .map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join('');
+    const h = d.helpers;
+    const m = [...d.violations.map(v => `<li class="err">HARD: ${v}</li>`), ...d.stale.map(v => `<li class="err">STALE: ${v}</li>`),
+      ...d.warnings.map(v => `<li>${v}</li>`),
+      `<li>Helpers — CE: OTM+100 ${i(h.CE.otm_100)}, Δ0.30 ${i(h.CE.delta_30)}, ~₹100 ${i(h.CE.premium_100)} · PE: OTM+100 ${i(h.PE.otm_100)}, Δ0.30 ${i(h.PE.delta_30)}, ~₹100 ${i(h.PE.premium_100)}</li>`];
+    if (!d.violations.length && !d.stale.length) m.unshift('<li>Data quality: 0 hard violations</li>');
+    $('msgs').innerHTML = m.join('');
+    const cell = (l, k, dg) => { if (!l) return '<td class="bad">–</td>'; const v = l[k]; const s = dg === 0 ? i(v) : f(v, dg);
+      return `<td${l.liquid ? '' : ' class="bad" title="' + l.flags.join(', ') + '"'}>${s}${(k === 'iv' || k === 'delta') && l.greeks_source === 'calc' ? '*' : ''}</td>`; };
+    const ce = ['oi', 'volume', 'iv', 'delta', 'bid', 'ask', 'ltp'], dgs = {oi: 0, volume: 0, iv: 1, delta: 2};
+    let html = '<tr><th colspan="7" style="text-align:center">CALLS</th><th></th><th colspan="7" style="text-align:center">PUTS</th></tr><tr>'
+      + ce.map(k => `<th>${k.toUpperCase()}</th>`).join('') + '<th style="text-align:center">STRIKE</th>'
+      + [...ce].reverse().map(k => `<th>${k.toUpperCase()}</th>`).join('') + '</tr>';
+    for (const r of d.rows) {
+      const cs = ce.map(k => cell(r.CE, k, dgs[k] ?? 2)), ps = [...ce].reverse().map(k => cell(r.PE, k, dgs[k] ?? 2));
+      if (r.strike < d.spot) cs.forEach((c, x) => cs[x] = c.replace('<td', '<td data-i'));
+      html += `<tr class="${r.strike === d.atm ? 'atm' : ''}">${cs.join('').replaceAll('<td data-i class="bad"', '<td class="bad itm"').replaceAll('<td data-i', '<td class="itm"')}<td class="k">${i(r.strike)}</td>`
+        + (r.strike > d.spot ? ps.join('').replaceAll('<td class="bad"', '<td class="bad itm"').replaceAll('<td>', '<td class="itm">') : ps.join('')) + '</tr>';
+    }
+    $('tbl').innerHTML = html;
+  } catch (e) { $('msgs').innerHTML = `<li class="err">${e.message}</li>`; }
+  $('go').disabled = false;
+}
+async function bsum() {
+  const d = await j('/api/options/bhavcopy/summary');
+  if (!d.symbols.length) { $('bsum').textContent = 'No Bhavcopy data loaded yet.'; return; }
+  const nf = d.days.filter(x => x.status !== 'loaded').map(x => x.date);
+  $('bsum').innerHTML = d.symbols.map(s => `<span class="chip">${s.symbol}: ${s.days} days, ${i(s.rows)} rows, ${s.expiries} expiries (${s.from} → ${s.to})</span>`).join(' ')
+    + (nf.length ? `<div style="margin-top:6px">No file: ${nf.join(', ')}</div>` : '');
+  if (!$('bd').value) { $('bd').value = d.symbols[0].to; bexp(); }
+}
+async function bexp() {
+  const d = await j(`/api/options/bhavcopy/expiries?symbol=${$('bsym').value}&date=${$('bd').value}`);
+  $('bexp').innerHTML = d.expiries.map(e => `<option>${e}</option>`).join('') || '<option value="">(no data this date)</option>';
+}
+async function bchain() {
+  try {
+    const d = await j(`/api/options/bhavcopy/chain?symbol=${$('bsym').value}&date=${$('bd').value}&expiry=${$('bexp').value}`);
+    $('binfo').textContent = `Underlying close ${f(d.underlying)} · lot ${d.lot_size} · ${d.rows.length} strikes`;
+    const near = d.rows.filter(r => Math.abs(r.strike - d.underlying) <= d.underlying * 0.04);
+    const c = x => x ? `<td>${f(x.close)}</td><td>${f(x.settle)}</td><td>${i(x.oi)}</td><td>${i(x.volume)}</td>` : '<td colspan="4" class="bad">no row</td>';
+    $('btbl').innerHTML = '<tr><th>CE close</th><th>settle</th><th>OI</th><th>Vol</th><th style="text-align:center">STRIKE</th><th>PE close</th><th>settle</th><th>OI</th><th>Vol</th></tr>'
+      + near.map(r => `<tr>${c(r.CE)}<td class="k">${i(r.strike)}</td>${c(r.PE)}</tr>`).join('');
+  } catch (e) { $('binfo').textContent = e.message; $('btbl').innerHTML = ''; }
+}
+$('load').onclick = async () => {
+  if (!$('lf').value || !$('lt').value) return; $('load').disabled = true; $('lmsg').textContent = 'downloading from NSE (1 s per day)…';
+  try { const s = await j(`/api/options/bhavcopy/load?start=${$('lf').value}&end=${$('lt').value}`, {method: 'POST'});
+    $('lmsg').textContent = `${s.loaded_days} days loaded, ${s.rows} rows, ${s.rejected} rejected, no file: ${s.no_file_days.length}, errors: ${s.errors.length}`; bsum();
+  } catch (e) { $('lmsg').textContent = e.message; }
+  $('load').disabled = false;
+};
+$('sym').onchange = loadExp; $('go').onclick = chain; $('bgo').onclick = bchain; $('bd').onchange = bexp; $('bsym').onchange = bexp;
+let timer; $('auto').onchange = () => { clearInterval(timer); if ($('auto').checked) timer = setInterval(chain, 15000); };
+loadExp(); bsum();
+</script>
+</body>
+</html>
