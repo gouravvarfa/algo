@@ -6,3 +6,6 @@ pandas
 numpy
 httpx
 pyotp
+argon2-cffi
+cryptography
+segno

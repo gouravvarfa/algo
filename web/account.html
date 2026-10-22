@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account · Algo Trading</title>
+<script src="/static/shell.js?v=20261027"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261027">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 16px 0; }
+  .box { width: min(420px, calc(100vw - 32px)); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 28px; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  input { width: 100%; height: 40px; } button { justify-content: center; height: 42px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; } .ok { color: var(--success); font-size: 13px; min-height: 18px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; } dt { color: var(--text-muted); } dd { margin: 0; font-weight: 600; }
+  .links { display: flex; justify-content: space-between; font-size: 13px; }
+</style>
+</head>
+<body>
+<main class="box">
+  <h1>Your account</h1>
+  <dl id="info"></dl>
+  <form id="f" style="display:grid;gap:14px" autocomplete="off">
+    <h2 style="margin:6px 0 0">Change password</h2>
+    <label>Current password <input type="password" id="cur" autocomplete="current-password" required></label>
+    <label>New password (at least 12 characters) <input type="password" id="new" autocomplete="new-password" minlength="12" required></label>
+    <label>Repeat new password <input type="password" id="new2" autocomplete="new-password" minlength="12" required></label>
+    <div class="err" id="err" role="alert"></div><div class="ok" id="ok" role="status"></div>
+    <button class="primary-button" id="go" type="submit">Change password</button>
+  </form>
+  <div class="links"><a href="/top-bottom">&larr; Back to the app</a><a href="/logout">Sign out</a></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id), esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+fetch('/api/auth/me').then((r) => r.ok ? r.json() : null).then((m) => {
+  if (!m) { location.href = '/login'; return; }
+  $('info').innerHTML = [['Name', m.user.name], ['Username', m.user.username], ['Role', m.user.role + (m.user.owner ? ' (owner)' : '')],
+    ['This device', m.session.device], ['Signed in', (m.session.started_at || '').replace('T', ' ').slice(0, 16)]]
+    .map(([k, v]) => '<dt>' + k + '</dt><dd>' + esc(v) + '</dd>').join('');
+});
+$('f').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('err').textContent = ''; $('ok').textContent = '';
+  if ($('new').value !== $('new2').value) { $('err').textContent = 'The two new passwords are not the same.'; return; }
+  $('go').disabled = true;
+  try {
+    const r = await fetch('/api/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: $('cur').value, new_password: $('new').value }) });
+    const b = await r.json().catch(() => ({}));
+    if (r.ok) { $('ok').textContent = 'Password changed.'; $('cur').value = $('new').value = $('new2').value = ''; }
+    else $('err').textContent = b.message || 'Could not change the password.';
+  } catch (x) { $('err').textContent = 'Could not reach the server.'; }
+  $('go').disabled = false;
+});
+</script>
+</body>
+</html>

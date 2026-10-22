@@ -99,3 +99,65 @@
     pollIdx(); setInterval(pollIdx, 15000);
   });
 })();
+
+/* Sign-in session (password + TOTP login). Runs only when logged in under that login, which is when the readable algo_csrf cookie exists;
+   with the old single-user login or no login nothing here does anything.
+   - every same-origin POST/PUT/PATCH/DELETE gets the X-CSRF-Token header the server checks;
+   - the first 401 from any /api/ call (heartbeat or a page's own poll) sends the page to the sign-in page, with the reason the server gives
+     ("moved" = signed in on another device), so a tab that was signed out says so instead of silently showing empty data;
+   - a heartbeat every 30 s tells the server this page is still open, and whether the person touched it (the 30-minute idle timeout);
+   - a "Sign out" link in the sidebar. */
+(function () {
+  function cookie(n) { var m = document.cookie.match(new RegExp("(?:^|; )" + n + "=([^;]*)")); return m ? decodeURIComponent(m[1]) : null; }
+  if (!cookie("algo_csrf")) return;
+  if (/^\/(login|setup\/)/.test(location.pathname)) return;      // signed-out pages: never ping from here (a stale cookie would redirect in a loop)
+
+  var leaving = false;
+  function leave(reason) {
+    if (leaving) return; leaving = true;
+    location.href = "/login?e=" + (reason === "taken_over" ? "moved" : "ended");
+  }
+
+  var nativeFetch = window.fetch;
+  window.fetch = function (input, init) {
+    var api = false;
+    try {
+      var url = typeof input === "string" ? input : (input instanceof URL ? input.href : null);
+      var u = url ? new URL(url, location.href) : null;
+      var same = !!u && u.origin === location.origin;
+      api = same && u.pathname.indexOf("/api/") === 0 && u.pathname !== "/api/auth/login";
+      var method = ((init && init.method) || "GET").toUpperCase();
+      if (same && method !== "GET" && method !== "HEAD") {
+        var headers = new Headers((init && init.headers) || {});
+        headers.set("X-CSRF-Token", cookie("algo_csrf") || "");
+        init = Object.assign({}, init, { headers: headers });
+      }
+    } catch (e) { /* fall through to the plain call */ }
+    var p = nativeFetch.call(this, input, init);
+    if (api) {
+      p.then(function (r) {
+        if (r.status !== 401) return;
+        r.clone().json().catch(function () { return {}; }).then(function (b) { leave(b && b.reason); });
+      }).catch(function () { /* network error: not our business here */ });
+    }
+    return p;
+  };
+
+  var touched = false;
+  ["mousemove", "mousedown", "keydown", "scroll", "touchstart"].forEach(function (ev) { addEventListener(ev, function () { touched = true; }, { passive: true }); });
+  function beat() {
+    var active = touched; touched = false;
+    window.fetch("/api/auth/heartbeat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: active }) })
+      .catch(function () { /* offline: try again at the next beat */ });
+  }
+  beat(); setInterval(beat, 30000);
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var foot = document.querySelector(".sb-foot"); if (!foot) return;
+    [["/account", "Account"], ["/logout", "Sign out"]].forEach(function (l) {
+      var a = document.createElement("a"); a.href = l[0]; a.textContent = l[1]; a.className = "seg-btn";
+      a.style.cssText = "display:block;margin-top:8px;text-align:center;text-decoration:none;border:1px solid var(--border-strong);border-radius:var(--radius-md)";
+      foot.appendChild(a);
+    });
+  });
+})();

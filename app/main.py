@@ -16,7 +16,9 @@ from app.paper_trading.engine import DEFAULT_LOOKBACK_DAYS, TIMEFRAMES, PaperEng
 from app.providers.angelone_provider import AngelOneProvider
 from app.options import api as options_api
 from app.options import collector as option_collector
-from app import auth
+from app import auth, auth_api
+from app.security import mode as login_mode
+from app.security.users import AuthError
 from app.services import angelone_credential_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
@@ -41,16 +43,23 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Top-Bottom Paper Trader", lifespan=lifespan)
 app.include_router(options_api.router)
+app.include_router(auth_api.router)
+app.add_exception_handler(AuthError, auth_api.handle_auth_error)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 @app.middleware("http")
 async def require_login(request, call_next):
-    """Only active on a hosted deployment (see app/auth.py). Pages redirect to /login, APIs answer 401."""
-    if not auth.enabled():
+    """Which login applies is decided by app/security/mode.py: 'platform' (password + TOTP, server-side sessions, auth_api.gate),
+    'legacy' (the old single-user login of app/auth.py, below) or 'open' (no login, local use). Pages redirect to /login, APIs answer 401."""
+    current = login_mode.current()
+    if current == "open":
         return await call_next(request)
+    if current == "platform":
+        blocked = auth_api.gate(request)
+        return blocked if blocked is not None else await call_next(request)
     path = request.url.path
-    if path in ("/login", "/healthz") or path.startswith(("/static/fonts/", "/static/theme.css", "/static/shell.js")):
+    if path in ("/login", "/healthz", "/api/auth/mode") or path.startswith(("/static/fonts/", "/static/theme.css", "/static/shell.js")):
         return await call_next(request)
     if auth.valid_session(request.cookies.get(auth.COOKIE)):
         return await call_next(request)
@@ -80,10 +89,24 @@ async def login_submit(request: Request):
     return resp
 
 
+@app.get("/setup/{token}")
+async def setup_page(token: str):
+    # the one-time setup link an admin hands to a new user (public page; the token is checked by /api/auth/setup/{token})
+    return FileResponse(WEB_DIR / "setup.html", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+@app.get("/account")
+async def account_page():
+    # who am I + change password (platform login only: without it the page sends you to /login)
+    return FileResponse(WEB_DIR / "account.html", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/logout")
-async def logout():
+async def logout(request: Request):
+    auth_api.end_current_session(request)          # platform mode: close the server-side session (does nothing in the other modes)
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(auth.COOKIE)
+    auth_api.clear_cookies(resp)
     return resp
 
 

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Set up your account · Algo Trading</title>
+<script src="/static/shell.js?v=20261027"></script>
+<link rel="stylesheet" href="/static/theme.css?v=20261027">
+<style>
+  body { display: grid; place-items: center; min-height: 100vh; padding: 16px 0; }
+  .box { width: min(460px, calc(100vw - 32px)); background: var(--bg-surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 28px; display: grid; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  input { width: 100%; height: 40px; } button { justify-content: center; height: 42px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; }
+  ol { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; display: grid; gap: 4px; }
+  .qr { display: grid; place-items: center; background: #fff; border-radius: 12px; padding: 8px; border: 1px solid var(--border); }
+  .qr svg { width: 200px; height: 200px; }
+  .secret { font-family: ui-monospace, Consolas, monospace; font-size: 13px; letter-spacing: .06em; word-break: break-all; user-select: all; }
+  .codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 15px; background: var(--bg-hover); border-radius: 10px; padding: 14px; }
+  .warn { background: var(--warning-soft); color: var(--warning); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main class="box">
+  <div id="loading" class="sub">Checking your link…</div>
+  <div id="bad" class="hidden"><h1>This link does not work</h1><p class="sub" id="badMsg"></p><a href="/login">Go to sign in</a></div>
+
+  <form id="f" class="hidden" style="display:grid;gap:14px" autocomplete="off">
+    <h1>Welcome, <span id="who"></span></h1>
+    <p class="sub" style="margin:0">Username: <b id="uname"></b>. Three quick steps:</p>
+    <ol><li>Scan this QR code with Google or Microsoft Authenticator.</li><li>Choose a password (at least 12 characters).</li><li>Type the 6-digit code your app shows now.</li></ol>
+    <div class="qr" id="qr"></div>
+    <div class="sub" style="margin:0">Cannot scan? Enter this key in the app instead: <span class="secret" id="secret"></span></div>
+    <label>Password <input type="password" id="pw" autocomplete="new-password" minlength="12" required></label>
+    <label>Repeat password <input type="password" id="pw2" autocomplete="new-password" minlength="12" required></label>
+    <label>6-digit code from the app <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" required></label>
+    <div class="err" id="err" role="alert"></div>
+    <button class="primary-button" id="go" type="submit">Finish setup</button>
+  </form>
+
+  <div id="done" class="hidden" style="display:none;gap:14px">
+    <h1>You are all set</h1>
+    <div class="warn"><b>Save these 10 backup codes now.</b> They are shown only once. Each works one time if you lose your phone. Keep them somewhere safe, not on this computer's desktop.</div>
+    <div class="codes" id="codes"></div>
+    <button class="secondary-button" id="copy" type="button">Copy codes</button>
+    <a class="primary-button" href="/login" style="text-decoration:none;display:flex;justify-content:center;height:42px;align-items:center">Continue to sign in</a>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id), token = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+const show = (id, display) => { $('loading').classList.add('hidden'); for (const x of ['bad', 'f', 'done']) $(x).classList.add('hidden'); $('bad').style.display = 'none'; $('f').style.display = 'none'; $('done').style.display = 'none'; $(id).classList.remove('hidden'); $(id).style.display = display; };
+fetch('/api/auth/setup/' + encodeURIComponent(token)).then(async (r) => {
+  const b = await r.json().catch(() => ({}));
+  if (!r.ok) { $('badMsg').textContent = b.message || 'Ask your admin for a new link.'; show('bad', 'block'); return; }
+  $('who').textContent = b.name; $('uname').textContent = b.username; $('qr').innerHTML = b.qr_svg; $('secret').textContent = b.secret; show('f', 'grid');
+}).catch(() => { $('badMsg').textContent = 'Could not reach the server.'; show('bad', 'block'); });
+
+$('f').addEventListener('submit', async (e) => {
+  e.preventDefault(); $('err').textContent = '';
+  if ($('pw').value !== $('pw2').value) { $('err').textContent = 'The two passwords are not the same.'; return; }
+  $('go').disabled = true;
+  try {
+    const r = await fetch('/api/auth/setup/' + encodeURIComponent(token), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: $('pw').value, totp: $('code').value.trim() }) });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) { $('err').textContent = b.message || 'Setup failed.'; $('go').disabled = false; return; }
+    $('pw').value = $('pw2').value = '';
+    $('codes').innerHTML = b.backup_codes.map((c) => '<span>' + c + '</span>').join(''); show('done', 'grid');
+    $('copy').onclick = () => navigator.clipboard.writeText(b.backup_codes.join('\n')).then(() => { $('copy').textContent = 'Copied'; });
+  } catch (x) { $('err').textContent = 'Could not reach the server.'; $('go').disabled = false; }
+});
+</script>
+</body>
+</html>
