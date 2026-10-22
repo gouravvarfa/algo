@@ -132,7 +132,7 @@
   .mult input { width: 58px; height: 32px; padding: 0 6px; }
   @media (max-width: 760px) { .wi-ctrl { grid-template-columns: minmax(0, 1fr); } .gk { grid-template-columns: repeat(2, minmax(0, 1fr)); } .gk > div:nth-child(3) { border-left: 0; } .gk > div:nth-child(n+3) { border-top: 1px solid var(--border); } }
   /* positions */
-  table.pt { font-size: 13px; } table.pt th, table.pt td { padding: 9px 10px; } table.pt td.l, table.pt th.l { text-align: left; }
+  table.pt { font-size: 13px; width: 100%; } table.pt th, table.pt td { padding: 7px 8px; } table.pt td.l, table.pt th.l { text-align: left; }
   table.pt tr.closed td { opacity: .6; }
   table.pt .w { font-size: 11px; color: var(--warning); white-space: normal; max-width: 280px; text-align: left; }
   table.pt .acts { display: inline-flex; gap: 4px; } table.pt .acts .ib { width: 26px; height: 26px; font-size: 12px; }
@@ -242,7 +242,7 @@
         <label class="mult" title="Multiplies the lots of every open leg (simulation only)">Lot multiplier <input type="number" id="mult" min="1" max="100" step="1" value="1"></label>
         <button class="secondary-button" id="exitall">Exit all</button><button class="secondary-button" id="clear">Clear</button><button class="secondary-button" id="export" title="Download the simulated positions as CSV">Export CSV</button></div>
       <div style="overflow-x:auto"><table class="pt" id="plist"></table></div>
-      <div class="ptot"><span class="simnote">Simulated positions only, valued at the selected date's NSE close. No broker orders. For rule-based strategies use <a href="/builder">Strategy Builder</a>.</span><span class="spacer"></span>
+      <div class="ptot"><span class="simnote">Simulated positions only (paper): valued at the selected date's close, or at live prices in LIVE mode. No broker orders. For rule-based strategies use <a href="/builder">Strategy Builder</a>.</span><span class="spacer"></span>
         <span>Net P&amp;L <span class="sub" id="r-pnl-s" style="display:inline"></span></span><span class="big" id="r-pnl">₹0</span></div>
     </div>
     <div class="panel">
@@ -486,7 +486,12 @@ function setLive(on) {
   }
   loadChain();
 }
-$('livebtn').onclick = () => setLive(!live);
+// LIVE stays on across pages and tabs: the choice is remembered (localStorage is shared by every tab of this site) until the button is switched off
+const LIVEKEY = 'sim.live';
+const liveWanted = () => { try { return localStorage.getItem(LIVEKEY) === '1'; } catch (e) { return false; } };
+$('livebtn').onclick = () => { const on = !live; try { localStorage.setItem(LIVEKEY, on ? '1' : '0'); } catch (e) {} setLive(on); };
+window.addEventListener('storage', e => { if (e.key === LIVEKEY && (e.newValue === '1') !== live) setLive(e.newValue === '1'); });   // switched in another tab
+
 async function prevSpot() {
   if (idx <= 0) return null;
   const p = dates[idx - 1];
@@ -732,7 +737,7 @@ function renderPositions() {
   const d = dates[idx], open = positions.filter(p => !p.closed);
   $('pcount').textContent = `${open.length} open · ${positions.length - open.length} closed`;
   if (!positions.length) { $('plist').innerHTML = '<tr><td class="empty">No simulated positions yet. Hover a strike in the option chain and click <b>B</b> or <b>S</b>.</td></tr>'; return; }
-  $('plist').innerHTML = `<thead><tr><th class="l">Leg</th><th class="l">Side</th><th class="l">Type</th><th>Strike</th><th class="l">Expiry</th><th>Lots</th><th class="l">Entry date</th><th>Entry</th><th>Current / exit</th><th>P&amp;L</th><th class="l">Notes</th><th></th></tr></thead><tbody>` +
+  $('plist').innerHTML = `<thead><tr><th class="l">Leg</th><th>Lots</th><th>Entry ₹</th><th>${live ? 'Live ₹' : 'Now / exit ₹'}</th><th>P&amp;L</th><th></th></tr></thead><tbody>` +
     positions.map((p, i) => {
       const warn = [];
       if (!p.closed && (d < p.entry_date || (d === p.entry_date && useIntra() && p.entry_time && tm < p.entry_time))) warn.push(`viewing a time before entry`);
@@ -741,14 +746,13 @@ function renderPositions() {
       if (!p.closed && p.note && p.note !== 'settled at expiry') warn.push(p.note);
       const note = p.closed ? `${p.exit_reason ? p.exit_reason + ' · ' : 'exited '}${fmtD(p.exit_date)}${p.exit_time ? ' ' + p.exit_time : ''}` : p.sl ? `SL ₹${nf(p.sl)} (${p.sl_pct}%)` + (p.note === 'settled at expiry' ? ' · ℹ expired: settlement value' : '') : p.note === 'settled at expiry' ? 'ℹ expired: settlement value' : '';
       const off = chain ? p.strike - chain.atm : null;
-      return `<tr class="${p.closed ? 'closed' : ''}"><td class="l">${i + 1}</td><td class="l"><span class="badge ${p.side}">${p.side}</span></td><td class="l"><b>${p.opt}</b></td>
-        <td>${n0(p.strike)}${off != null && p.expiry === chain.expiry ? ` <span class="sub" style="display:inline">${off === 0 ? 'ATM' : (off > 0 ? '+' : '−') + n0(Math.abs(off))}</span>` : ''}</td>
-        <td class="l">${fmtD(p.expiry)}</td>
+      const info = [`exp ${fmtD(p.expiry)}`, `in ${fmtD(p.entry_date)}${p.entry_time ? ' ' + p.entry_time : ''}`, note, warn.length ? '⚠ ' + warn.join(' · ') : ''].filter(Boolean).join(' · ');
+      return `<tr class="${p.closed ? 'closed' : ''}" title="${info.replace(/"/g, '&quot;')}"><td class="l"><span class="badge ${p.side}">${p.side}</span> <b>${n0(p.strike)} ${p.opt}</b>${off != null && p.expiry === chain.expiry ? ` <span class="sub" style="display:inline">${off === 0 ? 'ATM' : (off > 0 ? '+' : '−') + n0(Math.abs(off))}</span>` : ''}
+          <div class="sub" style="margin:1px 0 0;white-space:normal;max-width:300px">${info}</div></td>
         <td>${p.closed ? p.lots : `<span class="acts"><button class="ib" title="Fewer lots" onclick="lots(${i},-1)">−</button><b style="min-width:18px;text-align:center" title="${p.lots} lot(s) × multiplier ${mult}">${p.lots}${mult > 1 ? `<span class="sub" style="display:inline">×${mult}</span>` : ''}</b><button class="ib" title="More lots" onclick="lots(${i},1)">+</button></span>`}</td>
-        <td class="l">${fmtD(p.entry_date)}${p.entry_time ? ' ' + p.entry_time : ''}</td><td>₹${nf(p.entry)}</td><td>${p.closed ? '₹' + nf(p.exit) : p.ltp == null ? '<span class="sub">n/a</span>' : '₹' + nf(p.ltp)}</td>
+        <td>₹${nf(p.entry)}</td><td><b>${p.closed ? '₹' + nf(p.exit) : p.ltp == null ? '<span class="sub">n/a</span>' : '₹' + nf(p.ltp)}</b></td>
         <td><b>${rupee(p.closed ? p.realized : p.pnl)}</b></td>
-        <td class="w">${note ? `<span class="sub" style="color:var(--text-muted)">${note}</span> ` : ''}${warn.length ? '⚠ ' + warn.join(' · ') : ''}</td>
-        <td><span class="acts">${p.closed ? '' : `<button class="ib" title="Exit at this date's price" onclick="exitPos(${i})">⇥</button>`}<button class="ib" title="Remove" onclick="delPos(${i})">✕</button></span></td></tr>`;
+        <td><span class="acts">${p.closed ? '' : `<button class="ib" title="Exit at this price" onclick="exitPos(${i})">⇥</button>`}<button class="ib" title="Remove" onclick="delPos(${i})">✕</button></span></td></tr>`;
     }).join('') + '</tbody>';
 }
 window.lots = (i, dlt) => { const p = positions[i]; p.lots = Math.max(1, p.lots + dlt); save(); revalue(loadTok); };
@@ -773,7 +777,7 @@ function renderRisk() {
   const open = positions.filter(p => !p.closed), real = positions.filter(p => p.closed).reduce((s, p) => s + (p.realized || 0), 0);
   const unreal = open.reduce((s, p) => s + (p.pnl || 0), 0), missing = open.some(p => p.pnl == null);
   $('r-pnl').innerHTML = positions.length ? rupee(unreal + real) : '₹0';
-  $('r-pnl-s').textContent = !positions.length ? 'no positions' : `valued at ${fmtD(dates[idx])} close` + (missing ? ' · some legs have no price (excluded)' : '');
+  $('r-pnl-s').textContent = !positions.length ? 'no positions' : (live ? 'valued at live prices' : `valued at ${fmtD(dates[idx])} close`) + (missing ? ' · some legs have no price (excluded)' : '');
   $('r-real').innerHTML = positions.some(p => p.closed) ? rupee(real) : '–';
   const m = open.length ? margin : null;
   $('r-mg').innerHTML = !m ? '–' : m.margin != null ? '₹' + nf(m.margin) : '<span class="sub">n/a</span>';
@@ -877,7 +881,7 @@ function drawOI(svg, W, Hh) {
 function themeIcon() { const b = $('themeb'); if (b) b.textContent = window.Shell && Shell.isDark() ? '☀' : '☾'; }   // the shell sidebar owns the theme switch now
 if ($('themeb')) $('themeb').onclick = () => { Shell.setTheme(Shell.isDark() ? 'light' : 'dark'); themeIcon(); };
 window.addEventListener('themechange', themeIcon); themeIcon();
-init();
+init().then(() => { if (liveWanted() && !live) setLive(true); });
 </script>
 </body>
 </html>
