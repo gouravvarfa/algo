@@ -107,6 +107,7 @@ def test_reset_refuses_an_unknown_or_removed_user(db, monkeypatch, capsys):
     assert db.execute("SELECT COUNT(*) FROM audit_log WHERE action='operator.reset'").fetchone()[0] == 0
 
 
-def test_login_page_tells_people_what_to_do_when_they_forgot_the_password(client):
-    page = client.get("/login").text
-    assert "Forgot your password?" in page and "Ask your admin" in page
+def test_the_old_login_address_leads_to_the_react_login_page(client):
+    # what the page tells people who forgot their password is tested in frontend/src/features/auth/LoginPage.test.tsx
+    r = client.get("/login?why=idle", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/app/login?why=idle"

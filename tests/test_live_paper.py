@@ -52,7 +52,7 @@ def test_middleware_protects_pages_and_apis(creds):
     c = TestClient(app)                                   # no context manager: the paper engine is not started
     assert c.get("/simulator", follow_redirects=False).status_code == 303
     assert c.get("/api/options/backtests").status_code == 401
-    assert c.get("/login").status_code == 200 and c.get("/static/theme.css").status_code == 200
+    assert c.get("/login", follow_redirects=False).status_code == 307
     r = c.post("/login", content="username=gaurav&password=correct+horse+battery", headers={"content-type": "application/x-www-form-urlencoded"}, follow_redirects=False)
     assert r.status_code == 303 and auth.COOKIE in r.cookies
     assert c.get("/api/options/backtests").status_code == 200

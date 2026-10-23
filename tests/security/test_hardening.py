@@ -149,9 +149,9 @@ def test_change_password_needs_a_session_and_the_csrf_header(db, client, new_cli
     assert client.post("/api/auth/change-password", json={"current_password": acct.password, "new_password": NEW}).status_code == 403
 
 
-def test_account_page_needs_login_and_has_the_form(db, client):
+def test_account_address_needs_login_and_leads_to_the_react_page(db, client):
     acct = make_user(db)
     assert client.get("/account", follow_redirects=False).status_code == 303
     login(client, acct)
-    page = client.get("/account")
-    assert page.status_code == 200 and "Change password" in page.text and "/api/auth/change-password" in page.text
+    r = client.get("/account", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/app/account"

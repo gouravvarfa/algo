@@ -25,10 +25,10 @@ const Loading = () => <div className="page"><div className="skeleton" style={{ h
 
 /** Signed-in pages only. With accounts on, a visitor without a session is sent to the login page and returns here afterwards. */
 function Guard({ children, need }: { children: ReactElement; need?: string }) {
-  const { mode, me, loading, can } = useSession()
+  const { mode, me, loading, can, endReason } = useSession()
   const loc = useLocation()
   if (loading) return <Loading />
-  if (mode === 'platform' && !me) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
+  if (mode === 'platform' && !me) return <Navigate to={endReason ? `/login?why=${encodeURIComponent(endReason)}` : '/login'} replace state={{ from: loc.pathname }} />
   if (need && !can(need)) return <div className="page"><div className="card"><h1>Not allowed</h1><p className="sub" style={{ marginTop: 8 }}>Your role does not include this page.</p></div></div>
   return <Suspense fallback={<Loading />}>{children}</Suspense>
 }

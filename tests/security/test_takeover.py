@@ -139,12 +139,3 @@ def test_the_401_says_why_the_session_ended(db, new_client):
     assert gone.status_code == 401 and gone.json()["reason"] == "logout"
     unknown = new_client().get("/api/auth/me", headers={"Cookie": "algo_sid=never-existed-" + "x" * 30})
     assert unknown.status_code == 401 and unknown.json()["reason"] is None
-
-
-# ---- the page ----
-def test_login_page_has_the_button_and_the_moved_message(client):
-    page = client.get("/login").text
-    assert "Sign out the other device and sign in here" in page and "replace_existing" in page
-    assert "signed in on another device" in page and "e') === 'moved'" in page
-    shell = client.get("/static/shell.js").text
-    assert "taken_over" in shell and "/login?e=" in shell

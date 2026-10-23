@@ -47,10 +47,17 @@ def test_in_platform_mode_pages_redirect_and_apis_answer_401(db, client):
     assert r.status_code == 401 and r.json()["error"] == "LOGIN_REQUIRED" and r.json()["detail"] == "login required"
 
 
-@pytest.mark.parametrize("path", ["/login", "/healthz", "/api/auth/mode", "/setup/anything", "/static/theme.css", "/static/shell.js"])
-def test_the_pages_needed_to_sign_in_stay_public(db, client, path):
+@pytest.mark.parametrize("path", ["/healthz", "/api/auth/mode"])
+def test_the_endpoints_needed_to_sign_in_stay_public(db, client, path):
     make_user(db)
     assert client.get(path, follow_redirects=False).status_code == 200
+
+
+@pytest.mark.parametrize("path,target", [("/login", "/app/login"), ("/setup/anything", "/app/setup/anything")])
+def test_the_old_sign_in_addresses_stay_public_and_lead_to_the_react_pages(db, client, path, target):
+    make_user(db)
+    r = client.get(path, follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == target and r.headers["referrer-policy"] == "no-referrer"
 
 
 def test_after_login_the_pages_open_and_me_returns_the_csrf_token(db, client):
@@ -108,13 +115,6 @@ def test_a_removed_session_cookie_or_a_forged_one_gets_nothing(db, client):
     assert client.get("/top-bottom", follow_redirects=False).status_code == 303                            # and with no cookie at all
 
 
-def test_the_page_script_sends_the_csrf_header_and_a_heartbeat():
-    """The browser half: shell.js (loaded by every page) must add the header and ping the server, or every page would break after login."""
-    from pathlib import Path
-    js = (Path(__file__).resolve().parents[2] / "web" / "shell.js").read_text(encoding="utf-8")
-    assert "X-CSRF-Token" in js and "/api/auth/heartbeat" in js and "algo_csrf" in js and "30000" in js
-
-
 # ---- a session the server no longer accepts must not leave cookies behind (they made signed-out pages redirect in a loop) ----
 def test_a_dead_session_has_its_cookies_removed_on_the_401(db, client):
     acct = make_user(db)
@@ -142,19 +142,3 @@ def test_no_cookies_are_sent_back_when_the_request_carried_none(db, client):
     assert client.get("/api/auth/me").headers.get_list("set-cookie") == []
 
 
-def test_signed_out_pages_never_start_the_heartbeat():
-    from pathlib import Path
-    js = (Path(__file__).resolve().parents[2] / "web" / "shell.js").read_text(encoding="utf-8")
-    guard = js.index("(login|setup")
-    assert guard < js.index("beat()") and guard < js.index("window.fetch = function")
-
-
-def test_any_api_401_sends_a_signed_out_page_to_login_with_the_reason():
-    """A tab that was signed out (takeover, idle, force-logout) must go to the sign-in page whichever of its requests notices first, and carry the
-    server's reason; otherwise the reason is lost once the first 401 has cleared the cookies."""
-    from pathlib import Path
-    js = (Path(__file__).resolve().parents[2] / "web" / "shell.js").read_text(encoding="utf-8")
-    import re
-    assert re.search(r"if \(api\) \{\s*p\.then\(function \(r\) \{\s*if \(r\.status !== 401\) return;.*?leave\(b && b\.reason\)", js, re.S)   # the 401 handler is live, for every /api/ call
-    assert 'u.pathname !== "/api/auth/login"' in js                                                     # ...except the sign-in call itself
-    assert '"taken_over" ? "moved" : "ended"' in js

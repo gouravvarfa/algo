@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, get, post } from './api'
 import type { Me, Role } from './types'
@@ -11,6 +11,8 @@ interface SessionValue {
   loading: boolean
   role: Role | null
   can: (permission: string) => boolean
+  /** why the last session ended ('idle', 'replaced', 'forced', ...), taken from the server's 401, so the login page can say it */
+  endReason: string | null
   refresh: () => Promise<void>
   logout: () => Promise<void>
 }
@@ -40,6 +42,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   })
   const me = meQ.data ?? null
 
+  const [endReason, setEndReason] = useState<string | null>(null)
   const touched = useRef(false)
   useEffect(() => {
     const mark = () => { touched.current = true }
@@ -58,8 +61,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [me])
 
   useEffect(() => {
-    const onAuth = () => {
-      if (mode === 'legacy') window.location.assign('/login')           // the old single-user login lives on a server page
+    const onAuth = (ev: Event) => {
+      const reason = (ev as CustomEvent<ApiError>).detail?.body?.reason
+      if (typeof reason === 'string') setEndReason(reason)
+      if (mode === 'legacy') window.location.assign('/login')           // the old single-user login: a form post handled by the server
       else void qc.invalidateQueries({ queryKey: ['auth', 'me'] })
     }
     window.addEventListener('auth:required', onAuth)
@@ -82,9 +87,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     loading: modeQ.isLoading || (mode === 'platform' && meQ.isLoading),
     role: me?.user.role ?? null,
     can: (p) => !!me?.permissions.includes(p),
+    endReason,
     refresh,
     logout,
-  }), [mode, me, modeQ.isLoading, meQ.isLoading, refresh, logout])
+  }), [mode, me, modeQ.isLoading, meQ.isLoading, refresh, logout, endReason])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -134,5 +134,5 @@ def test_login_page_is_reachable_and_asks_for_the_code_only_in_platform_mode(db,
     assert client.get("/api/auth/mode").json() == {"mode": "open"}
     make_user(db)
     assert client.get("/api/auth/mode").json() == {"mode": "platform"}
-    page = client.get("/login")
-    assert page.status_code == 200 and "totp" in page.text
+    r = client.get("/login", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/app/login"

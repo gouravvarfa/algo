@@ -25,7 +25,6 @@ from app.services import angelone_credential_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 engine: PaperEngine | None = None
 
 
@@ -76,7 +75,6 @@ app.include_router(ops_api.router)
 app.include_router(user_data.router)
 app.include_router(admin_view.router)
 app.add_exception_handler(AuthError, auth_api.handle_auth_error)
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 @app.middleware("http")
@@ -90,7 +88,7 @@ async def require_login(request, call_next):
         blocked = auth_api.gate(request)
         return blocked if blocked is not None else await call_next(request)
     path = request.url.path
-    if path in ("/login", "/healthz", "/api/auth/mode", "/app") or path.startswith(("/static/fonts/", "/static/theme.css", "/static/shell.js", "/app/")):
+    if path in ("/login", "/healthz", "/api/auth/mode", "/app") or path.startswith("/app/"):
         return await call_next(request)
     if auth.valid_session(request.cookies.get(auth.COOKIE)):
         return await call_next(request)
@@ -115,9 +113,15 @@ async def react_app(path: str = ""):
     return FileResponse(index, headers={"Cache-Control": "no-store"})
 
 
+def _to_app(request: Request, path: str) -> RedirectResponse:
+    """Old addresses (/simulator, /login, /setup/<token> ...) keep working: they lead to the same page in the React app, query string included."""
+    q = request.url.query
+    return RedirectResponse(f"/app{path}" + (f"?{q}" if q else ""), status_code=307, headers={"Referrer-Policy": "no-referrer"})
+
+
 @app.get("/login")
-async def login_page():
-    return FileResponse(WEB_DIR / "login.html", headers={"Cache-Control": "no-store"})
+async def login_page(request: Request):
+    return _to_app(request, "/login")
 
 
 @app.post("/login")
@@ -137,15 +141,14 @@ async def login_submit(request: Request):
 
 
 @app.get("/setup/{token}")
-async def setup_page(token: str):
-    # the one-time setup link an admin hands to a new user (public page; the token is checked by /api/auth/setup/{token})
-    return FileResponse(WEB_DIR / "setup.html", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+async def setup_page(token: str, request: Request):
+    # the one-time setup link an admin hands to a new user: the React page checks the token with /api/auth/setup/{token}
+    return _to_app(request, f"/setup/{token}")
 
 
 @app.get("/account")
-async def account_page():
-    # who am I + change password (platform login only: without it the page sends you to /login)
-    return FileResponse(WEB_DIR / "account.html", headers={"Cache-Control": "no-store"})
+async def account_page(request: Request):
+    return _to_app(request, "/account")
 
 
 @app.get("/logout")
@@ -159,9 +162,16 @@ async def logout(request: Request):
 
 @app.get("/top-bottom")
 @app.get("/journal")
-async def top_bottom_page():
-    # BankNifty live Top-Bottom chart + live event log (the old /journal link still works)
-    return FileResponse(WEB_DIR / "top_bottom.html", headers={"Cache-Control": "no-store"})
+@app.get("/builder")
+@app.get("/backtesting")
+@app.get("/history")
+@app.get("/simulator")
+@app.get("/settings")
+@app.get("/options")
+async def old_page_address(request: Request):
+    # every page is now in the React app; /journal was the old name of Top Bottom
+    path = request.url.path
+    return _to_app(request, "/top-bottom" if path == "/journal" else path)
 
 
 def _owner(request: Request) -> str | None:
@@ -215,32 +225,9 @@ class AddInstrument(BaseModel):
     lookback_days: int | None = None
 
 
-@app.get("/builder")
-@app.get("/backtesting")
-@app.get("/history")
-async def builder_page():
-    # one page, three separate views chosen by the path: define a strategy / run backtests / saved results
-    return FileResponse(WEB_DIR / "builder.html", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/simulator")
-async def simulator_page():
-    return FileResponse(WEB_DIR / "simulator.html", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/settings")
-async def settings_page():
-    return FileResponse(WEB_DIR / "settings.html", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/options")
-async def options_page():
-    return FileResponse(WEB_DIR / "options.html", headers={"Cache-Control": "no-store"})
-
-
 @app.get("/")
 async def index():
-    return RedirectResponse("/top-bottom", status_code=307)   # the Dashboard page was removed; Top Bottom is the home page
+    return RedirectResponse("/app/", status_code=307)   # the React app is the home page
 
 
 @app.get("/api/overview")

@@ -27,6 +27,7 @@ export function LoginPage() {
   const reason = new URLSearchParams(loc.search).get('why')
 
   if (loading) return <div className="auth-page"><div className="auth-card skeleton" style={{ minHeight: 360 }} /></div>
+  if (mode === 'legacy') return <LegacyLogin error={new URLSearchParams(loc.search).get('e')} />
   if (me || mode !== 'platform') return <Navigate to={from} replace />
 
   async function attempt(replace: boolean) {
@@ -98,6 +99,25 @@ export function LoginPage() {
           </form>
           <p className="auth-foot">Paper trading and research only. No broker orders.</p>
         </section>
+      </main>
+    </div>
+  )
+}
+
+/** The old single-user login (APP_USERNAME / APP_PASSWORD_HASH on the server): a plain form post, kept so an existing deployment still works until its first account is created. */
+function LegacyLogin({ error }: { error: string | null }) {
+  const msg = error === 'wait' ? 'Too many attempts. Try again in 15 minutes.' : error ? 'Wrong username or password.' : ''
+  return (
+    <div className="auth-page">
+      <main className="auth-card narrow">
+        <form className="stack" method="post" action="/login">
+          <h1>Sign in</h1>
+          <p className="sub">Paper trading and research only. No broker orders.</p>
+          <label className="field">Username<input name="username" autoFocus autoComplete="username" required /></label>
+          <label className="field">Password<input name="password" type="password" autoComplete="current-password" required /></label>
+          {msg && <div className="alert" role="alert">{msg}</div>}
+          <button className="btn primary big" type="submit">Sign in</button>
+        </form>
       </main>
     </div>
   )

@@ -23,7 +23,7 @@ from app.security.users import AuthError
 router = APIRouter()
 
 PUBLIC_PATHS = {"/login", "/healthz", "/api/auth/login", "/api/auth/mode", "/app"}
-PUBLIC_PREFIXES = ("/setup/", "/api/auth/setup/", "/static/fonts/", "/static/theme.css", "/static/shell.js", "/app/")   # /app/ = the React shell and its files (no data in them: every API call is still checked)
+PUBLIC_PREFIXES = ("/setup/", "/api/auth/setup/", "/app/")   # /app/ = the React shell and its files (no data in them: every API call is still checked)
 _SAFE_USERNAME = re.compile(r"^[a-z0-9][a-z0-9._-]{2,31}$")
 
 

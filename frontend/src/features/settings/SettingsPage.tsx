@@ -38,7 +38,11 @@ export default function SettingsPage() {
         {data.isLoading ? <div className="skeleton" style={{ height: 60 }} /> : data.data?.symbols.length ? (
           <dl className="kv">
             {data.data.symbols.map((s) => (<Fragment key={s.symbol}><dt>{s.symbol}</dt><dd>{s.days} trading days · {s.from} → {s.to} · {s.expiries} expiries</dd></Fragment>))}
-            {missing.length > 0 && <><dt>Weekdays with no NSE file</dt><dd>{missing.join(', ')}</dd></>}
+            {missing.length > 0 && (
+              <><dt>Weekdays with no NSE file</dt>
+                <dd><details><summary>{missing.length} days (exchange holidays, or a file NSE did not publish). Nothing is filled in for them.</summary>
+                  <div className="sub" style={{ marginTop: 6, lineHeight: 1.7, fontWeight: 400 }}>{missing.join(' · ')}</div></details></dd></>
+            )}
           </dl>
         ) : <p className="sub">No Bhavcopy data loaded yet.</p>}
         <p className="note">Load more NSE Bhavcopy days from the <Link to="/options">Option Chain</Link> page.</p>
