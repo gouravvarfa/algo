@@ -198,7 +198,7 @@ def dev_roles(_=Depends(require("system.read"))):
     from app.security import authz
     return {"roles": [{"role": r, "rank": authz.RANK[r], "permissions": authz.permissions(r)} for r in authz.ROLES],
             "rules": ["Roles are cumulative: developer includes admin, admin includes user.",
-                      "Only the owner (the first developer) creates admins and developers; admins create users.",
+                      "Developers create admins; only the owner (the first developer) creates developers; admins create users.",
                       "Nobody can disable, remove or sign out themselves, and the last admin / developer cannot be removed.",
                       "Everyone with the 'view as' permission sees users ranked below them, read-only; secrets (passwords, authenticator keys, broker keys) are never shown."]}
 

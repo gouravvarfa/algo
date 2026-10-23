@@ -280,7 +280,7 @@ def _link(request: Request, token: str) -> dict:
 @router.post("/api/admin/users")
 def admin_create_user(body: NewUser, request: Request, actor=Depends(require("users.create")), c=Depends(db)):
     if not authz.can_create_role(actor, body.role):
-        raise AuthError(403, "FORBIDDEN", "Only the owner can create admins and developers.")
+        raise AuthError(403, "FORBIDDEN", "Developers create admins; only the owner creates developers.")
     user, token = users.create_user(c, name=body.name, username=body.username, email=body.email, role=body.role, created_by=actor["id"])
     audit.append(c, "user.create", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user["id"],
                  detail={"username": user["username"], "role": user["role"]})

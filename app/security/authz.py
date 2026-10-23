@@ -20,14 +20,16 @@ def permissions(role: str) -> list[str]:
 
 
 def is_owner(user) -> bool:
-    """The owner is the first developer (made by scripts/create_owner.py, so created_by is empty). Only the owner creates admins/developers."""
+    """The owner is the first developer (made by scripts/create_owner.py, so created_by is empty). Developers create admins; only the owner creates developers."""
     return user["role"] == "developer" and user["created_by"] is None
 
 
 def can_create_role(actor, role: str) -> bool:
     if role == "user":
         return has(actor["role"], "users.create")
-    return is_owner(actor)
+    if role == "admin":
+        return actor["role"] == "developer"        # any developer makes admins; admins make only users
+    return is_owner(actor)                          # developers: only the owner
 
 
 def can_view(actor, target) -> bool:

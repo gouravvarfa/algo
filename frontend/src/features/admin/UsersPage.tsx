@@ -64,7 +64,8 @@ export default function UsersPage() {
         <label className="field">Role
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             <option value="user">user</option>
-            {me?.user.owner && <><option value="admin">admin</option><option value="developer">developer</option></>}
+            {me?.user.role === 'developer' && <option value="admin">admin</option>}
+            {me?.user.owner && <option value="developer">developer</option>}
           </select>
         </label>
         <button className="btn primary" type="submit" disabled={create.isPending}>Add user</button>

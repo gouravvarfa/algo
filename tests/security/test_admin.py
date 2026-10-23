@@ -36,7 +36,7 @@ def test_who_can_create_and_manage_whom():
     user = {"id": "u", "role": "user", "created_by": "a"}
     assert authz.is_owner(owner) and not authz.is_owner(dev)
     assert authz.can_create_role(owner, "developer") and authz.can_create_role(owner, "admin") and authz.can_create_role(owner, "user")
-    assert authz.can_create_role(admin, "user") and not authz.can_create_role(admin, "admin") and not authz.can_create_role(dev, "developer")
+    assert authz.can_create_role(admin, "user") and not authz.can_create_role(admin, "admin") and authz.can_create_role(dev, "admin") and not authz.can_create_role(dev, "developer")
     assert not authz.can_create_role(user, "user")
     assert authz.can_manage(owner, dev) and authz.can_manage(dev, admin) and authz.can_manage(admin, user)
     assert not authz.can_manage(admin, dev) and not authz.can_manage(admin, {"id": "a2", "role": "admin"}) and not authz.can_manage(user, user | {"id": "u2"})
