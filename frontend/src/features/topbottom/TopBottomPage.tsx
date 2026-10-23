@@ -59,6 +59,19 @@ export default function TopBottomPage() {
     showAll={showAll} onToggleAll={() => setShowAll((s) => !s)} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} readOnly={ds.readOnly} updated={snapQ.dataUpdatedAt} />
 }
 
+/** Where the price sits between the stop and the entry: how much room is left before the stop is hit. */
+function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: number; ltp: number }) {
+  const room = dir === 'BUY' ? ltp - stop : stop - ltp
+  const lo = Math.min(entry, stop, ltp), hi = Math.max(entry, stop, ltp), w = hi - lo || 1
+  const at = (v: number) => `${((v - lo) / w) * 100}%`
+  return (
+    <div className="stopbar">
+      <div className="track"><i className="stop" style={{ left: at(stop) }} /><i className="entry" style={{ left: at(entry) }} /><i className="ltp" style={{ left: at(ltp) }} /></div>
+      <div className="legend2"><span><i className="stop" />stop {num(stop)}</span><span><i className="entry" />entry {num(entry)}</span><span><i className="ltp" />now {num(ltp)}</span><span className="spacer" /><b className={room >= 0 ? 'pos' : 'neg'}>{num(room)} pts room to stop</b></div>
+    </div>
+  )
+}
+
 interface CP {
   snap: Snapshot; ov: Overview; idx?: IndexQuote; journal?: JournalEvent[]; kind: 'line' | 'candle'; setKind: (k: 'line' | 'candle') => void; fit: number; onFit: () => void
   showAll: boolean; onToggleAll: () => void; onRefresh: () => void; refreshing: boolean; readOnly: boolean; updated: number
@@ -78,30 +91,39 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
 
   return (
     <div className="page">
-      <div className="titlerow">
-        <h1>Top Bottom</h1>
-        <span className="chip">BankNifty · daily</span>
-        {idx?.price != null && (
-          <span className="idxchip" title={`BANKNIFTY index · previous close ${num(idx.prev_close)} · source: ${idx.source}`} style={{ opacity: idx.live || idx.age_s == null ? 1 : 0.7 }}>
-            <small>BANKNIFTY</small>
-            <b className={`num ${idx.change == null ? '' : up ? 'pos' : 'neg'}`}>{num(idx.price)}</b>
-            {idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '▲ +' : '▼ −'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}
-          </span>
-        )}
-        <span className={'livepill' + (ov.market_open ? ' on' : '')}><i />{live}</span>
-        <span className="spacer" />
-        <span className="sub">Updated {updated ? new Date(updated).toLocaleTimeString() : '–'}</span>
-        {!readOnly && <button className="btn sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
-      </div>
+      <section className={`tbhero ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}>
+        <div className="hero-main">
+          <div className="hero-top">
+            <span className="eyebrow">Top-Bottom strategy · BankNifty futures · daily</span>
+            <span className={'livepill' + (ov.market_open ? ' on' : '')}><i />{live}</span>
+          </div>
+          <div className="hero-pos">
+            {p ? <span className={`dirpill ${p.direction === 'BUY' ? 'buy' : 'sell'}`}>{p.direction === 'BUY' ? '▲' : '▼'} {p.direction}</span> : <span className="dirpill flat">FLAT</span>}
+            <span className="hero-sym">{inst.trading_symbol}</span>
+            <span className="sub">{inst.lots || 1} lot · qty {inst.quantity} · exp {inst.expiry}</span>
+          </div>
+          <div className="hero-pnl">
+            <span className="k">Open P&amp;L</span>
+            <b className={`num ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</b>
+            {p && <span className={`trend ${sign(p.pnl_amount)}`}>{p.pnl_amount >= 0 ? '+' : ''}{num(p.pnl_points)} pts · {p.pnl_pct}%</span>}
+          </div>
+          {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={s.ltp} /> : <p className="sub">{s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
+        </div>
+        <div className="hero-side">
+          <div className="hero-q"><span className="k">BankNifty fut</span><b className="num">{num(s.ltp)}</b></div>
+          {idx?.price != null && <div className="hero-q" title={`previous close ${num(idx.prev_close)} · source: ${idx.source}`}><span className="k">BankNifty index</span><b className="num">{num(idx.price)}</b>{idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '+' : '−'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}</div>}
+          <div className="hero-q"><span className="k">Updated</span><span className="num">{updated ? new Date(updated).toLocaleTimeString() : '–'}</span></div>
+          {!readOnly && <button className="btn sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
+        </div>
+      </section>
 
       <div className="tbkpis">
-        <div className="stat"><div className="k">BankNifty fut</div><div className="v">{num(s.ltp)}</div><div className="s">{inst.trading_symbol}</div></div>
-        <div className={`stat ${p ? (p.direction === 'BUY' ? 'up' : 'down') : ''}`}><div className="k">Position</div><div className={`v ${p ? (p.direction === 'BUY' ? 'pos' : 'neg') : ''}`}>{p ? p.direction : 'FLAT'}</div><div className="s">{p ? `entry ${num(p.entry_price)}` : s.waiting ? 'waiting for new System Point' : 'no open position'}</div></div>
+        <div className="stat"><div className="k">Entry</div><div className="v">{p ? num(p.entry_price) : '–'}</div><div className="s">{p ? dt(p.entry_date) : 'no open position'}</div></div>
         <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{p ? (p.breakeven ? 'breakeven SL (2% done)' : 'structural / trailing') : ''}</div></div>
-        <div className={`stat ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}><div className="k">Open P&amp;L</div><div className={`v ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</div><div className="s">{p ? `${num(p.pnl_points)} pts · ${p.pnl_pct}%` : ''}</div></div>
         <div className="stat"><div className="k">Latest top</div><div className="v">{n2(s.latest_top)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Latest bottom</div><div className="v">{n2(s.latest_bottom)}</div><div className="s">confirmed swing</div></div>
-        <div className="stat"><div className="k">Live trades</div><div className="v">{st.live_trades} · {st.live_win_rate == null ? '–' : `${st.live_win_rate}%`}</div><div className="s">realized <span className={sign(st.live_realized)}>{money(st.live_realized)}</span></div></div>
+        <div className="stat"><div className="k">Closed trades · win</div><div className="v">{closed.length} · {closed.length ? `${(wins.length / closed.length * 100).toFixed(0)}%` : '–'}</div><div className="s">all closed trades</div></div>
+        <div className="stat"><div className="k">Net P&amp;L (closed)</div><div className={`v ${sign(net)}`}>{money(net)}</div><div className="s">{num(pts)} pts</div></div>
       </div>
 
       <div className="tbgrid">
