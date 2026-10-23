@@ -86,3 +86,9 @@ tr.replay td { opacity: .55; }
 .tbkpis .stat .v { font-size: 16px; font-weight: 600; }
 .tbkpis .stat .k { font-size: 10px; } .tbkpis .stat .s { font-size: 10.5px; }
 .hero-q { gap: 0; }
+
+/* deeper green inside Top Bottom: hero wash, profit figures and chips */
+.tbhero.up { background: linear-gradient(120deg, color-mix(in srgb, #047857 26%, var(--bg-surface)), color-mix(in srgb, #047857 8%, var(--bg-surface)) 70%); border-color: color-mix(in srgb, #047857 40%, var(--border)); }
+.tbhero .pos, .tbkpis .pos, .tbhero .hero-pnl b.pos { color: #047857; }
+.trend.pos { background: color-mix(in srgb, #047857 20%, var(--bg-surface)); color: #065f46; }
+.tbkpis .stat.up { background: color-mix(in srgb, #047857 14%, var(--bg-surface)); border-left-color: #047857; }
