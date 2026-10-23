@@ -90,7 +90,7 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
   const lastRoll = s.rolls?.length ? s.rolls[s.rolls.length - 1] : null
 
   return (
-    <div className="page">
+    <div className="page tbpage">
       <section className={`tbhero ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}>
         <div className="hero-main">
           <div className="hero-top">
