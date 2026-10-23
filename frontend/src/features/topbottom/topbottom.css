@@ -66,8 +66,31 @@ tr.replay td { opacity: .55; }
 
 /* whole dashboard sits on a soft green wash that fades out towards the bottom; cards stay solid so numbers keep full contrast */
 .tbpage { min-height: 100%; background:
-  radial-gradient(90% 60% at 100% 0%, color-mix(in srgb, var(--success) 14%, transparent), transparent 70%),
-  radial-gradient(70% 50% at 0% 0%, color-mix(in srgb, #10b981 12%, transparent), transparent 70%),
-  linear-gradient(180deg, color-mix(in srgb, var(--success) 9%, var(--bg-page)) 0%, var(--bg-page) 70%); }
+  radial-gradient(90% 60% at 100% 0%, color-mix(in srgb, var(--success) 7%, transparent), transparent 70%),
+  radial-gradient(70% 50% at 0% 0%, color-mix(in srgb, #10b981 6%, transparent), transparent 70%),
+  linear-gradient(180deg, color-mix(in srgb, var(--success) 4%, var(--bg-page)) 0%, var(--bg-page) 70%); }
 .tbpage .card, .tbpage .tbkpis .stat { box-shadow: 0 1px 2px rgba(6,78,59,.05), 0 8px 24px -16px rgba(6,78,59,.25); }
-.tbpage .tbhero, .tbpage .tbhero.down { background: linear-gradient(120deg, color-mix(in srgb, var(--success) 12%, var(--bg-surface)), var(--bg-surface) 65%); border-color: color-mix(in srgb, var(--success) 25%, var(--border)); }
+.tbpage .tbhero, .tbpage .tbhero.down { background: linear-gradient(120deg, color-mix(in srgb, var(--success) 7%, var(--bg-surface)), var(--bg-surface) 65%); border-color: color-mix(in srgb, var(--success) 18%, var(--border)); }
+
+/* compact, tidier hero: proportional sans for figures (the mono face has no semibold and looked smeared at large sizes) */
+.tbpage { gap: 12px; }
+.tbhero { padding: 14px 20px; gap: 18px; border-radius: 14px; }
+.tbhero .num, .tbhero b, .tbkpis .stat .v, .hero-q span.num, .legend2 { font-family: var(--font-sans); font-variant-numeric: tabular-nums lining-nums; }
+.hero-main { gap: 8px; }
+.eyebrow { font-size: 10.5px; letter-spacing: .1em; }
+.hero-sym { font-family: var(--font-sans); font-size: 14px; font-weight: 600; }
+.hero-pnl { gap: 10px; align-items: center; }
+.hero-pnl b { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+.hero-pnl .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.trend { font-family: var(--font-sans); font-size: 12px; font-weight: 600; padding: 2px 9px; }
+.dirpill { font-size: 11px; padding: 3px 10px; }
+.stopbar { max-width: 520px; gap: 6px; }
+.legend2 { font-size: 11px; gap: 12px; } .legend2 b { font-weight: 600; }
+.hero-side { padding-left: 18px; gap: 6px; min-width: 150px; }
+.hero-q b { font-size: 16px; font-weight: 600; } .hero-q .k { font-size: 10px; }
+.hero-side .btn { margin-top: 2px; }
+.tbkpis { gap: 8px; }
+.tbkpis .stat { padding: 8px 14px; }
+.tbkpis .stat .v { font-size: 16px; font-weight: 600; }
+.tbkpis .stat .k { font-size: 10px; } .tbkpis .stat .s { font-size: 10.5px; }
+.hero-q { gap: 0; }

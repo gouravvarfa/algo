@@ -67,7 +67,7 @@ function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: 
   return (
     <div className="stopbar">
       <div className="track"><i className="stop" style={{ left: at(stop) }} /><i className="entry" style={{ left: at(entry) }} /><i className="ltp" style={{ left: at(ltp) }} /></div>
-      <div className="legend2"><span><i className="stop" />stop {num(stop)}</span><span><i className="entry" />entry {num(entry)}</span><span><i className="ltp" />now {num(ltp)}</span><span className="spacer" /><b className={room >= 0 ? 'pos' : 'neg'}>{num(room)} pts room to stop</b></div>
+      <div className="legend2"><span><i className="stop" />stop {num(stop)}{stop === entry ? ' (= entry)' : ''}</span>{stop !== entry && <span><i className="entry" />entry {num(entry)}</span>}<span><i className="ltp" />now {num(ltp)}</span><span className="spacer" /><b className={room >= 0 ? 'pos' : 'neg'}>{num(room)} pts room to stop</b></div>
     </div>
   )
 }
