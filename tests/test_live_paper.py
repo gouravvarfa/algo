@@ -10,6 +10,12 @@ from app.paper_trading import engine as pe
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 
 
+@pytest.fixture(autouse=True)
+def no_candle_sharing(monkeypatch):
+    """These tests move a simulated clock; the cross-user candle sharing (15 s of REAL time) would hide the repeated Angel One calls they check."""
+    monkeypatch.setattr(pe, "CANDLE_SHARE_SECONDS", 0)
+
+
 # ---------------------------------------------------------------- login
 @pytest.fixture
 def creds(monkeypatch):

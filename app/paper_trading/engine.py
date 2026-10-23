@@ -638,7 +638,7 @@ class PaperEngine:
                 continue
             key = f"{r['entry_date']}|{r['direction']}"
             old = mine.get(key)
-            base = {"at": now, "backfill": first_run, "owner": inst.owner, "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
+            base = {"at": now, "backfill": first_run, "owner": getattr(inst, "owner", None), "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
                     "direction": r["direction"], "entry_date": r["entry_date"], "entry_price": r["entry_price"], "quantity": inst.quantity}
             if old is None:
                 events.append({**base, "event": "ENTRY", "initial_sl": r["initial_sl"], "active_stop": r["active_stop"]})

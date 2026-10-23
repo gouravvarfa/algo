@@ -152,3 +152,28 @@ def test_a_user_cannot_reach_the_admin_views(db, new_client, eng):
     ca = _login(new_client, a)
     assert ca.get("/api/admin/live-users").status_code == 403
     assert ca.get(f"/api/admin/users/{b.id}/settings").status_code == 403
+
+
+def test_identical_candle_requests_from_different_users_share_one_angel_call(eng, monkeypatch):
+    import asyncio
+    import pandas as pd
+    monkeypatch.setattr(engine_module, "CANDLE_CALL_GAP", 0)
+    monkeypatch.setattr(engine_module, "CANDLE_SHARE_SECONDS", 15)
+    calls = []
+
+    class Provider:
+        async def get_intraday_ohlc(self, *a, **k):
+            calls.append((a, tuple(sorted(k.items()))))
+            return pd.DataFrame({"close": [1.0]}, index=pd.to_datetime(["2026-10-21"]))
+
+    eng.provider = Provider()
+
+    async def go():
+        a = await eng._candles("NFO", "61466", "ONE_DAY", 300, include_partial=True)        # user A's instrument
+        b = await eng._candles("NFO", "61466", "ONE_DAY", 300, include_partial=True)        # user B's, a moment later
+        c = await eng._candles("NFO", "61466", "ONE_DAY", 400, include_partial=True)        # a different request is NOT shared
+        a.loc[a.index[0], "close"] = 99.0                                                    # a caller changing its copy cannot corrupt the next one
+        d = await eng._candles("NFO", "61466", "ONE_DAY", 300, include_partial=True)
+        return b, c, d
+    b, c, d = asyncio.run(go())
+    assert len(calls) == 2 and d["close"].iloc[0] == 1.0
