@@ -6,7 +6,7 @@ ROLES = ("user", "admin", "developer")
 RANK = {"user": 0, "admin": 1, "developer": 2}
 
 _USER = frozenset({"session.self"})
-_ADMIN = _USER | {"users.read", "users.create", "users.manage", "audit.read"}
+_ADMIN = _USER | {"users.read", "users.create", "users.manage", "audit.read", "users.view_as"}
 _DEVELOPER = _ADMIN | {"system.read", "system.manage"}
 PERMISSIONS = {"user": _USER, "admin": _ADMIN, "developer": _DEVELOPER}
 
@@ -28,6 +28,11 @@ def can_create_role(actor, role: str) -> bool:
     if role == "user":
         return has(actor["role"], "users.create")
     return is_owner(actor)
+
+
+def can_view(actor, target) -> bool:
+    """Open a user's dashboard read-only ("view as"): anyone ranked above them (the owner may view anyone). Never a password, TOTP or broker secret."""
+    return is_owner(actor) or RANK[actor["role"]] > RANK[target["role"]]
 
 
 def can_manage(actor, target) -> bool:

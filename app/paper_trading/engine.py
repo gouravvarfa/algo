@@ -64,6 +64,9 @@ LIVE_MINUTES_REFRESH_SECONDS = 30
 CANDLE_CALL_GAP = 0.7                 # seconds between any two Angel One candle requests
 LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
 DAILY_RAW_CACHE_WITH_FEED = 120
+CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
+ALL = object()                        # "every owner" (internal callers and tests)
+LEGACY_OWNER_PATH = Path("data/paper_trading/legacy_owner.txt")   # the account that adopted the pre-platform watchlist and journal
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
 LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
 LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
@@ -85,6 +88,7 @@ class Instrument(BaseModel):
     expiry: str = ""
     from_date: str  # replay starts FLAT here
     added_at: str  # trades entered at/after this are LIVE paper trades
+    owner: str | None = None  # platform user id; None = the single-user / open-mode watchlist
 
 
 class PaperError(ValueError):
@@ -164,7 +168,7 @@ class PaperEngine:
         STATE_PATH.write_text(json.dumps([i.model_dump() for i in self.instruments.values()], indent=2))
 
     # ---- watchlist -------------------------------------------------------
-    async def add(self, symbol: str, instrument_type: str, timeframe: str, size: int, lookback_days: int | None) -> Instrument:
+    async def add(self, symbol: str, instrument_type: str, timeframe: str, size: int, lookback_days: int | None, owner: str | None = None) -> Instrument:
         symbol = symbol.strip().upper()
         instrument_type = instrument_type.upper()
         if timeframe not in TIMEFRAMES:
@@ -196,7 +200,7 @@ class PaperEngine:
         inst = Instrument(
             id=uuid.uuid4().hex[:10], symbol=symbol, instrument_type=instrument_type, timeframe=timeframe,
             from_date=(now - dt.timedelta(days=lookback)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
-            added_at=now.isoformat(), **fields,
+            added_at=now.isoformat(), owner=owner, **fields,
         )
         self.instruments[inst.id] = inst
         self._save()
@@ -204,7 +208,9 @@ class PaperEngine:
         await self.refresh_one(inst)
         return inst
 
-    def remove(self, instrument_id: str) -> None:
+    def remove(self, instrument_id: str, owner=ALL) -> bool:
+        if owner is not ALL and (self.instruments.get(instrument_id) is None or self.instruments[instrument_id].owner != owner):
+            return False                              # not yours (or not there): nothing is removed
         gone = self.instruments.pop(instrument_id, None)
         if gone is not None and not any(i.token == gone.token for i in self.instruments.values()):
             self.feed.unsubscribe_all_for(gone.token)
@@ -215,7 +221,29 @@ class PaperEngine:
         self._live_good.pop(instrument_id, None)
         self._cooldown_until.pop(instrument_id, None)
         self.errors.pop(instrument_id, None)
+        self.faults.pop(instrument_id, None)
         self._save()
+        return True
+
+    def owned(self, instrument_id: str, owner) -> Instrument | None:
+        inst = self.instruments.get(instrument_id)
+        return inst if inst is not None and (owner is ALL or inst.owner == owner) else None
+
+    def adopt_orphans(self, owner_id: str) -> int:
+        """The watchlist and journal that existed before user accounts belong to the first account (the owner). Idempotent."""
+        n = 0
+        for inst in self.instruments.values():
+            if inst.owner is None:
+                inst.owner, n = owner_id, n + 1
+        if n:
+            self._save()
+        try:
+            if not LEGACY_OWNER_PATH.exists():
+                LEGACY_OWNER_PATH.parent.mkdir(parents=True, exist_ok=True)
+                LEGACY_OWNER_PATH.write_text(owner_id)
+        except OSError:
+            pass
+        return n
 
     # ---- evaluation ------------------------------------------------------
     @tracked("engine.build_snapshot")
@@ -404,12 +432,23 @@ class PaperEngine:
         import time as _t
         if not hasattr(self, "_rest_lock"):
             self._rest_lock, self._rest_last = asyncio.Lock(), 0.0
+        key = (args, tuple(sorted(kwargs.items())))
+        if not hasattr(self, "_shared_candles"):
+            self._shared_candles = {}
         async with self._rest_lock:
+            hit = self._shared_candles.get(key)
+            if hit and _t.monotonic() - hit[0] < CANDLE_SHARE_SECONDS:
+                return hit[1].copy()                      # another user's instrument just asked for exactly this
             wait = CANDLE_CALL_GAP - (_t.monotonic() - self._rest_last)
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
-                return await self.provider.get_intraday_ohlc(*args, **kwargs)
+                out = await self.provider.get_intraday_ohlc(*args, **kwargs)
+                self._shared_candles[key] = (_t.monotonic(), out.copy())
+                if len(self._shared_candles) > 200:
+                    for k in sorted(self._shared_candles, key=lambda k: self._shared_candles[k][0])[:100]:
+                        self._shared_candles.pop(k, None)
+                return out
             finally:
                 self._rest_last = _t.monotonic()
 
@@ -599,7 +638,7 @@ class PaperEngine:
                 continue
             key = f"{r['entry_date']}|{r['direction']}"
             old = mine.get(key)
-            base = {"at": now, "backfill": first_run, "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
+            base = {"at": now, "backfill": first_run, "owner": inst.owner, "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
                     "direction": r["direction"], "entry_date": r["entry_date"], "entry_price": r["entry_price"], "quantity": inst.quantity}
             if old is None:
                 events.append({**base, "event": "ENTRY", "initial_sl": r["initial_sl"], "active_stop": r["active_stop"]})
@@ -625,11 +664,19 @@ class PaperEngine:
                 log.info("JOURNAL %s %s %s", e["event"], e["symbol"], e.get("reason") or e.get("gap_state") or e.get("entry_price"))
         JOURNAL_SEEN.write_text(json.dumps(seen))
 
-    def journal(self, limit: int = 300) -> list[dict]:
+    def journal(self, limit: int = 300, owner=ALL) -> list[dict]:
         if not JOURNAL_PATH.exists():
             return []
-        lines = JOURNAL_PATH.read_text(encoding="utf-8").splitlines()[-limit:]
-        return [json.loads(x) for x in reversed(lines) if x.strip()]
+        lines = JOURNAL_PATH.read_text(encoding="utf-8").splitlines()
+        if owner is not ALL:
+            try:
+                legacy = LEGACY_OWNER_PATH.read_text().strip() or None
+            except OSError:
+                legacy = None
+            # an event without an owner was written before user accounts existed: it belongs to the account that adopted that watchlist
+            events = [e for e in (json.loads(x) for x in lines if x.strip()) if e.get("owner", legacy) == owner or (owner is None and "owner" not in e)]
+            return list(reversed(events[-limit:]))
+        return [json.loads(x) for x in reversed(lines[-limit:]) if x.strip()]
 
     async def refresh_one(self, inst: Instrument) -> None:
         owner = getattr(inst, "owner", None)
@@ -708,9 +755,11 @@ class PaperEngine:
                 "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
 
     # ---- views -----------------------------------------------------------
-    def overview(self) -> dict:
+    def overview(self, owner=ALL) -> dict:
         items = []
         for inst in self.instruments.values():
+            if owner is not ALL and inst.owner != owner:
+                continue
             snap = self.snapshots.get(inst.id)
             items.append({
                 "instrument": inst.model_dump(),

@@ -111,7 +111,25 @@ CREATE TABLE incidents (              -- every isolated failure: what broke, wha
 CREATE INDEX incidents_ts ON incidents(ts);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2)]
+_V3 = """
+CREATE TABLE user_sim_positions (     -- the Options Simulator's positions, one list per user and index (moved from the browser to the server)
+  user_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (user_id, symbol)
+);
+
+CREATE TABLE user_settings (          -- small per-user preferences (LIVE mode on/off, theme, ...)
+  user_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

@@ -17,8 +17,9 @@ from app.providers.angelone_provider import AngelOneProvider
 from app.options import api as options_api
 from app.options import collector as option_collector
 from app import auth, auth_api
+from app import admin_view, user_data
 from app.ops import api as ops_api, context as ops_context, selftests as ops_selftests, stats as ops_stats
-from app.security import mode as login_mode
+from app.security import authz, mode as login_mode
 from app.security.users import AuthError
 from app.services import angelone_credential_store
 
@@ -72,6 +73,8 @@ async def request_metrics(request, call_next):
 app.include_router(options_api.router)
 app.include_router(auth_api.router)
 app.include_router(ops_api.router)
+app.include_router(user_data.router)
+app.include_router(admin_view.router)
 app.add_exception_handler(AuthError, auth_api.handle_auth_error)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
@@ -145,9 +148,17 @@ async def top_bottom_page():
     return FileResponse(WEB_DIR / "top_bottom.html", headers={"Cache-Control": "no-store"})
 
 
+def _owner(request: Request) -> str | None:
+    """The platform user whose data this request may touch (None = no login: the single local watchlist). The id comes from the session only."""
+    u = getattr(request.state, "user", None)
+    if u is not None and authz.is_owner(u):
+        engine.adopt_orphans(u["id"])           # the watchlist and journal from before user accounts belong to the first account
+    return u["id"] if u else None
+
+
 @app.get("/api/journal")
-async def journal_api(limit: int = 300):
-    return engine.journal(max(1, min(limit, 5000))) if engine else []
+async def journal_api(request: Request, limit: int = 300):
+    return engine.journal(max(1, min(limit, 5000)), owner=_owner(request)) if engine else []
 
 
 @app.get("/api/index/{name}")
@@ -217,8 +228,8 @@ async def index():
 
 
 @app.get("/api/overview")
-async def overview():
-    data = engine.overview()
+async def overview(request: Request):
+    data = engine.overview(owner=_owner(request))
     data["angelone_configured"] = angelone_credential_store.is_configured()
     data["timeframes"] = list(TIMEFRAMES)
     data["default_lookback_days"] = DEFAULT_LOOKBACK_DAYS
@@ -226,8 +237,8 @@ async def overview():
 
 
 @app.get("/api/instruments/{instrument_id}")
-async def instrument(instrument_id: str):
-    if instrument_id not in engine.instruments:
+async def instrument(instrument_id: str, request: Request):
+    if engine.owned(instrument_id, _owner(request)) is None:
         raise HTTPException(404, "Instrument not found")
     snap = engine.snapshots.get(instrument_id)
     if snap is None:
@@ -236,9 +247,10 @@ async def instrument(instrument_id: str):
 
 
 @app.post("/api/instruments")
-async def add_instrument(body: AddInstrument):
+async def add_instrument(body: AddInstrument, request: Request):
+    owner = _owner(request)
     try:
-        inst = await engine.add(body.symbol, body.instrument_type, body.timeframe, body.size, body.lookback_days)
+        inst = await engine.add(body.symbol, body.instrument_type, body.timeframe, body.size, body.lookback_days, owner=owner)
     except PaperError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:
@@ -247,12 +259,15 @@ async def add_instrument(body: AddInstrument):
 
 
 @app.delete("/api/instruments/{instrument_id}")
-async def remove_instrument(instrument_id: str):
-    engine.remove(instrument_id)
+async def remove_instrument(instrument_id: str, request: Request):
+    if not engine.remove(instrument_id, owner=_owner(request)):
+        raise HTTPException(404, "Instrument not found")
     return {"ok": True}
 
 
 @app.post("/api/refresh")
-async def refresh():
-    await engine.refresh_all()
+async def refresh(request: Request):
+    owner = _owner(request)
+    for inst in [i for i in list(engine.instruments.values()) if i.owner == owner]:      # only your own instruments
+        await engine.refresh_one(inst)
     return {"ok": True}
