@@ -87,8 +87,7 @@ tr.replay td { opacity: .55; }
 .tbkpis .stat .k { font-size: 10px; } .tbkpis .stat .s { font-size: 10.5px; }
 .hero-q { gap: 0; }
 
-/* deeper green inside Top Bottom: hero wash, profit figures and chips */
-.tbhero.up { background: linear-gradient(120deg, color-mix(in srgb, #047857 26%, var(--bg-surface)), color-mix(in srgb, #047857 8%, var(--bg-surface)) 70%); border-color: color-mix(in srgb, #047857 40%, var(--border)); }
-.tbhero .pos, .tbkpis .pos, .tbhero .hero-pnl b.pos { color: #047857; }
-.trend.pos { background: color-mix(in srgb, #047857 20%, var(--bg-surface)); color: #065f46; }
-.tbkpis .stat.up { background: color-mix(in srgb, #047857 14%, var(--bg-surface)); border-left-color: #047857; }
+/* hero and KPI cards: plain light grey, no green wash; green / red stay only on the figures themselves */
+.tbhero, .tbhero.up, .tbhero.down { background: linear-gradient(120deg, color-mix(in srgb, #64748b 12%, var(--bg-surface)), var(--bg-surface) 70%); border-color: var(--border); }
+.tbkpis .stat.up, .tbkpis .stat.down { background: var(--bg-surface); }
+.trend.pos { background: var(--success-soft); color: var(--success); } .trend.neg { background: var(--danger-soft); color: var(--danger); }
