@@ -159,5 +159,11 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .btn.primary { border-color: var(--accent); }
 .kvrow { display: contents; }
 
-/* trading sidebar: light black (slate) wash over the full height */
-.shell:not(.console) .sidebar { background: linear-gradient(180deg, color-mix(in srgb, #0f172a 9%, var(--bg-surface)) 0%, color-mix(in srgb, #0f172a 3%, var(--bg-surface)) 100%); }
+/* trading sidebar: a light black "shadow" over the full height that slowly drifts, plus a soft edge shadow */
+.shell:not(.console) .sidebar {
+  background: linear-gradient(160deg, color-mix(in srgb, #0f172a 24%, var(--bg-surface)), color-mix(in srgb, #0f172a 6%, var(--bg-surface)) 45%, color-mix(in srgb, #0f172a 18%, var(--bg-surface)) 75%, color-mix(in srgb, #0f172a 5%, var(--bg-surface)));
+  background-size: 100% 300%; animation: sidebardrift 14s ease-in-out infinite alternate;
+  box-shadow: inset -14px 0 24px -18px rgba(15,23,42,.45), 6px 0 24px -12px rgba(15,23,42,.25);
+}
+@keyframes sidebardrift { from { background-position: 0 0; } to { background-position: 0 100%; } }
+@media (prefers-reduced-motion: reduce) { .shell:not(.console) .sidebar { animation: none; } }
