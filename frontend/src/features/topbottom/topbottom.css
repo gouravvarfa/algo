@@ -64,14 +64,6 @@ tr.replay td { opacity: .55; }
 @media (max-width: 1280px) { .tbkpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .tbhero { grid-template-columns: 1fr; } .hero-side { border-left: 0; padding-left: 0; justify-items: start; text-align: left; } .hero-q { justify-items: start; } .tbkpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
-/* whole dashboard sits on a soft green wash that fades out towards the bottom; cards stay solid so numbers keep full contrast */
-.tbpage { min-height: 100%; background:
-  radial-gradient(90% 60% at 100% 0%, color-mix(in srgb, var(--success) 7%, transparent), transparent 70%),
-  radial-gradient(70% 50% at 0% 0%, color-mix(in srgb, #10b981 6%, transparent), transparent 70%),
-  linear-gradient(180deg, color-mix(in srgb, var(--success) 4%, var(--bg-page)) 0%, var(--bg-page) 70%); }
-.tbpage .card, .tbpage .tbkpis .stat { box-shadow: 0 1px 2px rgba(6,78,59,.05), 0 8px 24px -16px rgba(6,78,59,.25); }
-.tbpage .tbhero, .tbpage .tbhero.down { background: linear-gradient(120deg, color-mix(in srgb, var(--success) 7%, var(--bg-surface)), var(--bg-surface) 65%); border-color: color-mix(in srgb, var(--success) 18%, var(--border)); }
-
 /* compact, tidier hero: proportional sans for figures (the mono face has no semibold and looked smeared at large sizes) */
 .tbpage { gap: 12px; }
 .tbhero { padding: 14px 20px; gap: 18px; border-radius: 14px; }

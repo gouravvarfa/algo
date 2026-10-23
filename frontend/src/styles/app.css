@@ -161,9 +161,19 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 
 /* trading sidebar: light black shadow, darker on the left edge and fading out to the right, drifting slowly */
 .shell:not(.console) .sidebar {
-  background: linear-gradient(90deg, color-mix(in srgb, #0f172a 30%, var(--bg-surface)) 0%, color-mix(in srgb, #0f172a 14%, var(--bg-surface)) 45%, color-mix(in srgb, #0f172a 2%, var(--bg-surface)) 100%);
-  background-size: 160% 100%; animation: sidebardrift 12s ease-in-out infinite alternate;
+  background: linear-gradient(90deg, color-mix(in srgb, #0f172a 52%, var(--bg-surface)) 0%, color-mix(in srgb, #0f172a 22%, var(--bg-surface)) 40%, var(--bg-surface) 100%);
+  background-size: 125% 100%; animation: sidebardrift 12s ease-in-out infinite alternate;
   box-shadow: 6px 0 24px -12px rgba(15,23,42,.25);
 }
 @keyframes sidebardrift { from { background-position: 0 0; } to { background-position: 100% 0; } }
 @media (prefers-reduced-motion: reduce) { .shell:not(.console) .sidebar { animation: none; } }
+
+/* every page of the trading app sits on the same soft grey wash that fades out towards the bottom; cards stay solid */
+.shell:not(.console) .page { min-height: 100%; background:
+  radial-gradient(90% 55% at 100% 0%, color-mix(in srgb, #64748b 13%, transparent), transparent 70%),
+  radial-gradient(70% 45% at 0% 0%, color-mix(in srgb, #94a3b8 10%, transparent), transparent 70%),
+  linear-gradient(180deg, color-mix(in srgb, #64748b 7%, var(--bg-page)) 0%, var(--bg-page) 70%); }
+.shell:not(.console) .page .card { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 24px -16px rgba(15,23,42,.22); }
+:root[data-theme="dark"] .shell:not(.console) .page { background: none; }
+.shell:not(.console) .sidebar .navlink:not(.active) { color: var(--text-primary); font-weight: 500; }
+.shell:not(.console) .sidebar .logo small { color: var(--text-secondary); }
