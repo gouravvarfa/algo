@@ -1,0 +1,12 @@
+.curve { width: 100%; height: 150px; display: block; }
+.curve .zero { stroke: var(--border-strong); stroke-dasharray: 3 4; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.curve .line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.curve .line.up { stroke: var(--success); } .curve .line.down { stroke: var(--danger); }
+.curve .area.up { fill: color-mix(in srgb, var(--success) 14%, transparent); } .curve .area.down { fill: color-mix(in srgb, var(--danger) 14%, transparent); }
+.editor { display: grid; gap: 10px; max-width: 640px; padding: 6px 0; }
+.editor textarea { width: 100%; resize: vertical; font: inherit; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-surface); color: var(--text-primary); }
+.rate { display: inline-flex; gap: 4px; } .rate button { background: none; border: 0; font-size: 22px; color: var(--border-strong); cursor: pointer; padding: 0 2px; } .rate button.on { color: #f59e0b; }
+.stars { color: #f59e0b; letter-spacing: 1px; } .stars i { color: var(--border-strong); font-style: normal; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.kpi { background: var(--bg-surface); border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--r-lg); padding: 10px 14px; display: grid; gap: 2px; }
+.kpi .k { font-size: 11px; color: var(--text-muted); font-weight: 600; } .kpi b { font-size: 18px; font-weight: 600; font-family: var(--font-sans); font-variant-numeric: tabular-nums; }

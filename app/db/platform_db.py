@@ -157,7 +157,28 @@ CREATE TABLE announcement (           -- one banner shown to everybody who is si
 );
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4)]
+_V5 = """
+CREATE TABLE option_trades (          -- the options journal: one row per simulated leg, kept forever (clearing the simulator never deletes it)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  pos_id TEXT NOT NULL,
+  side TEXT NOT NULL, opt TEXT NOT NULL, strike REAL NOT NULL, expiry TEXT,
+  lots INTEGER NOT NULL, lot_size INTEGER NOT NULL,
+  entry REAL NOT NULL, entry_date TEXT, entry_time TEXT,
+  exit REAL, exit_date TEXT, exit_time TEXT, exit_reason TEXT,
+  sl REAL,
+  realized REAL,
+  status TEXT NOT NULL,               -- OPEN, CLOSED, or REMOVED (taken off the screen without an exit)
+  opened_at REAL NOT NULL, closed_at REAL,
+  note TEXT, tags TEXT, rating INTEGER,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX idx_option_trades_user ON option_trades (user_id, symbol, id);
+CREATE UNIQUE INDEX idx_option_trades_key ON option_trades (user_id, symbol, pos_id, side, opt, strike, entry_date, entry);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

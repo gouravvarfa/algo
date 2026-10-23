@@ -7,6 +7,7 @@ import type { Overview } from '../../lib/types'
 import './admin.css'
 
 const TopBottomPage = lazy(() => import('../topbottom/TopBottomPage'))
+const OptionsJournalPage = lazy(() => import('../journal/OptionsJournalPage'))
 const SimulatorPage = lazy(() => import('../simulator/SimulatorPage'))
 
 /** "View as user": the user's own pages, mounted with a read-only data source for that user. The admin never gets the user's session or secrets. */
@@ -24,12 +25,13 @@ export default function ViewAsPage() {
         <span className="seg">
           <Link to={`/admin/users/${id}/view/top-bottom`} className={'seglink' + (page === 'top-bottom' ? ' on' : '')}>Top Bottom</Link>
           <Link to={`/admin/users/${id}/view/simulator`} className={'seglink' + (page === 'simulator' ? ' on' : '')}>Options Simulator</Link>
+          <Link to={`/admin/users/${id}/view/options-journal`} className={'seglink' + (page === 'options-journal' ? ' on' : '')}>Options Journal</Link>
         </span>
         <Link className="btn sm" to="/admin/users">Back to users</Link>
       </div>
       <DataSourceProvider source={source}>
         <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 320 }} /></div>}>
-          {page === 'simulator' ? <SimulatorPage /> : <TopBottomPage />}
+          {page === 'simulator' ? <SimulatorPage /> : page === 'options-journal' ? <OptionsJournalPage userId={id} /> : <TopBottomPage />}
         </Suspense>
       </DataSourceProvider>
     </>

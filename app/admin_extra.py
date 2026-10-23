@@ -320,6 +320,8 @@ def edit_positions(user_id: str, body: PositionsEdit, symbol: str = "NIFTY", act
               "ON CONFLICT(user_id, symbol) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
               (user_id, symbol, json.dumps(body.positions, separators=(",", ":")), time.time()))
     c.commit()
+    from app import option_journal
+    option_journal.sync(c, user_id, symbol, body.positions)
     audit.append(c, "admin.edit_positions", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id,
                  detail={"actor": actor["username"], "symbol": symbol, "count": len(body.positions)})
     return {"ok": True, "count": len(body.positions)}

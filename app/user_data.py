@@ -66,6 +66,8 @@ def put_sim_positions(body: PositionsBody, request: Request, symbol: str = "NIFT
               "ON CONFLICT(user_id, symbol) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at",
               (user_id_of(request), _symbol(symbol), data, now))
     c.commit()
+    from app import option_journal
+    option_journal.sync(c, user_id_of(request), _symbol(symbol), body.positions, now)       # the options journal keeps every leg for good
     return {"ok": True, "updated_at": now, "count": len(body.positions)}
 
 
