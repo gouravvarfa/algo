@@ -328,3 +328,21 @@ def test_a_fault_clears_when_the_instrument_recovers(db, monkeypatch, tmp_path):
     state["fail"] = False
     asyncio.run(e.refresh_all())
     assert e.faults == {} and e.snapshots["x"] == {"ok": 1}
+
+
+def test_developer_console_extra_pages_are_developer_only_and_return_data(db, new_client):
+    owner, admin = make_owner(db), make_user(db, "adminy", "admin")
+    c_admin = new_client()
+    assert login(c_admin, admin).status_code == 200
+    for path in ("/api/dev/roles", "/api/dev/system-info", "/api/dev/live-logs", "/api/dev/sessions"):
+        assert c_admin.get(path).status_code == 403, path
+    c_dev = new_client()
+    assert login(c_dev, owner).status_code == 200
+    roles = c_dev.get("/api/dev/roles").json()
+    assert [r["role"] for r in roles["roles"]][-1] == "developer" and roles["rules"]
+    info = c_dev.get("/api/dev/system-info").json()
+    assert info["python"] and info["uptime_s"] >= 0 and "users" in info["counts"]
+    logs = c_dev.get("/api/dev/live-logs?lines=50").json()
+    assert "lines" in logs and isinstance(logs["lines"], list)
+    att = c_dev.get("/api/dev/login-attempts").json()
+    assert "failed_last_hour" in att and any(e["action"] == "login.success" for e in att["entries"])

@@ -145,3 +145,16 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .linkbtn { background: none; border: 0; width: 100%; text-align: left; font: inherit; }
 .accountbox { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; display: grid; gap: 2px; }
 .navgroup + .navlink { margin-top: 0; }
+
+/* ---- admin / developer consoles: their own accent colour so it is always clear which application you are in ---- */
+.console-admin { --accent: #7c3aed; --accent-soft: #efe8ff; }
+.console-dev { --accent: #0e7490; --accent-soft: #dff4f8; }
+:root[data-theme="dark"] .console-admin { --accent: #a78bfa; --accent-soft: #241c3a; } :root[data-theme="dark"] .console-dev { --accent: #22d3ee; --accent-soft: #0d2a31; }
+.console .sidebar { background: linear-gradient(180deg, var(--bg-surface), color-mix(in srgb, var(--accent) 5%, var(--bg-surface))); }
+.console .logo i { background: var(--accent); }
+.consolebadge { font-size: 11px; font-weight: 700; letter-spacing: .1em; padding: 3px 10px; border-radius: 6px; background: var(--accent); color: #fff; }
+.pill.sys.okk { color: var(--success); } .pill.sys.degr { color: var(--warning); } .pill.sys.down { color: var(--danger); }
+.pill.sys i { background: currentColor; }
+.btn.primary, .seg button.on, .navlink.active::before { background: var(--accent); }
+.btn.primary { border-color: var(--accent); }
+.kvrow { display: contents; }

@@ -18,7 +18,7 @@ export function LoginPage() {
   const { mode, me, loading, refresh } = useSession()
   const nav = useNavigate()
   const loc = useLocation()
-  const from = (loc.state as { from?: string } | null)?.from ?? '/top-bottom'
+  const from = (loc.state as { from?: string } | null)?.from ?? '/'
   const [f, setF] = useState({ username: '', password: '', totp: '' })
   const [show, setShow] = useState(false)
   const [busy, setBusy] = useState(false)

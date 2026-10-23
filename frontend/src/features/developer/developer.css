@@ -12,3 +12,10 @@ tr.resolved td { opacity: .5; }
 .toggle { width: 40px; height: 22px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-hover); position: relative; padding: 0; }
 .toggle i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-muted); transition: transform .15s, background .15s; }
 .toggle.on { background: var(--success-soft); border-color: var(--success); } .toggle.on i { transform: translateX(18px); background: var(--success); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--bg-surface); border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--r-lg); padding: 10px 14px; display: grid; gap: 2px; }
+.kpi.ok { border-left-color: var(--success); } .kpi.warn { border-left-color: var(--warning); } .kpi.bad { border-left-color: var(--danger); }
+.kpi .k { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: capitalize; } .kpi b { font-size: 20px; font-weight: 500; }
+.logbox { margin: 0; height: calc(100vh - 260px); min-height: 320px; overflow: auto; padding: 12px 14px; font: 11.5px/1.5 var(--font-mono); background: #0b1220; color: #cfe0ff; border-radius: var(--r-lg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rules { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-secondary); }
+label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-secondary); }

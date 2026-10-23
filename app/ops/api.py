@@ -175,3 +175,73 @@ def dev_incident_resolve(incident_id: int, actor=Depends(require("system.manage"
     incidents.resolve(incident_id)
     _audit(c, actor, "dev.incident.resolve", target_type="incident", target_id=str(incident_id))
     return {"ok": True}
+
+
+# ---- more developer screens: login attempts, roles, system info, live logs -----------------------------------------------------------------
+LOGIN_ACTIONS = ("login.success", "login.failed", "login.locked", "login.refused", "login.takeover", "password.change_failed", "user.setup_complete")
+
+
+@router.get("/api/dev/login-attempts")
+def dev_login_attempts(limit: int = 200, only_failed: bool = False, _=Depends(require("audit.read")), c=Depends(db)):
+    """Who tried to sign in, from where (address only) and what happened: the failed ones are what a developer watches for."""
+    marks = ",".join("?" * len(LOGIN_ACTIONS))
+    extra = " AND action IN ('login.failed','login.locked','login.refused','password.change_failed')" if only_failed else ""
+    rows = c.execute(f"SELECT id, ts, actor_id, action, detail_json FROM audit_log WHERE action IN ({marks}){extra} ORDER BY id DESC LIMIT ?",
+                     (*LOGIN_ACTIONS, max(1, min(limit, 500)))).fetchall()
+    hour_ago = time.time() - 3600
+    fails = c.execute("SELECT COUNT(*) FROM login_failures WHERE ts >= ?", (hour_ago,)).fetchone()[0]
+    return {"failed_last_hour": fails, "entries": [{"id": r["id"], "ts": r["ts"], "action": r["action"], "actor_id": r["actor_id"], "detail": r["detail_json"]} for r in rows]}
+
+
+@router.get("/api/dev/roles")
+def dev_roles(_=Depends(require("system.read"))):
+    from app.security import authz
+    return {"roles": [{"role": r, "rank": authz.RANK[r], "permissions": authz.permissions(r)} for r in authz.ROLES],
+            "rules": ["Roles are cumulative: developer includes admin, admin includes user.",
+                      "Only the owner (the first developer) creates admins and developers; admins create users.",
+                      "Nobody can disable, remove or sign out themselves, and the last admin / developer cannot be removed.",
+                      "Everyone with the 'view as' permission sees users ranked below them, read-only; secrets (passwords, authenticator keys, broker keys) are never shown."]}
+
+
+@router.get("/api/dev/system-info")
+def dev_system_info(_=Depends(require("system.read")), c=Depends(db)):
+    import os
+    import platform
+    import sys
+    from pathlib import Path
+    data = Path(__file__).resolve().parents[2] / "data"
+    files = []
+    for f in sorted(data.rglob("*.db")) if data.exists() else []:
+        try:
+            files.append({"name": str(f.relative_to(data)), "mb": round(f.stat().st_size / 1e6, 2)})
+        except OSError:
+            pass
+    counts = {k: c.execute(q).fetchone()[0] for k, q in (("users", "SELECT COUNT(*) FROM users WHERE status!='DELETED'"), ("sessions_active", "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL"),
+                                                          ("audit_rows", "SELECT COUNT(*) FROM audit_log"), ("incidents", "SELECT COUNT(*) FROM incidents"))}
+    checks = [
+        {"name": "Encryption key", "ok": bool(os.environ.get("APP_ENC_KEY")), "note": "APP_ENC_KEY protects the authenticator secrets. Without it a key file next to the database is used: set it on a server."},
+        {"name": "Takeover from the login page", "ok": os.environ.get("APP_ALLOW_TAKEOVER", "1").strip().lower() in ("0", "false", "no", "off"), "note": "off is the stricter setting (APP_ALLOW_TAKEOVER=0)"},
+        {"name": "Angel One credentials file", "ok": Path("angelone_credentials.json").exists() or bool(os.environ.get("ANGELONE_API_KEY")), "note": "needed for live data"},
+    ]
+    import fastapi
+    return {"python": sys.version.split()[0], "platform": platform.platform(), "fastapi": fastapi.__version__, "uptime_s": round(time.time() - context.started_at),
+            "data_dir": str(data), "databases": files, "counts": counts, "checks": checks, "server_time": time.time()}
+
+
+@router.get("/api/dev/live-logs")
+def dev_live_logs(lines: int = 300, level: str = "", _=Depends(require("system.read"))):
+    """The tail of the server's error log (data/server.err when started with start.bat / the background launcher). Secrets are masked before sending."""
+    import re
+    from pathlib import Path
+    f = Path(__file__).resolve().parents[2] / "data" / "server.err"
+    if not f.exists():
+        return {"available": False, "lines": [], "note": "No log file at data/server.err. On a server read it with: journalctl -u algo-trading -f"}
+    size = f.stat().st_size
+    with f.open("rb") as fh:
+        fh.seek(max(0, size - 200_000))
+        text = fh.read().decode("utf-8", "replace")
+    out = text.splitlines()[-max(10, min(lines, 1000)):]
+    out = [re.sub(r"(?i)(token|password|secret|totp|cookie|authorization)([\"'=: ]+)[^\s,\"']+", r"\1\2***", ln) for ln in out]
+    if level:
+        out = [ln for ln in out if level.upper() in ln]
+    return {"available": True, "size_kb": round(size / 1024), "lines": out}
