@@ -94,12 +94,13 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
         {!readOnly && <button className="btn sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
       </div>
 
-      <div className="stats">
+      <div className="tbkpis">
         <div className="stat"><div className="k">BankNifty fut</div><div className="v">{num(s.ltp)}</div><div className="s">{inst.trading_symbol}</div></div>
-        <div className="stat"><div className="k">Position</div><div className={`v ${p ? (p.direction === 'BUY' ? 'pos' : 'neg') : ''}`}>{p ? p.direction : 'FLAT'}</div><div className="s">{p ? `entry ${num(p.entry_price)}` : s.waiting ? 'waiting for new System Point' : 'no open position'}</div></div>
+        <div className={`stat ${p ? (p.direction === 'BUY' ? 'up' : 'down') : ''}`}><div className="k">Position</div><div className={`v ${p ? (p.direction === 'BUY' ? 'pos' : 'neg') : ''}`}>{p ? p.direction : 'FLAT'}</div><div className="s">{p ? `entry ${num(p.entry_price)}` : s.waiting ? 'waiting for new System Point' : 'no open position'}</div></div>
         <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{p ? (p.breakeven ? 'breakeven SL (2% done)' : 'structural / trailing') : ''}</div></div>
-        <div className="stat"><div className="k">Open P&amp;L</div><div className={`v ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</div><div className="s">{p ? `${num(p.pnl_points)} pts · ${p.pnl_pct}%` : ''}</div></div>
-        <div className="stat"><div className="k">Latest top / bottom</div><div className="v">{n2(s.latest_top)} / {n2(s.latest_bottom)}</div><div className="s">confirmed swings</div></div>
+        <div className={`stat ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}><div className="k">Open P&amp;L</div><div className={`v ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</div><div className="s">{p ? `${num(p.pnl_points)} pts · ${p.pnl_pct}%` : ''}</div></div>
+        <div className="stat"><div className="k">Latest top</div><div className="v">{n2(s.latest_top)}</div><div className="s">confirmed swing</div></div>
+        <div className="stat"><div className="k">Latest bottom</div><div className="v">{n2(s.latest_bottom)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Live trades</div><div className="v">{st.live_trades} · {st.live_win_rate == null ? '–' : `${st.live_win_rate}%`}</div><div className="s">realized <span className={sign(st.live_realized)}>{money(st.live_realized)}</span></div></div>
       </div>
 
@@ -107,11 +108,12 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
         <div className="card chartcard">
           <div className="card-head">
             <h2>{inst.trading_symbol} · {inst.timeframe} · qty {inst.quantity}</h2>
-            <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
+
             <span className="spacer" />
             <span className="seg"><button className={kind === 'line' ? 'on' : ''} onClick={() => setKind('line')}>Line</button><button className={kind === 'candle' ? 'on' : ''} onClick={() => setKind('candle')}>Candles</button></span>
             <button className="btn sm" onClick={onFit}>Fit</button>
           </div>
+          <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
           <TradeChart snap={s} kind={kind} fitSignal={fit} />
           {s.engine_note && <p className={`note ${s.engine_warning ? 'neg' : ''}`} style={s.engine_warning ? { fontWeight: 650 } : undefined}>{s.engine_warning ? '⚠ ' : '✔ '}{s.engine_note}</p>}
           <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle (Angel One) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>

@@ -19,3 +19,14 @@
 .kv2 dt { color: var(--text-muted); padding-right: 12px; } .kv2 dd { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 tr.replay td { opacity: .55; }
 @media (max-width: 1180px) { .tbgrid { grid-template-columns: minmax(0, 1fr); } }
+
+/* separate KPI cards: the position colours its own card so BUY / SELL and profit / loss read at a glance */
+.tbkpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.tbkpis .stat { background: var(--bg-surface); border: 1px solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--r-lg); padding: 12px 16px; display: grid; gap: 3px; box-shadow: var(--shadow-sm, none); }
+.tbkpis .stat + .stat { border-left: 4px solid var(--border-strong); }
+.tbkpis .stat.up { border-left-color: var(--success); background: color-mix(in srgb, var(--success-soft) 45%, var(--bg-surface)); }
+.tbkpis .stat.down { border-left-color: var(--danger); background: color-mix(in srgb, var(--danger-soft) 45%, var(--bg-surface)); }
+.tbkpis .stat .v { font-size: 22px; white-space: nowrap; }
+.chartcard > .legend { padding: 0 16px 8px; }
+.chartcard .chartcanvas { height: clamp(380px, calc(100vh - 340px), 680px); }
+.titlerow h1 { font-size: 20px; }
