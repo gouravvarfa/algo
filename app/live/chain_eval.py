@@ -17,6 +17,7 @@ from typing import Awaitable, Callable
 import pandas as pd
 
 from app.live.contracts import cutoff
+from app.ops.stats import tracked
 from app.strategy.top_bottom.intraday import IntradayInitial, Minute, run_intraday
 from app.strategy.top_bottom.models import Trade
 
@@ -70,6 +71,7 @@ def plan(contracts: list[ContractRef], from_date: dt.date, today: dt.date) -> li
     return segs
 
 
+@tracked("chain_eval.evaluate")
 async def evaluate(
     *, contracts: list[ContractRef], from_dt: dt.datetime, now: dt.datetime, symbol: str,
     get_daily: Callable[[ContractRef], Awaitable[pd.DataFrame]],

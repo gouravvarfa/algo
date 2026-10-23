@@ -45,6 +45,7 @@ from app.strategy.top_bottom.gap_protocol import (
     resolve_gap_exit,
 )
 from app.strategy.top_bottom.models import Direction, InstrumentClass, Signal, Trade
+from app.ops.stats import tracked
 from app.strategy.top_bottom.swing_detection import detect_confirmed_swings, swings_confirmed_by
 
 # The product's one and only confirmation window — see the module
@@ -143,6 +144,7 @@ def res_handled_gap(pre_top, pre_bottom, prev_close, day_open, day_bars) -> bool
     return False
 
 
+@tracked("top_bottom.daily_backtest")
 def run_top_bottom_backtest(
     symbol: str,
     trading_symbol: str,

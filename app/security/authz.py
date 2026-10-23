@@ -7,7 +7,7 @@ RANK = {"user": 0, "admin": 1, "developer": 2}
 
 _USER = frozenset({"session.self"})
 _ADMIN = _USER | {"users.read", "users.create", "users.manage", "audit.read"}
-_DEVELOPER = _ADMIN | {"system.read"}
+_DEVELOPER = _ADMIN | {"system.read", "system.manage"}
 PERMISSIONS = {"user": _USER, "admin": _ADMIN, "developer": _DEVELOPER}
 
 

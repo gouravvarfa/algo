@@ -16,6 +16,8 @@ from pathlib import Path
 
 from app.options import intraday, master
 from app.options.master import IST
+from app.ops import flags as ops_flags
+from app.ops.stats import tracked
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,7 @@ def due(now: dt.datetime, last: str | None) -> bool:
     return now.weekday() < 5 and now.time() >= RUN_AFTER and last != now.date().isoformat()
 
 
+@tracked("collector.run_once")
 async def run_once(provider, symbols=SYMBOLS) -> dict:
     st = _status()
     session = await provider.get_session()
@@ -67,7 +70,7 @@ async def loop(provider, check_every: int = 300) -> None:
     while True:
         try:
             now = dt.datetime.now(IST).replace(tzinfo=None)
-            if due(now, _status().get("last_run_date")):
+            if ops_flags.get("feature.collector") and due(now, _status().get("last_run_date")):
                 log.info("daily option collector starting")
                 await run_once(provider)
                 log.info("daily option collector finished")

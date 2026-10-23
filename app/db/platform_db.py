@@ -87,7 +87,31 @@ CREATE TRIGGER audit_log_no_update BEFORE UPDATE ON audit_log BEGIN SELECT RAISE
 CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1)]
+_V2 = """
+CREATE TABLE feature_flags (          -- developer-controlled switches and kill switches (app/ops/flags.py)
+  key TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',   -- 'global' or 'user:<id>'
+  value_json TEXT NOT NULL,
+  updated_by TEXT,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (key, scope)
+);
+
+CREATE TABLE incidents (              -- every isolated failure: what broke, what the system did about it (app/ops/incidents.py)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL NOT NULL,
+  component TEXT NOT NULL,
+  user_id TEXT,
+  severity TEXT NOT NULL DEFAULT 'error',
+  message TEXT NOT NULL,
+  detail_json TEXT,
+  auto_action TEXT,
+  resolved_at REAL
+);
+CREATE INDEX incidents_ts ON incidents(ts);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

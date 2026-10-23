@@ -26,6 +26,8 @@ from pydantic import BaseModel
 
 from app.indicators.confirmed_bars import drop_incomplete_trailing_bars, drop_incomplete_trailing_daily_bar
 from app.live import candle_store
+from app.ops import flags as ops_flags, incidents as ops_incidents
+from app.ops.stats import tracked
 from app.live import chain_eval
 from app.live.chain_eval import ContractRef
 from app.live.contracts import cutoff as contract_cutoff
@@ -136,6 +138,7 @@ class PaperEngine:
         self.instruments: dict[str, Instrument] = {}
         self.snapshots: dict[str, dict] = {}
         self.errors: dict[str, str] = {}
+        self.faults: dict[str, dict] = {}        # instrument id -> {message, since}: an instrument whose evaluation keeps failing (isolated; the others go on)
         self.last_tick: dt.datetime | None = None
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
@@ -215,6 +218,7 @@ class PaperEngine:
         self._save()
 
     # ---- evaluation ------------------------------------------------------
+    @tracked("engine.build_snapshot")
     async def _build_snapshot(self, inst: Instrument) -> dict:
         interval, minutes, max_days = TIMEFRAMES[inst.timeframe]
         now = now_ist()
@@ -473,6 +477,7 @@ class PaperEngine:
         out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)))
         return [m for m in out if m.ts.date() >= pin] if pin else out
 
+    @tracked("chain_eval.chain")
     async def _chain(self, inst: Instrument, now: dt.datetime, from_dt: dt.datetime):
         """Run the strategy across consecutive contracts (see app/live/chain_eval.py). None = no cutoff has passed yet: single-contract path."""
         contracts = await self._known_contracts(inst)
@@ -627,20 +632,31 @@ class PaperEngine:
         return [json.loads(x) for x in reversed(lines) if x.strip()]
 
     async def refresh_one(self, inst: Instrument) -> None:
+        owner = getattr(inst, "owner", None)
+        if ops_flags.engine_paused(owner):          # developer kill switch (global or this user's): keep the last stored snapshot, evaluate nothing
+            return
         try:
             self.snapshots[inst.id] = await self._build_snapshot(inst)
             self.errors.pop(inst.id, None)
+            if self.faults.pop(inst.id, None) is not None:
+                ops_incidents.record("engine", f"{inst.symbol} recovered", severity="info", user_id=owner, auto_action="fault cleared")
             self._journal(inst, self.snapshots[inst.id])
-        except Exception as exc:  # one bad symbol must never stop the others
+        except Exception as exc:  # one bad instrument (or user) must never stop the others: isolate it, record it, go on
             log.exception("refresh failed for %s", inst.symbol)
-            self.errors[inst.id] = str(exc) or exc.__class__.__name__
+            msg = str(exc) or exc.__class__.__name__
+            self.errors[inst.id] = msg
+            if inst.id not in self.faults:
+                self.faults[inst.id] = {"message": f"{type(exc).__name__}: {msg[:200]}", "since": now_ist().isoformat(timespec="seconds")}
+                ops_incidents.record("engine", f"{inst.symbol} evaluation failed: {type(exc).__name__}: {msg[:200]}", user_id=owner,
+                                     auto_action="instrument isolated; other instruments keep running")
 
     async def refresh_all(self) -> None:
         async with self._lock:
             for inst in list(self.instruments.values()):
                 await self.refresh_one(inst)
                 await asyncio.sleep(0.4)  # stay under Angel One's candle-API rate limit
-            self.last_tick = now_ist()
+            if not ops_flags.engine_paused():
+                self.last_tick = now_ist()
 
     async def _loop(self) -> None:
         while True:

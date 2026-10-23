@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException
 
 from app.options import bhavcopy, chain as oc, master
 from app.providers.angelone_client import get_margin
+from app.ops import flags as ops_flags
+from app.ops.stats import tracked
 
 router = APIRouter(prefix="/api/options")
 provider = None  # set by app.main lifespan
@@ -235,11 +237,15 @@ class MarginReq(BaseModel):
 
 
 @router.post("/sim/margin")
+@tracked("margin.calculate")
 async def sim_margin(req: MarginReq):
     """Capital needed by the open legs. BUY legs: the premium paid (exact). SELL legs: Angel One's own margin calculator for the
     whole basket (SPAN + exposure with the hedge benefit), which only knows contracts that are still listed and gives TODAY's
     margin. Nothing is estimated: legs Angel cannot price are reported, and the margin is then left out."""
     sym = req.symbol.upper()
+    if not ops_flags.get("feature.margin"):
+        return {"premium_paid": 0, "premium_received": 0, "has_sell": False, "margin": None, "span": None, "exposure": None, "hedge_benefit": None,
+                "source": None, "note": "the margin calculator is switched off by a developer", "unlisted": []}
     legs = [p for p in req.positions if p.lots > 0]
     premium_paid = round(sum(p.entry * p.lots * p.lot_size for p in legs if p.side == "BUY"), 2)
     premium_recv = round(sum(p.entry * p.lots * p.lot_size for p in legs if p.side == "SELL"), 2)
@@ -744,9 +750,12 @@ def _sub(feed, token: str) -> None:
 
 
 @router.get("/live/chain")
+@tracked("options.live_chain")
 async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
     """Today's chain from live ticks. A strike with no tick yet (just subscribed, or market closed) shows its last stored 1-minute
     close of today, labelled `stored`; nothing is filled or estimated. OI = previous day's Bhavcopy (ticks carry no OI)."""
+    if not ops_flags.get("feature.live_chain"):
+        raise HTTPException(503, "the live option chain is switched off by a developer")
     feed = _live_ready()
     sym = symbol.upper()
     from app.paper_trading.engine import INDEX_TOKENS, now_ist

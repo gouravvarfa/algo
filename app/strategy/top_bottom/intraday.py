@@ -54,6 +54,7 @@ from app.strategy.top_bottom.gap_protocol import (
     is_gap_through_stop,
 )
 from app.strategy.top_bottom.models import Trade
+from app.ops.stats import tracked
 from app.strategy.top_bottom.swing_detection import detect_confirmed_swings
 
 BREAKEVEN_TRIGGER_PCT = 0.02
@@ -98,6 +99,7 @@ def _f(v: float) -> str:
     return f"{v:,.2f}"
 
 
+@tracked("top_bottom.run_intraday")
 def run_intraday(
     symbol: str,
     daily_dates: list[dt.datetime],

@@ -18,6 +18,8 @@ from typing import Any, Awaitable, Callable, Literal, TypeVar
 import httpx
 import pyotp
 
+from app.ops import circuit, incidents
+from app.ops.stats import tracked
 from app.providers import call_metrics
 
 logger = logging.getLogger("scanner.angelone_client")
@@ -37,6 +39,21 @@ AngelOneInterval = Literal[
     "ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE", "TEN_MINUTE",
     "FIFTEEN_MINUTE", "THIRTY_MINUTE", "ONE_HOUR", "ONE_DAY",
 ]
+
+
+def _rest_opened(b) -> None:
+    incidents.record("angelone.rest", f"circuit OPEN after {b.threshold} failures in {b.window_s:.0f}s ({b.last_error})", severity="warning",
+                     auto_action=f"calls blocked for {b.cooldown_s:.0f}s, then one trial call")
+
+
+_rest = circuit.breaker("angelone.rest", threshold=8, window_s=60.0, cooldown_s=30.0, on_open=_rest_opened)
+
+
+def _is_outage(exc: BaseException) -> bool:
+    """Counts toward the breaker: network trouble, non-JSON replies and rate-limit refusals. NOT a deliberate 'bad token / bad parameter' answer."""
+    if isinstance(exc, AngelOneApiError):
+        return exc.retryable or exc.kind == "network" or "too many" in str(exc).lower() or "rate" in str(exc).lower()
+    return True
 
 
 class AngelOneApiError(Exception):
@@ -158,6 +175,7 @@ def _parse_json_or_raise(response: httpx.Response, kind: Literal["auth", "networ
         ) from exc
 
 
+@tracked("angelone.candles")
 async def get_candle_data(
     session: AngelOneSession,
     exchange: str,
@@ -196,9 +214,10 @@ async def get_candle_data(
 
         return body.get("data") or []
 
-    return await _retry_async(_attempt)
+    return await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
 
 
+@tracked("angelone.margin")
 async def get_margin(session: AngelOneSession, positions: list[dict[str, Any]]) -> dict[str, Any]:
     """Angel One's margin calculator for a basket (SPAN + exposure, with the hedge benefit of the whole basket).
     `positions`: [{"exchange", "qty", "price", "productType", "token", "tradeType", "orderType"}]. Read-only: no order is placed."""
@@ -219,4 +238,4 @@ async def get_margin(session: AngelOneSession, positions: list[dict[str, Any]]) 
             raise AngelOneApiError(body.get("message", "Unable to calculate margin"), "data", retryable=False)
         return body.get("data") or {}
 
-    return await _retry_async(_attempt)
+    return await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)

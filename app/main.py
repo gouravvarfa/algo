@@ -17,6 +17,7 @@ from app.providers.angelone_provider import AngelOneProvider
 from app.options import api as options_api
 from app.options import collector as option_collector
 from app import auth, auth_api
+from app.ops import api as ops_api, context as ops_context, selftests as ops_selftests, stats as ops_stats
 from app.security import mode as login_mode
 from app.security.users import AuthError
 from app.services import angelone_credential_store
@@ -34,16 +35,43 @@ async def lifespan(_: FastAPI):
     engine = PaperEngine(provider)
     options_api.provider = provider
     options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
+    ops_context.engine = engine          # the developer panel reads the engine's health from here
     engine.start()
     asyncio.create_task(options_api.warm())
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
+    asyncio.create_task(_selftest_loop())                  # known-answer checks every 10 minutes (developer panel)
     yield
     await engine.stop()
 
 
+async def _selftest_loop():
+    while True:
+        try:
+            await asyncio.to_thread(ops_selftests.run_all)
+        except Exception:
+            logging.getLogger("ops").exception("self-test run failed")
+        await asyncio.sleep(600)
+
+
 app = FastAPI(title="Top-Bottom Paper Trader", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_metrics(request, call_next):
+    """Per-route timing and error counts for the developer panel (route TEMPLATE, e.g. /api/instruments/{instrument_id}, never raw ids)."""
+    import time as _t
+    t0 = _t.perf_counter()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        ops_stats.record_request(getattr(route, "path", request.url.path), (_t.perf_counter() - t0) * 1000, status)
 app.include_router(options_api.router)
 app.include_router(auth_api.router)
+app.include_router(ops_api.router)
 app.add_exception_handler(AuthError, auth_api.handle_auth_error)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 

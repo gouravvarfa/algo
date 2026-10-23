@@ -21,6 +21,8 @@ from typing import Callable
 
 import websockets
 
+from app.ops.stats import tracked
+
 log = logging.getLogger("ticks")
 URL = "wss://smartapisocket.angelone.in/smart-stream"
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
@@ -39,6 +41,7 @@ class Tick:
     recv_at: float             # local monotonic-ish wall clock (time.time())
 
 
+@tracked("live.parse_tick")
 def parse_tick(data: bytes, recv_at: float | None = None) -> Tick | None:
     """One binary frame -> Tick, or None when it is not a valid LTP frame (never guesses)."""
     if len(data) < 47:
