@@ -5,7 +5,7 @@ import asyncio
 import datetime as dt
 import sqlite3
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.options import bhavcopy, chain as oc, master
 from app.providers.angelone_client import get_margin
@@ -594,6 +594,23 @@ def _store():
     return store.connect(STORE_DB)
 
 
+def _legacy_owner(request: Request) -> bool:
+    u = getattr(request.state, "user", None)
+    return u is not None and u["role"] == "developer" and u.get("created_by") is None
+
+
+def _uid(request: Request) -> str:
+    """The signed-in user's id ('' with no login). Saved strategies and backtests are private to their owner; what was saved before accounts
+    existed is adopted by the owner account the first time it asks."""
+    u = getattr(request.state, "user", None)
+    if u is None:
+        return ""
+    if _legacy_owner(request):
+        with _store() as c:
+            store.adopt(c, u["id"])
+    return u["id"]
+
+
 def _validate_for_save(name: str, strategy: dict) -> None:
     if not isinstance(name, str) or not name.strip() or len(name) > 80:
         raise HTTPException(422, {"errors": ["name: 1-80 characters"]})
@@ -610,36 +627,40 @@ class SaveReq(BaseModel):
 
 
 @router.get("/strategies")
-async def strategies_list():
+async def strategies_list(request: Request):
+    uid = _uid(request)
     with _store() as c:
-        return store.list_all(c)
+        return store.list_all(c, uid)
 
 
 @router.get("/strategies/{sid}")
-async def strategies_get(sid: str):
+async def strategies_get(sid: str, request: Request):
+    uid = _uid(request)
     with _store() as c:
-        r = store.get(c, sid)
+        r = store.get(c, sid, uid)
     if not r:
         raise HTTPException(404, "strategy not found")
     return r
 
 
 @router.post("/strategies")
-async def strategies_save(req: SaveReq):
+async def strategies_save(req: SaveReq, request: Request):
     """Validates the strategy with the same validator the backtester uses, then saves it. Existing names need overwrite=true."""
     _validate_for_save(req.name, req.strategy)
     try:
+        uid = _uid(request)
         with _store() as c:
-            rec, created = store.save(c, req.name.strip(), req.state, req.strategy, req.overwrite)
+            rec, created = store.save(c, req.name.strip(), req.state, req.strategy, req.overwrite, owner=uid)
     except KeyError:
         raise HTTPException(409, f"a strategy named '{req.name.strip()}' already exists")
     return {**rec, "created": created}
 
 
 @router.delete("/strategies/{sid}")
-async def strategies_delete(sid: str):
+async def strategies_delete(sid: str, request: Request):
+    uid = _uid(request)
     with _store() as c:
-        if not store.delete(c, sid):
+        if not store.delete(c, sid, uid):
             raise HTTPException(404, "strategy not found")
     return {"deleted": sid}
 
@@ -649,9 +670,10 @@ class ImportReq(BaseModel):
 
 
 @router.post("/strategies/import")
-async def strategies_import(req: ImportReq):
+async def strategies_import(req: ImportReq, request: Request):
     """Copy browser-saved strategies to the server. Never overwrites an existing name; invalid ones are reported, not saved."""
     done, skipped = [], []
+    uid = _uid(request)
     with _store() as c:
         for it in req.items[:200]:
             name = str(it.get("name") or "").strip()
@@ -661,7 +683,7 @@ async def strategies_import(req: ImportReq):
                 skipped.append({"name": name or "(unnamed)", "reason": "; ".join(e.detail["errors"]) if isinstance(e.detail, dict) else str(e.detail)})
                 continue
             try:
-                store.save(c, name, it.get("state") or {}, it["strategy"], False, "browser-import")
+                store.save(c, name, it.get("state") or {}, it["strategy"], False, "browser-import", owner=uid)
                 done.append(name)
             except KeyError:
                 skipped.append({"name": name, "reason": "a server strategy with this name already exists (kept both: the browser copy is untouched)"})
@@ -669,23 +691,29 @@ async def strategies_import(req: ImportReq):
 
 
 @router.post("/backtest")
-async def backtest(body: dict):
+async def backtest(body: dict, request: Request):
     s, errs = strat.validate(body)
     if errs:
         raise HTTPException(422, {"errors": errs})
     res = await asyncio.to_thread(engine.run, s)
     res["id"] = dt.datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
     res["input"] = body
+    res["owner"] = _uid(request)
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     (SAVE_DIR / f"{res['id']}.json").write_text(json.dumps(res, default=str), encoding="utf-8")
     return json.loads(json.dumps(res, default=str))
 
 
 @router.get("/backtests")
-async def backtests():
+async def backtests(request: Request):
     out = []
-    for f in sorted(SAVE_DIR.glob("*.json"), reverse=True)[:50] if SAVE_DIR.exists() else []:
+    uid, legacy = _uid(request), _legacy_owner(request)
+    for f in sorted(SAVE_DIR.glob("*.json"), reverse=True)[:600] if SAVE_DIR.exists() else []:
         r = json.loads(f.read_text(encoding="utf-8"))
+        if not _mine(r, uid, legacy):
+            continue
+        if len(out) >= 50:
+            break
         m = r["metrics"]
         out.append({"id": r["id"], "name": r["strategy"]["name"], "range": f"{r['strategy']['start']} → {r['strategy']['end']}",
                     "trades": m.get("trades", 0), "total": m.get("total"),
@@ -695,11 +723,19 @@ async def backtests():
     return out
 
 
-def _load_run(bid: str) -> dict:
+def _mine(run: dict, uid: str, legacy_owner: bool) -> bool:
+    """A run is private to the user who made it; a run from before accounts existed (no owner field) belongs to the owner account."""
+    return run.get("owner", "") == uid or (legacy_owner and "owner" not in run)
+
+
+def _load_run(bid: str, uid: str = "", legacy_owner: bool = False) -> dict:
     f = SAVE_DIR / f"{bid}.json"
     if not bid.replace("-", "").isalnum() or not f.exists():
         raise HTTPException(404, f"saved backtest {bid} not found")
-    return json.loads(f.read_text(encoding="utf-8"))
+    run = json.loads(f.read_text(encoding="utf-8"))
+    if not _mine(run, uid, legacy_owner):
+        raise HTTPException(404, f"saved backtest {bid} not found")        # somebody else's run looks exactly like one that does not exist
+    return run
 
 
 COMPARE_KEYS = ("name", "symbol", "start", "end", "expiry", "entry_days_before_expiry", "exit_days_before_expiry",
@@ -707,13 +743,14 @@ COMPARE_KEYS = ("name", "symbol", "start", "end", "expiry", "entry_days_before_e
 
 
 @router.get("/backtests/compare")
-async def backtest_compare(ids: str):
+async def backtest_compare(ids: str, request: Request):
     """Read-only comparison of 2-4 saved runs. Metrics are recomputed from each run's stored trades with the same
     engine.metrics() definitions, so runs saved before a metric existed are compared like-for-like. Nothing is rerun."""
     want = [i for i in ids.split(",") if i]
     if not 2 <= len(want) <= 4 or len(set(want)) != len(want):
         raise HTTPException(400, "pick 2-4 different saved runs")
-    runs = [_load_run(i) for i in want]
+    uid, legacy = _uid(request), _legacy_owner(request)
+    runs = [_load_run(i, uid, legacy) for i in want]
     out = [{"id": r["id"], "strategy": {k: r["strategy"].get(k) for k in COMPARE_KEYS}, "metrics": engine.metrics(r["trades"]),
             "skipped": len(r.get("skipped", []))} for r in runs]
     diff = [k for k in COMPARE_KEYS if len({json.dumps(o["strategy"].get(k), sort_keys=True) for o in out}) > 1]
@@ -722,11 +759,8 @@ async def backtest_compare(ids: str):
 
 
 @router.get("/backtests/{bid}")
-async def backtest_get(bid: str):
-    f = SAVE_DIR / f"{bid}.json"
-    if not bid.replace("-", "").isalnum() or not f.exists():
-        raise HTTPException(404, "not found")
-    return json.loads(f.read_text(encoding="utf-8"))
+async def backtest_get(bid: str, request: Request):
+    return _load_run(bid, _uid(request), _legacy_owner(request))
 
 
 # ---------------------------------------------------------------- live option chain (Angel One WebSocket ticks)
