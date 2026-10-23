@@ -166,3 +166,8 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
   linear-gradient(180deg, color-mix(in srgb, #64748b 7%, var(--bg-page)) 0%, var(--bg-page) 70%); }
 .shell:not(.console) .page .card { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 24px -16px rgba(15,23,42,.22); }
 :root[data-theme="dark"] .shell:not(.console) .page { background: none; }
+
+/* the grey wash drifts slowly behind the cards */
+.shell:not(.console) .page { background-size: 160% 160%, 160% 160%, 100% 100%; background-position: 0% 0%, 100% 0%, 0 0; animation: pagedrift 18s ease-in-out infinite alternate; }
+@keyframes pagedrift { from { background-position: 0% 0%, 100% 0%, 0 0; } to { background-position: 100% 60%, 0% 40%, 0 0; } }
+@media (prefers-reduced-motion: reduce) { .shell:not(.console) .page { animation: none; } }
