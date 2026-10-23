@@ -159,5 +159,5 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .btn.primary { border-color: var(--accent); }
 .kvrow { display: contents; }
 
-/* trading sidebar: soft red wash at the bottom edge, fading upward */
-.shell:not(.console) .sidebar { background: linear-gradient(0deg, color-mix(in srgb, var(--danger) 10%, var(--bg-surface)) 0%, var(--bg-surface) 55%); }
+/* trading sidebar: light black (slate) wash over the full height */
+.shell:not(.console) .sidebar { background: linear-gradient(180deg, color-mix(in srgb, #0f172a 9%, var(--bg-surface)) 0%, color-mix(in srgb, #0f172a 3%, var(--bg-surface)) 100%); }
