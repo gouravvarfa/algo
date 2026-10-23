@@ -8,7 +8,7 @@ from pathlib import Path
 import urllib.parse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -90,13 +90,29 @@ async def require_login(request, call_next):
         blocked = auth_api.gate(request)
         return blocked if blocked is not None else await call_next(request)
     path = request.url.path
-    if path in ("/login", "/healthz", "/api/auth/mode") or path.startswith(("/static/fonts/", "/static/theme.css", "/static/shell.js")):
+    if path in ("/login", "/healthz", "/api/auth/mode", "/app") or path.startswith(("/static/fonts/", "/static/theme.css", "/static/shell.js", "/app/")):
         return await call_next(request)
     if auth.valid_session(request.cookies.get(auth.COOKIE)):
         return await call_next(request)
     if path.startswith("/api/"):
         return JSONResponse({"detail": "login required"}, status_code=401)
     return RedirectResponse("/login", status_code=303)
+
+
+# ---- the React app (frontend/, built with `npm run build`) is served under /app --------------------------------------------------------
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+for _sub in ("assets", "fonts"):
+    if (FRONTEND_DIST / _sub).is_dir():
+        app.mount(f"/app/{_sub}", StaticFiles(directory=FRONTEND_DIST / _sub), name=f"app-{_sub}")
+
+
+@app.get("/app")
+@app.get("/app/{path:path}")
+async def react_app(path: str = ""):
+    index = FRONTEND_DIST / "index.html"
+    if not index.exists():
+        return PlainTextResponse("The React app is not built yet: run `npm install && npm run build` inside the frontend folder.", status_code=503)
+    return FileResponse(index, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/login")

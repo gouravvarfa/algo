@@ -1,0 +1,9 @@
+.btnrow { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.online { display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-weight: 500; }
+.online i { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.linkbox { display: grid; gap: 8px; }
+.linkrow { display: flex; gap: 8px; } .linkrow input { flex: 1; font-family: var(--font-mono); font-size: 12px; }
+.seg .seglink { color: var(--text-muted); font-weight: 500; font-size: 13px; padding: 4px 12px; border-radius: 6px; text-decoration: none; }
+.seg .seglink.on { background: var(--accent); color: #fff; }
+td.wrap { white-space: normal; max-width: 520px; overflow-wrap: anywhere; }
+.dim { color: var(--text-muted); }

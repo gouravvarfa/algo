@@ -1,0 +1,21 @@
+.titlerow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.idxchip { display: inline-flex; align-items: center; gap: 10px; height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); }
+.idxchip small { font-size: 11px; font-weight: 600; letter-spacing: .05em; color: var(--text-muted); }
+.idxchip b { font-size: 16px; font-weight: 500; }
+.livepill { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--bg-hover); color: var(--text-secondary); }
+.livepill i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.livepill.on { background: var(--success-soft); color: var(--success); } .livepill.on i { background: var(--success); animation: pulse 1.8s infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px transparent; } 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 60%, transparent); } }
+.tbgrid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.tbgrid .side { display: grid; gap: 14px; min-width: 0; }
+.chartbox { position: relative; }
+.chartcanvas { height: clamp(340px, calc(100vh - 380px), 620px); width: 100%; }
+.ohlc { position: absolute; left: 10px; top: 6px; z-index: 3; font-size: 11.5px; background: color-mix(in srgb, var(--bg-surface) 82%, transparent); padding: 2px 6px; border-radius: 6px; pointer-events: none; }
+.legend { display: inline-flex; align-items: center; gap: 12px; font-size: 11.5px; color: var(--text-muted); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
+.kv2 { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0; font-size: 12.5px; }
+.kv2 dt, .kv2 dd { padding: 6px 0; border-bottom: 1px solid var(--border); margin: 0; }
+.kv2 dt { color: var(--text-muted); padding-right: 12px; } .kv2 dd { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+tr.replay td { opacity: .55; }
+@media (max-width: 1180px) { .tbgrid { grid-template-columns: minmax(0, 1fr); } }
