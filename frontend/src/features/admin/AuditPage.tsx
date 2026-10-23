@@ -27,6 +27,7 @@ export default function AuditPage() {
       <div className="row" style={{ alignItems: 'center' }}>
         <h1>Audit log</h1>
         <span className="spacer" />
+        <a className="btn sm" href={`/api/admin/audit.csv?q=${encodeURIComponent(filter.trim())}`} download>Export CSV</a>
         <input placeholder="Filter: login, user.disable, dev.kill_switch …" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ width: 320 }} />
       </div>
       <p className="sub">Append-only: the database itself refuses to change or remove a row, and each row carries a hash of the one before it.</p>

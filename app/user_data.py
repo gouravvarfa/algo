@@ -54,6 +54,10 @@ def get_sim_positions(request: Request, symbol: str = "NIFTY", c=Depends(db)):
 
 @router.put("/api/me/sim-positions")
 def put_sim_positions(body: PositionsBody, request: Request, symbol: str = "NIFTY", c=Depends(db)):
+    from app import admin_extra
+    u = getattr(request.state, "user", None)
+    if u is not None:
+        admin_extra.check_positions(c, u["id"], _symbol(symbol), body.positions)       # per-account limits set by an admin
     data = json.dumps(body.positions, separators=(",", ":"))
     if len(data) > MAX_BYTES:
         raise AuthError(413, "TOO_LARGE", "too many positions to store")

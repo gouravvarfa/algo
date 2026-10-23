@@ -9,6 +9,14 @@ interface Row { id: string; username: string; name: string; role: string; status
 interface Entry { id: number; ts: string; actor_role: string | null; action: string; target_type: string | null }
 interface Summary { overall: string; feed: { status: string; reason: string } | null; engine: { status: string; reason: string } | null; users: { status: string; reason: string } | null; incidents: { status: string; reason: string } | null }
 
+interface Trends { days: string[]; logins: number[]; failed: number[]; joined: number[]; active_users: number[] }
+interface Policy { ip_allow_list: string[]; ip_allow_list_on: boolean; idle_timeout_min: number; absolute_timeout_h: number; lockout: string; mfa: string }
+
+function Bars({ values, cls = '', label }: { values: number[]; cls?: string; label: string }) {
+  const max = Math.max(1, ...values)
+  return <div className="trend-bars" role="img" aria-label={label}>{values.map((v, i) => <i key={i} className={cls} style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={String(v)} />)}</div>
+}
+
 const tone = (s: string | undefined) => (s === 'OK' ? 'ok' : s === 'DEGRADED' ? 'warn' : s === 'DOWN' ? 'bad' : 'muted')
 
 /** The admin's landing page: who is here, who is waiting to set up, anything that needs attention, and the latest things that happened. */
@@ -17,6 +25,9 @@ export default function AdminOverview() {
   const users = useQuery({ queryKey: ['admin', 'live-users'], queryFn: () => get<{ users: Row[] }>('/api/admin/live-users'), refetchInterval: 5000 })
   const audit = useQuery({ queryKey: ['admin', 'audit-head'], queryFn: () => get<{ entries: Entry[] }>('/api/admin/audit?limit=8'), refetchInterval: 15_000, enabled: can('audit.read') })
   const sys = useQuery({ queryKey: ['console', 'summary'], queryFn: () => get<Summary>('/api/admin/system-summary'), refetchInterval: 15_000 })
+  const trends = useQuery({ queryKey: ['admin', 'trends'], queryFn: () => get<Trends>('/api/admin/trends?days=30'), refetchInterval: 60_000, enabled: can('audit.read') })
+  const policy = useQuery({ queryKey: ['admin', 'policy'], queryFn: () => get<Policy>('/api/admin/security-policy') })
+  const t = trends.data
   const rows = users.data?.users ?? []
   const n = (f: (r: Row) => boolean) => rows.filter(f).length
   const attention = rows.filter((r) => r.fault || r.paused || r.status === 'INVITED')
@@ -53,6 +64,26 @@ export default function AdminOverview() {
           </dl>
         </div>
       </div>
+
+      {t && (
+        <div className="grid2">
+          <div className="card"><div className="card-head"><h2>People signing in</h2><span className="chip muted">last 30 days</span></div>
+            <Bars values={t.active_users} label="distinct people who signed in each day" /><div className="trend-cap"><span>{t.days[0]}</span><span>today · {t.active_users[t.active_users.length - 1]} people</span></div></div>
+          <div className="card"><div className="card-head"><h2>Failed sign-ins</h2><span className="chip muted">last 30 days</span></div>
+            <Bars values={t.failed} cls="f" label="failed sign-in attempts each day" /><div className="trend-cap"><span>{t.days[0]}</span><span>total {t.failed.reduce((a, b) => a + b, 0)}</span></div></div>
+        </div>
+      )}
+
+      {policy.data && (
+        <div className="card"><div className="card-head"><h2>Security policy</h2></div>
+          <dl className="kv2">
+            <dt>Sign-in</dt><dd>{policy.data.mfa}</dd>
+            <dt>Lock-out</dt><dd>{policy.data.lockout}</dd>
+            <dt>Idle / absolute timeout</dt><dd>{policy.data.idle_timeout_min} min / {policy.data.absolute_timeout_h} h</dd>
+            <dt>Admin network allow-list</dt><dd>{policy.data.ip_allow_list_on ? policy.data.ip_allow_list.join(', ') : <span className="chip warn">off: reachable from any address</span>}</dd>
+          </dl>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-head"><h2>People</h2><span className="spacer" /><Link className="btn sm" to="/admin/users">All users</Link></div>

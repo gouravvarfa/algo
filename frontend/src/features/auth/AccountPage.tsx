@@ -4,6 +4,8 @@ import { ApiError, get, post } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { dt } from '../../lib/format'
 
+const WHAT: Record<string, string> = { 'admin.edit_profile': 'edited your profile', 'admin.edit_positions': 'edited your simulator positions', 'admin.remove_instrument': 'removed a strategy', 'admin.edit_setting': 'changed a setting', 'user.limits': 'changed your limits' }
+
 export function AccountPage() {
   const { me, mode, logout } = useSession()
   const [cur, setCur] = useState('')
@@ -11,7 +13,7 @@ export function AccountPage() {
   const [n2, setN2] = useState('')
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
-  const activity = useQuery({ queryKey: ['me', 'activity'], queryFn: () => get<{ views: { at: string; by: string }[] }>('/api/me/activity'), enabled: mode === 'platform' })
+  const activity = useQuery({ queryKey: ['me', 'activity'], queryFn: () => get<{ views: { at: string; by: string; what?: string }[] }>('/api/me/activity'), enabled: mode === 'platform' })
 
   async function change(ev: FormEvent) {
     ev.preventDefault()
@@ -54,11 +56,11 @@ export function AccountPage() {
       </form>
       <div className="card">
         <h2>Account activity</h2>
-        <p className="sub" style={{ margin: '4px 0 10px' }}>Whenever an admin opens your dashboard (read-only), it is listed here.</p>
+        <p className="sub" style={{ margin: '4px 0 10px' }}>Whenever an admin opens your dashboard, or changes something on your account (profile, limits, positions), it is listed here.</p>
         {activity.data?.views.length ? (
-          <table><thead><tr><th className="l">When</th><th className="l">Opened by</th></tr></thead>
-            <tbody>{activity.data.views.map((v, i) => <tr key={i}><td className="l">{dt(v.at)}</td><td className="l">{v.by}</td></tr>)}</tbody></table>
-        ) : <p className="empty">Nobody has opened your dashboard.</p>}
+          <table><thead><tr><th className="l">When</th><th className="l">By</th><th className="l">What</th></tr></thead>
+            <tbody>{activity.data.views.map((v, i) => <tr key={i}><td className="l">{dt(v.at)}</td><td className="l">{v.by}</td><td className="l">{WHAT[v.what ?? ""] ?? "opened your dashboard"}</td></tr>)}</tbody></table>
+        ) : <p className="empty">Nothing to show.</p>}
       </div>
     </div>
   )

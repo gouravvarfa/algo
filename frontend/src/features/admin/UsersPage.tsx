@@ -5,6 +5,7 @@ import { ApiError, api, get, post } from '../../lib/api'
 import { money, sign } from '../../lib/format'
 import { useSession } from '../../lib/session'
 import { useToast } from '../../lib/toast'
+import { UserDrawer } from './UserDrawer'
 import './admin.css'
 
 interface Row {
@@ -23,6 +24,8 @@ export default function UsersPage() {
   const [form, setForm] = useState({ name: '', username: '', role: 'user' })
   const [created, setCreated] = useState<Created | null>(null)
   const [err, setErr] = useState('')
+  const [picked, setPicked] = useState<string[]>([])
+  const [open, setOpen] = useState<Row | null>(null)
   const refresh = () => { void qc.invalidateQueries({ queryKey: ['admin'] }) }
 
   const create = useMutation({
@@ -45,6 +48,12 @@ export default function UsersPage() {
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Action failed'),
   })
+  const bulk = useMutation({
+    mutationFn: (action: 'disable' | 'enable' | 'logout') => post<{ done: string[]; failed: { id: string; reason: string }[] }>('/api/admin/users/bulk', { ids: picked, action }),
+    onSuccess: (d) => { toast(`${d.done.length} done${d.failed.length ? `, ${d.failed.length} refused` : ''}`); setPicked([]); refresh() },
+    onError: (e) => toast(e instanceof ApiError ? e.message : 'Bulk action failed'),
+  })
+  const tick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
   const sure = (text: string, fn: () => void) => { if (confirm(text)) fn() }
   const submit = (ev: FormEvent) => { ev.preventDefault(); setErr(''); create.mutate() }
   const rows = q.data?.users ?? []
@@ -55,6 +64,7 @@ export default function UsersPage() {
         <h1>Users</h1>
         <span className="chip muted">{rows.filter((r) => r.online).length} online · {rows.length} total</span>
         <span className="spacer" />
+        <a className="btn sm" href="/api/admin/users.csv" download>Export CSV</a>
         <span className="sub">Nobody can sign up on their own. You add and remove people here.</span>
       </div>
 
@@ -81,13 +91,21 @@ export default function UsersPage() {
         </div>
       )}
 
+      {picked.length > 0 && (
+        <div className="bulkbar"><b>{picked.length} selected</b><span className="spacer" />
+          <button className="btn sm" onClick={() => sure(`Sign ${picked.length} people out?`, () => bulk.mutate('logout'))}>Sign out</button>
+          <button className="btn sm" onClick={() => bulk.mutate('enable')}>Enable</button>
+          <button className="btn sm danger" onClick={() => sure(`Disable ${picked.length} accounts? They are signed out at once.`, () => bulk.mutate('disable'))}>Disable</button>
+          <button className="btn sm" onClick={() => setPicked([])}>Clear</button></div>
+      )}
       <div className="card">
         <div className="scroll">
           <table>
-            <thead><tr><th className="l">Name</th><th className="l">Role</th><th className="l">Status</th><th className="l">Online</th><th className="l">Device</th><th className="l">Strategy</th><th>Open</th><th>Unrealized</th><th>Realized</th><th>Actions</th></tr></thead>
+            <thead><tr><th /><th className="l">Name</th><th className="l">Role</th><th className="l">Status</th><th className="l">Online</th><th className="l">Device</th><th className="l">Strategy</th><th>Open</th><th>Unrealized</th><th>Realized</th><th>Actions</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
+                  <td>{r.can_view && r.id !== me?.user.id && r.status !== 'DELETED' && <input type="checkbox" checked={picked.includes(r.id)} onChange={() => tick(r.id)} aria-label={`Select ${r.name}`} />}</td>
                   <td className="l"><b>{r.name}</b> <span className="sub mono">{r.username}</span></td>
                   <td className="l">{r.role}</td>
                   <td className="l"><span className={`chip ${statusChip(r.status)}`}>{r.status}</span></td>
@@ -101,6 +119,7 @@ export default function UsersPage() {
                   <td className={`num ${sign(r.live_realized)}`}>{money(r.live_realized)}</td>
                   <td>
                     <span className="btnrow">
+                      {r.can_view && <button className="btn sm" onClick={() => setOpen(r)}>Limits &amp; notes</button>}
                       {r.can_view && <Link className="btn sm primary" to={`/admin/users/${r.id}/view/top-bottom`}>View as user</Link>}
                       {r.can_view && r.status !== 'DELETED' && r.id !== me?.user.id && <>
                         <button className="btn sm" disabled={!r.online} onClick={() => sure(`Sign ${r.name} out now?`, () => act.mutate({ id: r.id, kind: 'logout' }))}>Sign out</button>
@@ -114,11 +133,12 @@ export default function UsersPage() {
                   </td>
                 </tr>
               ))}
-              {!rows.length && <tr><td colSpan={10} className="empty">{q.isLoading ? 'Loading…' : 'No users yet.'}</td></tr>}
+              {!rows.length && <tr><td colSpan={11} className="empty">{q.isLoading ? 'Loading…' : 'No users yet.'}</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
+      {open && <UserDrawer user={open} canManage={open.id !== me?.user.id} onClose={() => setOpen(null)} />}
     </div>
   )
 }

@@ -129,7 +129,35 @@ CREATE TABLE user_settings (          -- small per-user preferences (LIVE mode o
 );
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3)]
+_V4 = """
+CREATE TABLE user_limits (            -- what an account may do in the paper simulator; set by an admin, enforced on the server
+  user_id TEXT PRIMARY KEY,
+  max_lots INTEGER,                   -- total lots across open positions (NULL = no limit)
+  allowed_symbols TEXT,               -- JSON list, e.g. ["NIFTY"] (NULL = all)
+  updated_by TEXT,
+  updated_at REAL NOT NULL
+);
+
+CREATE TABLE user_notes (             -- internal notes about an account, visible to admins only
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  note TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX idx_user_notes_user ON user_notes (user_id, id);
+
+CREATE TABLE announcement (           -- one banner shown to everybody who is signed in
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  message TEXT NOT NULL,
+  level TEXT NOT NULL,
+  set_by TEXT NOT NULL,
+  updated_at REAL NOT NULL
+);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

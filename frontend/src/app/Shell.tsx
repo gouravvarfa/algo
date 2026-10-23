@@ -6,6 +6,7 @@ import { useSession } from '../lib/session'
 import { useTheme } from '../lib/theme'
 import type { IndexQuote } from '../lib/types'
 import { Icon, type IconName } from './Icon'
+import '../features/admin/admin.css'
 
 interface Item { to: string; label: string; icon: IconName }
 
@@ -21,6 +22,12 @@ const MAIN: Item[] = [
 function titleFor(pathname: string): string {
   const all = [...MAIN, { to: '/account', label: 'Account', icon: 'user' as IconName }]
   return all.find((i) => pathname === i.to || pathname.startsWith(i.to + '/'))?.label ?? 'Algo Trading'
+}
+
+function AnnouncementBanner() {
+  const q = useQuery({ queryKey: ['announcement'], queryFn: () => get<{ announcement: { message: string; level: string } | null }>('/api/announcement'), refetchInterval: 60_000, retry: false })
+  const a = q.data?.announcement
+  return a ? <div className={`banner ${a.level}`} role="status" style={{ margin: '12px 24px 0' }}><span>{a.message}</span></div> : null
 }
 
 function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string }) {
@@ -94,6 +101,7 @@ export function Shell() {
     <div className="shell">
       <Sidebar />
       <StatusBar />
+      <AnnouncementBanner />
       <Outlet />
     </div>
   )

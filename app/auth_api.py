@@ -127,6 +127,10 @@ def gate(request: Request):
         return resp
     request.state.user = {"id": row["user_id"], "username": row["username"], "name": row["name"], "role": row["role"], "created_by": row["created_by"]}
     request.state.session_id, request.state.csrf = row["id"], row["csrf_token"]
+    from app import admin_extra
+    blocked = admin_extra.ip_gate(request)
+    if blocked is not None:
+        return blocked
     if request.method in ("POST", "PUT", "PATCH", "DELETE") and path.startswith("/api/"):
         if not hmac.compare_digest(request.headers.get("x-csrf-token", ""), row["csrf_token"]):
             return err(403, "CSRF", "Missing or wrong CSRF token. Reload the page.")

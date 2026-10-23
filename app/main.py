@@ -17,7 +17,7 @@ from app.providers.angelone_provider import AngelOneProvider
 from app.options import api as options_api
 from app.options import collector as option_collector
 from app import auth, auth_api
-from app import admin_view, user_data
+from app import admin_extra, admin_view, user_data
 from app.ops import api as ops_api, context as ops_context, selftests as ops_selftests, stats as ops_stats
 from app.security import authz, mode as login_mode
 from app.security.users import AuthError
@@ -74,6 +74,7 @@ app.include_router(auth_api.router)
 app.include_router(ops_api.router)
 app.include_router(user_data.router)
 app.include_router(admin_view.router)
+app.include_router(admin_extra.router)
 app.add_exception_handler(AuthError, auth_api.handle_auth_error)
 
 

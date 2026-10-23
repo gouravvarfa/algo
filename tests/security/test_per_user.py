@@ -113,14 +113,15 @@ def test_admin_views_a_user_read_only_and_it_is_audited_once(db, new_client, eng
     assert [v["by"] for v in seen] == ["adminx"]
 
 
-def test_view_as_is_read_only(db, new_client, eng):
+def test_view_as_is_read_only_and_editing_is_a_separate_audited_action(db, new_client, eng):
     admin, user = make_user(db, "adminx", "admin"), make_user(db, "anil")
     eng.instruments["ia"] = _inst("ia", user.id)
     ca = _login(new_client, admin)
-    for method, url in (("POST", f"/api/admin/users/{user.id}/overview"), ("PUT", f"/api/admin/users/{user.id}/sim-positions"),
-                        ("DELETE", f"/api/admin/users/{user.id}/instruments/ia"), ("PUT", f"/api/admin/users/{user.id}/settings")):
-        assert api(ca, method, url, json={}).status_code in (404, 405)
-    assert "ia" in eng.instruments
+    assert api(ca, "POST", f"/api/admin/users/{user.id}/overview", json={}).status_code in (404, 405)       # the mirror itself never writes
+    # changing an account's data is a deliberate admin action with its own routes (see test_admin_extra); it is audited
+    assert api(ca, "DELETE", f"/api/admin/users/{user.id}/instruments/ia").status_code == 200
+    assert "ia" not in eng.instruments
+    assert any(e["action"] == "admin.remove_instrument" for e in ca.get("/api/admin/audit?limit=10").json()["entries"])
 
 
 def test_who_may_view_whom(db, new_client, eng):

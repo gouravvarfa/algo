@@ -136,6 +136,6 @@ def my_activity(request: Request, limit: int = 50, c=Depends(db)):
     u = getattr(request.state, "user", None)
     if u is None:
         return {"views": []}
-    rows = c.execute("SELECT ts, detail_json FROM audit_log WHERE action='admin.view_as' AND target_id=? ORDER BY id DESC LIMIT ?",
+    rows = c.execute("SELECT ts, action, detail_json FROM audit_log WHERE action IN ('admin.view_as','admin.edit_profile','admin.edit_positions','admin.remove_instrument','admin.edit_setting','user.limits') AND target_id=? ORDER BY id DESC LIMIT ?",
                      (u["id"], max(1, min(limit, 200)))).fetchall()
-    return {"views": [{"at": r["ts"], "by": (json.loads(r["detail_json"]) or {}).get("actor")} for r in rows]}
+    return {"views": [{"at": r["ts"], "by": (json.loads(r["detail_json"]) or {}).get("actor"), "what": r["action"]} for r in rows]}
