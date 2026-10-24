@@ -27,8 +27,9 @@ def provisioning_uri(secret: str, username: str) -> str:
 
 
 def qr_svg(uri: str) -> str:
-    """The setup QR as an inline SVG (no image file, nothing leaves the server)."""
-    return segno.make(uri, error="m").svg_inline(scale=5, border=2, dark="#0f172a", light="#ffffff")
+    """The setup QR as an inline SVG (no image file, nothing leaves the server). Pure black on white, the full 4-module quiet zone the
+    QR standard asks for, and whole-pixel modules (6 px) so phone cameras read it reliably; the page shows it at its natural size."""
+    return segno.make(uri, error="m").svg_inline(scale=6, border=4, dark="#000000", light="#ffffff")
 
 
 def match_step(secret: str, code: str, now: float, last_used_step: int | None) -> int | None:
