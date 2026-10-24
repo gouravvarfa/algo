@@ -81,7 +81,6 @@ p { margin: 0; }
 .pill.paper { color: var(--warning); }
 .page { padding: 18px 24px 40px; display: grid; gap: 14px; max-width: 1680px; margin: 0 auto; }
 .page > * { min-width: 0; }
-}
 
 /* ---- cards, stats, tables ---- */
 .card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px; min-width: 0; }

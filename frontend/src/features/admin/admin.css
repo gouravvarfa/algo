@@ -31,3 +31,14 @@ td.wrap { white-space: normal; max-width: 520px; overflow-wrap: anywhere; }
 .btnrow.acts { display: grid; grid-template-columns: repeat(3, 112px); gap: 6px; justify-content: end; }
 .btnrow.acts .btn { width: 100%; justify-content: center; text-align: center; white-space: nowrap; }
 td:has(> .btnrow.acts) { width: 1%; }
+
+/* iPad / small laptop: keep the Users table inside its card (no sideways scrolling, no clipped buttons) */
+@media (max-width: 1180px) {
+  .btnrow.acts { grid-template-columns: repeat(2, 108px); }
+  .page table th:nth-child(6), .page table td:nth-child(6) { display: none; }          /* the Device column is the first to go */
+  form.card.row .field small { display: none; }
+  form.card.row { align-items: flex-end; }
+}
+@media (max-width: 860px) {
+  .btnrow.acts { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+}
