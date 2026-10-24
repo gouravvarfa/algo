@@ -47,11 +47,11 @@ def test_unknown_role_is_refused(db):
     assert e.value.code == "INVALID_ROLE"
 
 
-def test_setup_shows_a_qr_and_a_fresh_secret_every_time(db):
+def test_setup_shows_the_same_secret_on_reload_and_keeps_it_encrypted(db):
     _, token = new_invite(db)
     a, b = users.begin_setup(db, token), users.begin_setup(db, token)
     assert a["qr_svg"].lstrip().startswith("<svg") and a["username"] == "asha"
-    assert a["secret"] != b["secret"]
+    assert a["secret"] == b["secret"]                                   # a reload or a second tab must not invalidate the scan
     stored = db.execute("SELECT totp_secret_enc FROM users WHERE username='asha'").fetchone()[0]
     assert a["secret"].replace(" ", "") not in stored and b["secret"].replace(" ", "") not in stored       # encrypted at rest
 
@@ -108,13 +108,16 @@ def test_wrong_code_weak_password_or_no_qr_yet_are_refused_and_the_link_stays_us
     assert user["status"] == "ACTIVE"
 
 
-def test_a_qr_that_was_only_displayed_cannot_be_used_after_the_page_is_reloaded(db):
-    _, token = new_invite(db)
-    old = users.begin_setup(db, token)["secret"].replace(" ", "")
-    users.begin_setup(db, token)                                               # the user reloaded the page: a new secret replaces it
-    with pytest.raises(AuthError) as e:
-        users.complete_setup(db, token, PASSWORD, pyotp.TOTP(old).now())
-    assert e.value.code == "INVALID_CODE"
+def test_a_scan_from_the_first_load_still_works_after_a_reload_but_not_after_a_new_link(db):
+    user, token = new_invite(db)
+    first = users.begin_setup(db, token)["secret"].replace(" ", "")
+    users.begin_setup(db, token)                                               # reload / second tab: same secret, the earlier scan stays valid
+    users.complete_setup(db, token, PASSWORD, pyotp.TOTP(first).now())
+    _, token2 = new_invite(db, "ravi")
+    old = users.begin_setup(db, token2)["secret"].replace(" ", "")
+    rid = db.execute("SELECT id FROM users WHERE username='ravi'").fetchone()[0]
+    token3 = users.issue_invite(db, rid)                                       # a NEW link (lost link / admin reset) gets a new secret
+    assert users.begin_setup(db, token3)["secret"].replace(" ", "") != old
 
 
 def test_a_new_link_replaces_the_old_one(db):

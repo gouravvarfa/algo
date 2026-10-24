@@ -79,6 +79,7 @@ def create_user(c: sqlite3.Connection, *, name: str, username: str, email: str |
 def issue_invite(c: sqlite3.Connection, user_id: str, now: float | None = None) -> str:
     now = time.time() if now is None else now
     with write_tx(c):
+        c.execute("UPDATE users SET totp_secret_enc=NULL WHERE id=? AND status='INVITED'", (user_id,))     # a new link gets a new QR code
         return _insert_invite(c, user_id, now)
 
 
@@ -96,13 +97,17 @@ def _find_invite(c: sqlite3.Connection, token: str, now: float) -> tuple[sqlite3
 
 
 def begin_setup(c: sqlite3.Connection, token: str, now: float | None = None) -> dict:
-    """Show the setup page's data. A NEW authenticator secret is made on every call, so a QR code that was only displayed (not completed)
-    cannot be used later: the secret is shown for the setup in front of the user and only that one is accepted."""
+    """Show the setup page's data. The authenticator secret is made on the first call and then kept for this invite, so reloading the page
+    or opening the link in a second tab shows the SAME QR code (a new secret on every load made codes from an earlier scan fail).
+    A new invite (admin reset / reset_user.py) clears the secret, so a new link always gets a new one."""
     now = time.time() if now is None else now
     _, user = _find_invite(c, token, now)
-    secret = totp.new_secret()
-    with c:
-        c.execute("UPDATE users SET totp_secret_enc=? WHERE id=?", (crypto.encrypt(secret), user["id"]))
+    if user["status"] == "INVITED" and user["totp_secret_enc"]:
+        secret = crypto.decrypt(user["totp_secret_enc"])
+    else:
+        secret = totp.new_secret()
+        with c:
+            c.execute("UPDATE users SET totp_secret_enc=? WHERE id=?", (crypto.encrypt(secret), user["id"]))
     uri = totp.provisioning_uri(secret, user["username"])
     return {"name": user["name"], "username": user["username"], "qr_svg": totp.qr_svg(uri),
             "secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4))}
