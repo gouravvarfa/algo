@@ -123,7 +123,7 @@ table.oc td.oibar { background-repeat: no-repeat; background-size: 100% 60%; bac
 table.oc td.oibar.ce { background-image: linear-gradient(to left, color-mix(in srgb, var(--success) 22%, transparent) var(--bar, 0%), transparent var(--bar, 0%)); }
 table.oc td.oibar.pe { background-image: linear-gradient(to right, color-mix(in srgb, var(--danger) 20%, transparent) var(--bar, 0%), transparent var(--bar, 0%)); }
 /* narrow chain (a tablet, or a split view): hide IV and delta first, so the price, OI and strike keep their room */
-@container (max-width: 600px) {
+@container (max-width: 500px) {
   table.oc th.iv, table.oc td.iv { display: none; }
   table.oc td.ltp small { display: none; }
   table.oc td.ltp { min-width: 0; }
@@ -137,3 +137,12 @@ table.oc td.ltp .bs { gap: 4px; }
   .bs button { width: 26px; height: 26px; }
   table.oc td.ltp.ce { padding-left: 62px; } table.oc td.ltp.pe { padding-right: 62px; }
 }
+
+/* the header row of every sticky table stays solid so rows scrolling under it never show through (frosted, but opaque enough to read) */
+table thead th { background-clip: padding-box; }
+:root:not([data-theme="dark"]) table.oc thead th { background: #f4f7fb; }
+:root[data-theme="dark"] table.oc thead th { background: #1c2129; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) table.oc thead th { background: #1c2129; } }
+table.oc thead th { z-index: 6; }
+table.oc td.ltp { z-index: 0; }
+table.oc td.ltp .bs { z-index: 1; }

@@ -222,3 +222,27 @@ def test_a_thinly_traded_stock_contract_that_prints_late_is_not_thrown_away():
     mins = [mk(12, 10, 38), mk(12, 10, 39), mk(13, 9, 26), mk(13, 9, 27), mk(14, 9, 15)]       # day 2 opens at 09:26: illiquid, but complete
     assert trim_partial_first_day(mins) == []                                                    # the index rule gives up (it needs a 09:20 start)
     assert [m.ts.day for m in trim_partial_first_day(mins, lenient=True)] == [13, 13, 14]       # the stock rule drops only the partial first day
+
+
+def test_a_paused_strategy_still_gets_one_read_only_snapshot_after_a_restart(tmp_path, monkeypatch):
+    import asyncio
+    from app.ops import flags
+    from app.paper_trading import engine as em
+    monkeypatch.setattr(em, "STATE_PATH", tmp_path / "w.json"); monkeypatch.setattr(em, "JOURNAL_PATH", tmp_path / "j.jsonl"); monkeypatch.setattr(em, "LEGACY_OWNER_PATH", tmp_path / "l.txt")
+    class P:
+        async def get_session(self): return object()
+        def reset_session(self): pass
+    e = em.PaperEngine(P())
+    inst = em.Instrument(id="p1", symbol="DLF", instrument_type="FUTURE", timeframe="1D", quantity=950, token="1", trading_symbol="DLFFUT", exch_seg="NFO",
+                         from_date="2026-01-01T00:00:00", added_at="2026-01-01T00:00:00", owner="u-off")
+    e.instruments["p1"] = inst
+    calls = []
+    async def fake(i):
+        calls.append(i.id); return {"instrument": {"id": i.id}, "position": None, "trades": []}
+    monkeypatch.setattr(e, "_build_snapshot", fake)
+    monkeypatch.setattr(e, "_journal", lambda *a, **k: calls.append("JOURNAL"))
+    monkeypatch.setattr(flags, "engine_paused", lambda owner=None: owner == "u-off")
+    asyncio.run(e.refresh_one(inst))
+    assert e.snapshots["p1"]["paused"] is True and calls == ["p1"]            # one look, marked paused, nothing journaled
+    asyncio.run(e.refresh_one(inst))
+    assert calls == ["p1"]                                                    # while paused it is never evaluated again

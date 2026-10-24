@@ -721,10 +721,16 @@ class PaperEngine:
 
     async def refresh_one(self, inst: Instrument) -> None:
         owner = getattr(inst, "owner", None)
-        if ops_flags.engine_paused(owner):          # developer kill switch (global or this user's): keep the last stored snapshot, evaluate nothing
+        paused = ops_flags.engine_paused(owner)
+        if paused and inst.id in self.snapshots:    # kill switch / strategy OFF: keep the last stored snapshot, evaluate nothing
             return
         try:
+            # first look after a restart while paused: build ONE read-only snapshot so the page has something to show (nothing is journaled)
             self.snapshots[inst.id] = await self._build_snapshot(inst)
+            if paused:
+                self.snapshots[inst.id]["paused"] = True
+                self.errors.pop(inst.id, None)
+                return
             self.errors.pop(inst.id, None)
             if self.faults.pop(inst.id, None) is not None:
                 ops_incidents.record("engine", f"{inst.symbol} recovered", severity="info", user_id=owner, auto_action="fault cleared")

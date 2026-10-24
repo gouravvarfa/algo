@@ -54,6 +54,9 @@ async def run_once(provider, symbols=SYMBOLS) -> dict:
         started = dt.datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds")
         try:
             s = await intraday.ingest(session, info, DAYS_BACK, HORIZON_DAYS, PAD_POINTS.get(sym, 300.0), log=lambda m: log.info("collector %s: %s", sym, m))
+            fixed = await intraday.repair_errors(session, info, DAYS_BACK, log=lambda m: log.info("collector %s: %s", sym, m))      # a rate-limited contract gets a second chance
+            s["errors"] = fixed["still_failing"]
+            s["contracts_with_data"] += fixed["fixed"]
             st[sym] = {"started": started, "finished": dt.datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds"), "ok": True,
                        "contracts": s["contracts"], "with_data": s["contracts_with_data"], "option_minutes": s["rows"],
                        "rejected": s["rejected"], "errors": s["errors"][:20]}

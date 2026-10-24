@@ -325,7 +325,7 @@ body::after { background:
   background: linear-gradient(145deg, rgba(255, 255, 255, .46), rgba(255, 255, 255, .22)); backdrop-filter: blur(20px) saturate(170%); -webkit-backdrop-filter: blur(20px) saturate(170%);
   border: 1px solid rgba(255, 255, 255, .78); box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 14px 36px -20px rgba(30, 45, 80, .30); }
 :root:not([data-theme="dark"]) .tbhero, :root:not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="dark"]) .tbhero.down { background: linear-gradient(135deg, rgba(255,255,255,.55), rgba(220, 226, 238, .30)); backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%); border-color: rgba(255,255,255,.85); }
-:root:not([data-theme="dark"]) table th, :root:not([data-theme="dark"]) .scroll { background: transparent; }
+:root:not([data-theme="dark"]) .scroll { background: transparent; }
 :root[data-theme="dark"] .card, :root[data-theme="dark"] .stats, :root[data-theme="dark"] .tbkpis .stat, :root[data-theme="dark"] .kpi, :root[data-theme="dark"] .tile {
   background: linear-gradient(160deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025)); backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%); border-color: rgba(255, 255, 255, .11); }
 :root[data-theme="dark"] .tbhero, :root[data-theme="dark"] .tbhero.up, :root[data-theme="dark"] .tbhero.down { background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.03)); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); }

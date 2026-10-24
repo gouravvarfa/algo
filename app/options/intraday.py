@@ -131,6 +131,40 @@ async def ingest(session, info: UnderlyingInfo, days_back: int = 30, expiry_hori
     return summary
 
 
+async def repair_errors(session, info: UnderlyingInfo, days_back: int = 5, db: Path | None = None, log=print, pause: float = 1.2) -> dict:
+    """Fetch again every still-listed contract whose most recent download failed (Angel One answers HTTP 403 when asked too fast).
+    Real data only: a contract that still fails stays missing and is reported. Safe to run any number of times (upsert by minute)."""
+    import asyncio
+    now = dt.datetime.now(IST).replace(tzinfo=None, second=0, microsecond=0)
+    start = (now - dt.timedelta(days=days_back)).replace(hour=9, minute=15)
+    c = connect(db)
+    failed = {(r[0], float(r[1]), r[2]) for r in c.execute(
+        "SELECT f.expiry, f.strike, f.opt FROM fetch_log f WHERE f.symbol=? AND f.opt!='IDX' AND f.status='error' AND f.fetched_at = "
+        "(SELECT MAX(g.fetched_at) FROM fetch_log g WHERE g.symbol=f.symbol AND g.expiry=f.expiry AND g.strike=f.strike AND g.opt=f.opt)", (info.name,))}
+    todo = [k for k in info.contracts if k.expiry >= now.date() and (k.expiry.isoformat(), float(k.strike), k.option_type) in failed]
+    out = {"tried": len(todo), "fixed": 0, "still_failing": []}
+    stamp = lambda: dt.datetime.now().isoformat(timespec="seconds")
+    for k in todo:
+        for attempt in (1, 2, 3):
+            try:
+                raw = await _fetch(session, "NFO", k.token, start, now)
+            except AngelOneApiError as exc:
+                if attempt == 3:
+                    out["still_failing"].append(f"{k.symbol}: {exc}")
+                else:
+                    await asyncio.sleep(pause * 3)
+                continue
+            rows, bad = clean_rows(raw)
+            with c:
+                c.executemany("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?,?,?)", [(info.name, k.expiry.isoformat(), k.strike, k.option_type, *r) for r in rows])
+                c.execute("INSERT INTO fetch_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (info.name, k.expiry.isoformat(), k.strike, k.option_type, k.token, str(start), str(now), len(rows), bad, "ok", "repaired", stamp()))
+            out["fixed"] += 1
+            log(f"repaired {k.symbol}: {len(rows)} minutes")
+            break
+        await asyncio.sleep(pause)
+    return out
+
+
 # ---------------------------------------------------------------- reads
 def days(c: sqlite3.Connection, symbol: str) -> list[dict]:
     """Trading days that have index minutes AND option minutes, with coverage counts."""
