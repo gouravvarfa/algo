@@ -21,13 +21,13 @@
 .simmain { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 14px; align-items: start; }
 .rcol { display: grid; gap: 14px; min-width: 0; align-content: start; }
 /* the chain is pinned: it stays visible (premiums, B/S buttons) while positions and payoff on the right are scrolled */
-.chainpanel { position: sticky; top: calc(var(--bar-h) + 10px); height: calc(100vh - var(--bar-h) - 168px); min-height: 420px; display: flex; flex-direction: column; padding: 0; }
-.chainpanel .card-head { padding: 10px 14px; margin: 0; flex-wrap: nowrap; }
+.chainpanel { position: sticky; top: calc(var(--bar-h) + 10px); height: calc(100vh - var(--bar-h) - 200px); min-height: 380px; display: flex; flex-direction: column; padding: 0; }
+.chainpanel .card-head { padding: 7px 12px; margin: 0; flex-wrap: wrap; gap: 4px 8px; } .chainpanel .card-head h2 { white-space: nowrap; font-size: 13.5px; } .chainpanel .card-head .chip, .chainpanel .card-head label.inline { white-space: nowrap; } .chainpanel .card-head .spacer { flex: 1 1 0; min-width: 0; }
 .chainbox { position: relative; flex: 1 1 0; min-height: 0; overflow: auto; border-top: 1px solid var(--border); }
 .overlay { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-surface) 65%, transparent); display: grid; place-items: center; font-weight: 600; color: var(--text-secondary); z-index: 5; }
 table.oc { font-size: 12.5px; }
 table.oc thead th { position: sticky; background: var(--bg-surface); z-index: 2; }
-table.oc thead tr:first-child th { top: 0; height: 28px; padding-top: 0; padding-bottom: 0; } table.oc thead tr:nth-child(2) th { top: 27px; }
+table.oc thead tr:first-child th { top: 0; padding-top: 4px; padding-bottom: 4px; }
 table.oc th.side { text-align: center; font-size: 11px; letter-spacing: .1em; } table.oc th.mid { text-align: center; } table.oc th.pl { text-align: left; }
 table.oc tbody td { height: 30px; padding: 2px 5px; line-height: 1.15; }
 table.oc td.k { text-align: center; font-weight: 700; background: var(--bg-hover); border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
@@ -105,3 +105,35 @@ table.pt tr.closed td { opacity: .6; } table.pt .legnote { white-space: normal; 
 .tl { display: flex; align-items: center; gap: 10px; flex: 1 1 300px; font-size: 12px; color: var(--text-muted); }
 @media (max-width: 860px) { .actbar { left: 0; padding: 8px 12px; } .simmain { grid-template-columns: minmax(0, 1fr); } .chainpanel { position: static; height: 420px; } .rk { grid-template-columns: minmax(0, 1fr); } .gk { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 1100px) { .simmain { grid-template-columns: minmax(0, 1fr); } .chainpanel { position: static; height: 420px; } }
+/* the preset picker sits on its own row and can never be wider than the Positions card */
+.posctl > label.inline:first-child { flex: 1 1 100%; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.posctl > label.inline:first-child select { flex: 1 1 auto; width: 100%; min-width: 0; }
+.posctl input, .posctl label { min-width: 0; }
+
+/* ---- option chain: clean, touch-friendly, with OI bars ---- */
+.chainbox { container-type: inline-size; }
+table.oc { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
+table.oc thead th { font-size: 10.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+table.oc thead th.mid small { display: block; font-size: 9.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--accent); }
+table.oc tbody tr:hover td:not(.k) { background-color: var(--bg-hover); }
+table.oc tbody td { border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+table.oc td.k { font-size: 13px; width: 92px; }
+table.oc tr.atm td { border-top: 1px solid var(--accent); border-bottom: 1px solid var(--accent); }
+table.oc td.oibar { background-repeat: no-repeat; background-size: 100% 60%; background-position: center; }
+table.oc td.oibar.ce { background-image: linear-gradient(to left, color-mix(in srgb, var(--success) 22%, transparent) var(--bar, 0%), transparent var(--bar, 0%)); }
+table.oc td.oibar.pe { background-image: linear-gradient(to right, color-mix(in srgb, var(--danger) 20%, transparent) var(--bar, 0%), transparent var(--bar, 0%)); }
+/* narrow chain (a tablet, or a split view): hide IV and delta first, so the price, OI and strike keep their room */
+@container (max-width: 600px) {
+  table.oc th.iv, table.oc td.iv { display: none; }
+  table.oc td.ltp small { display: none; }
+  table.oc td.ltp { min-width: 0; }
+}
+/* the B / S buttons always have their own gutter beside the price (left of a call, right of a put), so they never cover the number */
+table.oc td.ltp.ce { padding-left: 56px; } table.oc td.ltp.pe { padding-right: 56px; }
+table.oc td.ltp .bs { gap: 4px; }
+.bs button { width: 24px; height: 24px; font-size: 11px; border-radius: 6px; cursor: pointer; }
+@media (hover: none) {
+  table.oc tbody td { height: 44px; }
+  .bs button { width: 26px; height: 26px; }
+  table.oc td.ltp.ce { padding-left: 62px; } table.oc td.ltp.pe { padding-right: 62px; }
+}

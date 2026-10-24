@@ -26,3 +26,8 @@ td.wrap { white-space: normal; max-width: 520px; overflow-wrap: anywhere; }
 .banner.info { background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface)); }
 .banner.warn { background: color-mix(in srgb, var(--warning) 18%, var(--bg-surface)); }
 .banner.bad { background: color-mix(in srgb, var(--danger) 16%, var(--bg-surface)); }
+
+/* Users table actions: a tidy 3-column grid of equal-width buttons, right-aligned */
+.btnrow.acts { display: grid; grid-template-columns: repeat(3, 112px); gap: 6px; justify-content: end; }
+.btnrow.acts .btn { width: 100%; justify-content: center; text-align: center; white-space: nowrap; }
+td:has(> .btnrow.acts) { width: 1%; }

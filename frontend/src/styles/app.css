@@ -81,13 +81,6 @@ p { margin: 0; }
 .pill.paper { color: var(--warning); }
 .page { padding: 18px 24px 40px; display: grid; gap: 14px; max-width: 1680px; margin: 0 auto; }
 .page > * { min-width: 0; }
-@media (max-width: 860px) {
-  .shell { padding-left: 0; }
-  .sidebar { position: sticky; top: 0; width: auto; height: auto; flex-direction: row; align-items: center; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .logo { padding: 0 8px 0 0; } .logo span, .idxcards, .themeseg, .navgroup { display: none; }
-  .navlink.active::before { display: none; }
-  .topbar { position: static; padding: 0 16px; } .topbar .title { display: none; }
-  .page { padding: 14px; }
 }
 
 /* ---- cards, stats, tables ---- */
@@ -150,8 +143,6 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .console-admin { --accent: #7c3aed; --accent-soft: #efe8ff; }
 .console-dev { --accent: #0e7490; --accent-soft: #dff4f8; }
 :root[data-theme="dark"] .console-admin { --accent: #a78bfa; --accent-soft: #241c3a; } :root[data-theme="dark"] .console-dev { --accent: #22d3ee; --accent-soft: #0d2a31; }
-.console .sidebar { background: linear-gradient(180deg, var(--bg-surface), color-mix(in srgb, var(--accent) 5%, var(--bg-surface))); }
-.console .logo i { background: var(--accent); }
 .consolebadge { font-size: 11px; font-weight: 700; letter-spacing: .1em; padding: 3px 10px; border-radius: 6px; background: var(--accent); color: #fff; }
 .pill.sys.okk { color: var(--success); } .pill.sys.degr { color: var(--warning); } .pill.sys.down { color: var(--danger); }
 .pill.sys i { background: currentColor; }
@@ -159,24 +150,189 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .btn.primary { border-color: var(--accent); }
 .kvrow { display: contents; }
 
-/* every page of the trading app sits on the same soft grey wash that fades out towards the bottom; cards stay solid */
-.shell:not(.console) .page { min-height: 100%; background:
-  radial-gradient(90% 55% at 100% 0%, color-mix(in srgb, #64748b 13%, transparent), transparent 70%),
-  radial-gradient(70% 45% at 0% 0%, color-mix(in srgb, #94a3b8 10%, transparent), transparent 70%),
-  linear-gradient(180deg, color-mix(in srgb, #64748b 7%, var(--bg-page)) 0%, var(--bg-page) 70%); }
-.shell:not(.console) .page .card { box-shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 24px -16px rgba(15,23,42,.22); }
-:root[data-theme="dark"] .shell:not(.console) .page { background: none; }
 
-/* the grey wash drifts slowly behind the cards */
-.shell:not(.console) .page { background-size: 160% 160%, 160% 160%, 100% 100%; background-position: 0% 0%, 100% 0%, 0 0; animation: pagedrift 18s ease-in-out infinite alternate; }
-@keyframes pagedrift { from { background-position: 0% 0%, 100% 0%, 0 0; } to { background-position: 100% 60%, 0% 40%, 0 0; } }
-@media (prefers-reduced-motion: reduce) { .shell:not(.console) .page { animation: none; } }
 
-/* trading sidebar: light black shadow, darker on the left edge and fading out to the right, drifting slowly */
-.shell:not(.console) .sidebar {
-  background: linear-gradient(90deg, color-mix(in srgb, #0f172a 30%, var(--bg-surface)) 0%, color-mix(in srgb, #0f172a 14%, var(--bg-surface)) 45%, color-mix(in srgb, #0f172a 2%, var(--bg-surface)) 100%);
-  background-size: 160% 100%; animation: sidebardrift 12s ease-in-out infinite alternate;
-  box-shadow: 6px 0 24px -12px rgba(15,23,42,.25);
+
+/* trading sidebar: plain, like the consoles */
+.shell:not(.console) .sidebar .consolelink { color: var(--text-secondary); font-size: 12.5px; }
+
+/* ---- trading app: same type as the admin / developer consoles (IBM Plex Sans, tabular figures) and smoother motion ---- */
+.shell:not(.console) .num, .shell:not(.console) .mono:not(pre), .shell:not(.console) .kv2 dd, .shell:not(.console) .idxcard .p, .shell:not(.console) .stat .v,
+.shell:not(.console) td.num, .shell:not(.console) .ohlc { font-family: var(--font-sans); font-variant-numeric: tabular-nums lining-nums; letter-spacing: 0; }
+.shell:not(.console) .stat .k, .shell:not(.console) .kpi .k, .shell:not(.console) .tbkpis .stat .k { font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: none; color: var(--text-muted); }
+.shell:not(.console) h1 { font-weight: 600; letter-spacing: -.01em; }
+.shell:not(.console) .card-head h2, .shell:not(.console) .card h2 { font-weight: 600; }
+
+@keyframes riseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.shell:not(.console) .page > * { animation: riseIn .35s cubic-bezier(.2,.7,.2,1) both; }
+.shell:not(.console) .page > *:nth-child(2) { animation-delay: .04s; } .shell:not(.console) .page > *:nth-child(3) { animation-delay: .08s; }
+.shell:not(.console) .page > *:nth-child(4) { animation-delay: .12s; } .shell:not(.console) .page > *:nth-child(n+5) { animation-delay: .16s; }
+.shell:not(.console) .card, .shell:not(.console) .tbkpis .stat, .shell:not(.console) .tbhero { transition: box-shadow .2s ease, transform .2s ease, border-color .2s ease; }
+.shell:not(.console) .tbkpis .stat:hover, .shell:not(.console) .card:hover { box-shadow: 0 2px 4px rgba(15,23,42,.06), 0 14px 30px -18px rgba(15,23,42,.3); }
+.shell:not(.console) .tbkpis .stat:hover { transform: translateY(-1px); }
+.shell:not(.console) .btn, .shell:not(.console) .navlink, .shell:not(.console) .seg button, .shell:not(.console) select, .shell:not(.console) input { transition: background-color .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease; }
+.shell:not(.console) .navlink { border-radius: 8px; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { .shell:not(.console) .page > * { animation: none; } .shell:not(.console) .tbkpis .stat:hover { transform: none; } html { scroll-behavior: auto; } }
+
+/* on / off switch (used on Top Bottom and in the developer console) */
+.toggle { width: 42px; height: 24px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-hover); position: relative; padding: 0; cursor: pointer; flex: none; transition: background-color .2s ease, border-color .2s ease; }
+.toggle i { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-muted); box-shadow: 0 1px 2px rgba(15,23,42,.3); transition: transform .2s ease, background-color .2s ease; }
+.toggle.on { background: var(--success-soft); border-color: var(--success); }
+.toggle.on i { transform: translateX(18px); background: var(--success); }
+.toggle:disabled { opacity: .5; cursor: not-allowed; }
+.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- tablet (iPad, 861-1180px): the same sidebar, a little slimmer, so the pages keep their width ---- */
+@media (min-width: 861px) and (max-width: 1180px) {
+  :root { --sb-w: 196px; }
+  .sidebar { padding: 14px 10px; }
+  .sidebar .navlink { padding-left: 10px; padding-right: 8px; font-size: 13px; }
+  .sidebar .logo small { display: none; }
+  .page { padding: 14px 16px 36px; }
 }
-@keyframes sidebardrift { from { background-position: 0 0; } to { background-position: 100% 0; } }
-@media (prefers-reduced-motion: reduce) { .shell:not(.console) .sidebar { animation: none; } }
+
+/* ---- dark mode, whole app: deep navy with a violet glow top-left and a blue glow on the right, glass cards, a glowing sidebar ---- */
+:root[data-theme="dark"] { --bg-page: #0c0f14; --bg-surface: #151a21; --bg-hover: #1e242d; --bg-soft: #181e26; --border: #28303b; --border-strong: #38424f; --accent-soft: #1a2740; --purple: #c3cde0; --purple-soft: #232a35;
+  --dark-glow:
+    radial-gradient(70% 46% at 6% 0%, rgba(255, 255, 255, .13), transparent 62%),
+    radial-gradient(62% 52% at 100% 34%, rgba(200, 210, 225, .08), transparent 66%),
+    linear-gradient(180deg, #151a21 0%, #0c0f14 58%, #0f1319 100%);
+  --dark-sidebar:
+    radial-gradient(130% 34% at 18% 0%, rgba(255, 255, 255, .20), transparent 62%),
+    radial-gradient(90% 36% at 105% 52%, rgba(200, 210, 225, .09), transparent 66%),
+    linear-gradient(180deg, #171c24 0%, #11151b 52%, #13181f 100%); }
+:root[data-theme="dark"] body { background: var(--dark-glow); background-attachment: fixed; }
+:root[data-theme="dark"] .shell .page { background: none; }
+:root[data-theme="dark"] .topbar { background: rgba(14, 18, 24, .74); backdrop-filter: blur(10px); border-bottom-color: rgba(255, 255, 255, .08); }
+:root[data-theme="dark"] .card, :root[data-theme="dark"] .stats, :root[data-theme="dark"] .tbkpis .stat, :root[data-theme="dark"] .kpi, :root[data-theme="dark"] .tile { background: linear-gradient(160deg, rgba(34, 40, 50, .92), rgba(20, 25, 32, .95)); border-color: rgba(255, 255, 255, .09); box-shadow: 0 10px 30px -18px rgba(0, 0, 0, .7); }
+:root[data-theme="dark"] .tbhero, :root[data-theme="dark"] .tbhero.up, :root[data-theme="dark"] .tbhero.down { background: linear-gradient(135deg, rgba(70, 78, 92, .55), rgba(21, 26, 33, .96) 70%); border-color: rgba(255, 255, 255, .13); }
+:root[data-theme="dark"] .actbar, :root[data-theme="dark"] .timebar { background: rgba(14, 18, 24, .9); backdrop-filter: blur(10px); }
+:root[data-theme="dark"] .sidebar { background: linear-gradient(180deg, rgba(255, 255, 255, .07) 0%, rgba(20, 25, 32, .55) 45%, rgba(14, 18, 24, .62) 100%); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); border-right-color: rgba(255, 255, 255, .08); }
+:root[data-theme="dark"] .sidebar .navlink { color: #bcc4d2; border: 1px solid transparent; border-radius: 14px; transition: background-color .2s ease, border-color .2s ease, color .2s ease; }
+:root[data-theme="dark"] .sidebar .navlink:hover { background: rgba(255, 255, 255, .07); color: #f2f5fa; }
+:root[data-theme="dark"] .sidebar .navlink.active { background: linear-gradient(90deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .05)); border-color: rgba(255, 255, 255, .18); color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 6px 18px -10px rgba(0, 0, 0, .7); }
+:root[data-theme="dark"] .sidebar .logo i { box-shadow: 0 8px 20px -8px rgba(60, 120, 255, .8); }
+:root[data-theme="dark"] .shell:not(.console) .sidebar .logo i { background: linear-gradient(135deg, #4aa3ff, #2a55e8); }
+:root[data-theme="dark"] .sidebar .logo small { color: #98a2b3; }
+:root[data-theme="dark"] .sidebar .navgroup { color: #8a94a6; }
+:root[data-theme="dark"] .sidebar .idxcard { background: linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); border: 1px solid rgba(255, 255, 255, .10); border-left: 3px solid rgba(255, 255, 255, .28); border-radius: 14px; }
+:root[data-theme="dark"] .sidebar .idxcard:has(.neg) { border-left-color: #ff5d73; background: linear-gradient(135deg, rgba(255, 93, 115, .14), rgba(255,255,255,.02)); }
+:root[data-theme="dark"] .sidebar .idxcard:has(.pos) { border-left-color: #2ee6a0; background: linear-gradient(135deg, rgba(46, 230, 160, .12), rgba(255,255,255,.02)); }
+:root[data-theme="dark"] .sidebar .idxcard b { color: #aab3c2; }
+:root[data-theme="dark"] .sidebar .themeseg { background: rgba(255,255,255,.05); border: 1px solid rgba(255, 255, 255, .12); border-radius: 999px; padding: 3px; }
+:root[data-theme="dark"] .sidebar .themeseg button { border-radius: 999px; color: #aab3c2; }
+:root[data-theme="dark"] .sidebar .themeseg button.on { background: linear-gradient(90deg, #eef1f6, #aeb6c4); color: #10141a; box-shadow: 0 8px 18px -8px rgba(0, 0, 0, .7); }
+:root[data-theme="dark"] .console-admin .sidebar .themeseg button.on { background: linear-gradient(90deg, #a78bfa, #6d3df0); }
+:root[data-theme="dark"] .console-dev .sidebar .themeseg button.on { background: linear-gradient(90deg, #22d3ee, #0e7490); }
+:root[data-theme="dark"] .sidebar .accountbox { border-top-color: rgba(255, 255, 255, .10); }
+@media (prefers-color-scheme: dark) {
+
+:root:not([data-theme="light"]):not([data-theme="dark"]) { --bg-page: #0c0f14; --bg-surface: #151a21; --bg-hover: #1e242d; --bg-soft: #181e26; --border: #28303b; --border-strong: #38424f; --accent-soft: #1a2740; --purple: #c3cde0; --purple-soft: #232a35;
+  --dark-glow:
+    radial-gradient(70% 46% at 6% 0%, rgba(255, 255, 255, .13), transparent 62%),
+    radial-gradient(62% 52% at 100% 34%, rgba(200, 210, 225, .08), transparent 66%),
+    linear-gradient(180deg, #151a21 0%, #0c0f14 58%, #0f1319 100%);
+  --dark-sidebar:
+    radial-gradient(130% 34% at 18% 0%, rgba(255, 255, 255, .20), transparent 62%),
+    radial-gradient(90% 36% at 105% 52%, rgba(200, 210, 225, .09), transparent 66%),
+    linear-gradient(180deg, #171c24 0%, #11151b 52%, #13181f 100%); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) body { background: var(--dark-glow); background-attachment: fixed; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .shell .page { background: none; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .topbar { background: rgba(14, 18, 24, .74); backdrop-filter: blur(10px); border-bottom-color: rgba(255, 255, 255, .08); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .card, :root:not([data-theme="light"]):not([data-theme="dark"]) .stats, :root:not([data-theme="light"]):not([data-theme="dark"]) .tbkpis .stat, :root:not([data-theme="light"]):not([data-theme="dark"]) .kpi, :root:not([data-theme="light"]):not([data-theme="dark"]) .tile { background: linear-gradient(160deg, rgba(34, 40, 50, .92), rgba(20, 25, 32, .95)); border-color: rgba(255, 255, 255, .09); box-shadow: 0 10px 30px -18px rgba(0, 0, 0, .7); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .tbhero, :root:not([data-theme="light"]):not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="light"]):not([data-theme="dark"]) .tbhero.down { background: linear-gradient(135deg, rgba(70, 78, 92, .55), rgba(21, 26, 33, .96) 70%); border-color: rgba(255, 255, 255, .13); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .actbar, :root:not([data-theme="light"]):not([data-theme="dark"]) .timebar { background: rgba(14, 18, 24, .9); backdrop-filter: blur(10px); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, rgba(255, 255, 255, .07) 0%, rgba(20, 25, 32, .55) 45%, rgba(14, 18, 24, .62) 100%); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); border-right-color: rgba(255, 255, 255, .08); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .navlink { color: #bcc4d2; border: 1px solid transparent; border-radius: 14px; transition: background-color .2s ease, border-color .2s ease, color .2s ease; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .navlink:hover { background: rgba(255, 255, 255, .07); color: #f2f5fa; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .navlink.active { background: linear-gradient(90deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .05)); border-color: rgba(255, 255, 255, .18); color: #fff; box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 6px 18px -10px rgba(0, 0, 0, .7); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .logo i { box-shadow: 0 8px 20px -8px rgba(60, 120, 255, .8); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .shell:not(.console) .sidebar .logo i { background: linear-gradient(135deg, #4aa3ff, #2a55e8); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .logo small { color: #98a2b3; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .navgroup { color: #8a94a6; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .idxcard { background: linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); border: 1px solid rgba(255, 255, 255, .10); border-left: 3px solid rgba(255, 255, 255, .28); border-radius: 14px; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .idxcard:has(.neg) { border-left-color: #ff5d73; background: linear-gradient(135deg, rgba(255, 93, 115, .14), rgba(255,255,255,.02)); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .idxcard:has(.pos) { border-left-color: #2ee6a0; background: linear-gradient(135deg, rgba(46, 230, 160, .12), rgba(255,255,255,.02)); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .idxcard b { color: #aab3c2; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .themeseg { background: rgba(255,255,255,.05); border: 1px solid rgba(255, 255, 255, .12); border-radius: 999px; padding: 3px; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .themeseg button { border-radius: 999px; color: #aab3c2; }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .themeseg button.on { background: linear-gradient(90deg, #eef1f6, #aeb6c4); color: #10141a; box-shadow: 0 8px 18px -8px rgba(0, 0, 0, .7); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .console-admin .sidebar .themeseg button.on { background: linear-gradient(90deg, #a78bfa, #6d3df0); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .console-dev .sidebar .themeseg button.on { background: linear-gradient(90deg, #22d3ee, #0e7490); }
+:root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .accountbox { border-top-color: rgba(255, 255, 255, .10); }
+}
+
+
+/* ================= fog =================
+   Soft, slow-drifting banks of fog behind everything. Light mode: white and silver fog on a pale grey-blue sky; dark mode: pale fog on graphite.
+   The fog is one fixed layer that is only moved and scaled (cheap for the GPU); the content sits above it on glass cards. */
+:root { --fog-base: linear-gradient(160deg, #eef2f3 0%, #d8dbe9 52%, #aeb4cc 100%);          /* cloud alloy: pale cloud into blue-grey alloy */
+  --fog-a: rgba(255, 255, 255, .95); --fog-b: rgba(131, 153, 162, .50); --fog-c: rgba(238, 242, 243, .90); --fog-d: rgba(114, 122, 154, .42); }
+:root[data-theme="dark"] { --fog-a: rgba(255, 255, 255, .10); --fog-b: rgba(190, 205, 230, .07); --fog-c: rgba(255, 255, 255, .08); --fog-d: rgba(150, 165, 190, .06); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) { --fog-a: rgba(255, 255, 255, .10); --fog-b: rgba(190, 205, 230, .07); --fog-c: rgba(255, 255, 255, .08); --fog-d: rgba(150, 165, 190, .06); } }
+:root:not([data-theme="dark"]) body { background: var(--fog-base); background-attachment: fixed; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) body { background: var(--dark-glow); background-attachment: fixed; } }
+body::before, body::after { content: ""; position: fixed; inset: -30%; z-index: 0; pointer-events: none; will-change: transform; }
+body::before { background:
+    radial-gradient(34% 30% at 22% 28%, var(--fog-a), transparent 70%),
+    radial-gradient(38% 34% at 74% 22%, var(--fog-b), transparent 72%),
+    radial-gradient(40% 36% at 58% 78%, var(--fog-c), transparent 70%);
+  filter: blur(36px); animation: fogA 30s ease-in-out infinite alternate; }
+body::after { background:
+    radial-gradient(36% 32% at 80% 70%, var(--fog-d), transparent 72%),
+    radial-gradient(32% 30% at 15% 80%, var(--fog-a), transparent 70%);
+  filter: blur(44px); animation: fogB 40s ease-in-out infinite alternate; }
+@keyframes fogA { from { transform: translate3d(-4%, -2%, 0) scale(1); } to { transform: translate3d(5%, 3%, 0) scale(1.12); } }
+@keyframes fogB { from { transform: translate3d(4%, 3%, 0) scale(1.1); } to { transform: translate3d(-5%, -3%, 0) scale(1); } }
+#root, .shell { position: relative; z-index: 1; }
+.shell { background: transparent; }
+
+/* light mode: frosted-glass cards over the fog, and a sidebar that fades from silver-blue at the top to white at the bottom */
+:root:not([data-theme="dark"]) .card, :root:not([data-theme="dark"]) .tbkpis .stat, :root:not([data-theme="dark"]) .kpi, :root:not([data-theme="dark"]) .tile {
+  background: rgba(255, 255, 255, .66); backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, .8); box-shadow: 0 1px 2px rgba(30, 45, 80, .05), 0 12px 32px -18px rgba(30, 45, 80, .28); }
+:root:not([data-theme="dark"]) .tbhero, :root:not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="dark"]) .tbhero.down { background: linear-gradient(135deg, rgba(255,255,255,.84), rgba(216, 219, 233, .66)); border-color: rgba(255,255,255,.85); }
+:root:not([data-theme="dark"]) .stats { background: rgba(255, 255, 255, .66); backdrop-filter: blur(14px); border-color: rgba(255,255,255,.8); }
+:root:not([data-theme="dark"]) .topbar { background: rgba(238, 242, 243, .6); backdrop-filter: blur(12px); border-bottom-color: rgba(255,255,255,.7); }
+:root:not([data-theme="dark"]) .actbar { background: rgba(244, 247, 252, .82); backdrop-filter: blur(14px); }
+:root:not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, rgba(255, 255, 255, .42) 0%, rgba(240, 243, 248, .30) 55%, rgba(255, 255, 255, .22) 100%); backdrop-filter: blur(22px) saturate(140%); -webkit-backdrop-filter: blur(22px) saturate(140%); border-right: 1px solid rgba(255, 255, 255, .75); box-shadow: 8px 0 30px -24px rgba(30, 45, 80, .30); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) .card { background: linear-gradient(160deg, rgba(34, 40, 50, .92), rgba(20, 25, 32, .95)); } }
+
+/* theme switch in the top-right corner */
+.themecorner { display: inline-flex; padding: 3px; gap: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-surface); margin-left: 4px; flex: none; }
+.themecorner button { width: 32px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 999px; background: none; color: var(--text-muted); cursor: pointer; padding: 0; transition: background-color .2s ease, color .2s ease; }
+.themecorner button .ic { width: 16px; height: 16px; }
+.themecorner button.on { background: var(--accent); color: #fff; }
+:root[data-theme="dark"] .themecorner button.on { background: linear-gradient(90deg, #eef1f6, #aeb6c4); color: #10141a; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) .themecorner button.on { background: linear-gradient(90deg, #eef1f6, #aeb6c4); color: #10141a; } }
+/* light mode: the sidebar labels need to stay readable on the silver-blue top of the gradient */
+:root:not([data-theme="dark"]) .sidebar .navlink:not(.active) { color: #2a3250; font-weight: 500; }
+:root:not([data-theme="dark"]) .sidebar .navlink.active { background: rgba(255, 255, 255, .78); box-shadow: 0 6px 18px -12px rgba(30, 45, 80, .45); }
+:root:not([data-theme="dark"]) .sidebar .idxcard, :root:not([data-theme="dark"]) .sidebar .accountbox { background: rgba(255,255,255,.5); border-color: rgba(255,255,255,.8); }
+:root:not([data-theme="dark"]) .sidebar .logo small, :root:not([data-theme="dark"]) .sidebar .navgroup { color: #46506e; }
+:root:not([data-theme="dark"]) .sidebar .navlink:hover { background: rgba(255, 255, 255, .55); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .navlink:not(.active) { color: #bcc4d2; } :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar .logo small { color: #98a2b3; } }
+
+/* the Admin and Developer consoles use exactly the same sidebar as the trading app (same gradient, same items, same blue); only the badge in the top bar tells them apart */
+.console .sidebar { --accent: #2563eb; --accent-soft: #e6eeff; }
+:root[data-theme="dark"] .console .sidebar { --accent: #4d8bff; --accent-soft: #1a2740; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) .console .sidebar { --accent: #4d8bff; --accent-soft: #1a2740; } }
+.console .sidebar .logo i { background: linear-gradient(135deg, #4aa3ff, #2a55e8); }
+.console .sidebar .navlink.active::before { background: #2563eb; }
+
+/* ---- more glass: the boxes let the aurora / fog show through (frosted, not clear, so the numbers stay readable) ---- */
+:root:not([data-theme="dark"]) .card, :root:not([data-theme="dark"]) .tbkpis .stat, :root:not([data-theme="dark"]) .kpi, :root:not([data-theme="dark"]) .tile, :root:not([data-theme="dark"]) .stats {
+  background: linear-gradient(145deg, rgba(255, 255, 255, .46), rgba(255, 255, 255, .22)); backdrop-filter: blur(20px) saturate(170%); -webkit-backdrop-filter: blur(20px) saturate(170%);
+  border: 1px solid rgba(255, 255, 255, .78); box-shadow: 0 1px 0 rgba(255,255,255,.7) inset, 0 14px 36px -20px rgba(30, 45, 80, .30); }
+:root:not([data-theme="dark"]) .tbhero, :root:not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="dark"]) .tbhero.down { background: linear-gradient(135deg, rgba(255,255,255,.55), rgba(220, 226, 238, .30)); backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%); border-color: rgba(255,255,255,.85); }
+:root:not([data-theme="dark"]) table th, :root:not([data-theme="dark"]) .scroll { background: transparent; }
+:root[data-theme="dark"] .card, :root[data-theme="dark"] .stats, :root[data-theme="dark"] .tbkpis .stat, :root[data-theme="dark"] .kpi, :root[data-theme="dark"] .tile {
+  background: linear-gradient(160deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025)); backdrop-filter: blur(20px) saturate(150%); -webkit-backdrop-filter: blur(20px) saturate(150%); border-color: rgba(255, 255, 255, .11); }
+:root[data-theme="dark"] .tbhero, :root[data-theme="dark"] .tbhero.up, :root[data-theme="dark"] .tbhero.down { background: linear-gradient(135deg, rgba(255,255,255,.10), rgba(255,255,255,.03)); backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) .card { background: linear-gradient(160deg, rgba(255, 255, 255, .075), rgba(255, 255, 255, .025)); backdrop-filter: blur(20px); } }
+/* a table inside a glass box keeps readable text: a faint plate under the rows only where there are numbers */
+.card table td { background: transparent; }
+
+.themecorner button.motion { margin-left: 2px; border-left: 1px solid var(--border); border-radius: 0 999px 999px 0; }
+.themecorner button.motion.live { color: var(--success); }

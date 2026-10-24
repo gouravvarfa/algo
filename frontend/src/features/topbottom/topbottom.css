@@ -91,3 +91,10 @@ tr.replay td { opacity: .55; }
 .tbhero, .tbhero.up, .tbhero.down { background: linear-gradient(120deg, color-mix(in srgb, #64748b 12%, var(--bg-surface)), var(--bg-surface) 70%); border-color: var(--border); }
 .tbkpis .stat.up, .tbkpis .stat.down { background: var(--bg-surface); }
 .trend.pos { background: var(--success-soft); color: var(--success); } .trend.neg { background: var(--danger-soft); color: var(--danger); }
+
+.stratswitch { display: inline-flex; align-items: center; gap: 8px; } .stratswitch .k { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); }
+.stratswitch b { font-size: 12px; font-weight: 700; } .stratswitch .toggle:disabled { opacity: .5; cursor: not-allowed; }
+
+.symtabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); width: fit-content; }
+.symtabs button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; font-weight: 600; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; transition: background-color .15s, color .15s; }
+.symtabs button.on { background: var(--accent); color: #fff; }

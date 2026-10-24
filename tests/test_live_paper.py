@@ -193,3 +193,32 @@ def test_trim_partial_first_day_starts_at_a_complete_session():
     assert pe.trim_partial_first_day(full) == full                                                               # a complete first day is kept
     assert pe.trim_partial_first_day([mk(9, 13, 10), mk(9, 13, 11)]) == []                                       # nothing complete: no guess
     assert pe.trim_partial_first_day([]) == []
+
+
+def test_adding_the_same_strategy_twice_for_one_person_returns_the_existing_one_and_a_duplicate_watchlist_is_cleaned(tmp_path, monkeypatch):
+    import json
+    from app.paper_trading import engine as em
+    monkeypatch.setattr(em, "STATE_PATH", tmp_path / "w.json")
+    monkeypatch.setattr(em, "JOURNAL_PATH", tmp_path / "j.jsonl")
+    monkeypatch.setattr(em, "LEGACY_OWNER_PATH", tmp_path / "l.txt")
+    mk = lambda i, owner, sym="BANKNIFTY": {"id": i, "symbol": sym, "instrument_type": "FUTURE", "timeframe": "1D", "quantity": 30, "token": "1", "trading_symbol": sym + "FUT",
+                                           "exch_seg": "NFO", "from_date": "2026-01-01T00:00:00", "added_at": "2026-01-01T00:00:00", "owner": owner}
+    (tmp_path / "w.json").write_text(json.dumps([mk("a", "u1"), mk("b", "u1"), mk("c", "u2"), mk("d", "u1", "DLF")]))
+    class P:
+        async def get_session(self): return object()
+        def reset_session(self): pass
+    e = em.PaperEngine(P())
+    assert sorted(e.instruments) == ["a", "c", "d"]                      # u1's second BankNifty is gone; u2 keeps theirs
+    import asyncio
+    again = asyncio.run(e.add("BANKNIFTY", "FUTURE", "1D", 1, 100, owner="u1"))
+    assert again.id == "a" and len(e.instruments) == 3
+
+
+def test_a_thinly_traded_stock_contract_that_prints_late_is_not_thrown_away():
+    import datetime as dt
+    from app.paper_trading.engine import trim_partial_first_day
+    from app.strategy.top_bottom.intraday import Minute
+    mk = lambda d, h, m: Minute(dt.datetime(2026, 10, d, h, m), 1.0, 1.0, 1.0, 1.0)
+    mins = [mk(12, 10, 38), mk(12, 10, 39), mk(13, 9, 26), mk(13, 9, 27), mk(14, 9, 15)]       # day 2 opens at 09:26: illiquid, but complete
+    assert trim_partial_first_day(mins) == []                                                    # the index rule gives up (it needs a 09:20 start)
+    assert [m.ts.day for m in trim_partial_first_day(mins, lenient=True)] == [13, 13, 14]       # the stock rule drops only the partial first day

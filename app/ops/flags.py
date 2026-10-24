@@ -8,6 +8,8 @@ Known switches (all default to the safe, normal value):
   feature.live_chain  false -> the live option chain endpoint answers "switched off"
   feature.margin      false -> the margin calculator is not called
   feature.collector   false -> the daily option download does not run
+  strategy.enabled    false -> that user's Top-Bottom strategy is switched off (scope user:<id>): no new signals, entries or exits are evaluated
+  strategy.locked     true  -> an admin switched it off, so the person cannot switch it back on themselves
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import time
 
 from app.db import platform_db
 
-DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.margin": True, "feature.collector": True}
+DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.margin": True, "feature.collector": True, "strategy.enabled": True, "strategy.locked": False}
 _CACHE_SECONDS = 2.0
 _cache: dict | None = None
 _cache_at = 0.0
@@ -94,7 +96,8 @@ def all_flags() -> list[dict]:
 
 
 def engine_paused(user_id: str | None = None) -> bool:
-    return bool(get("engines.paused")) or (user_id is not None and bool(get("engine.paused", user_id=user_id)))
+    return (bool(get("engines.paused")) or (user_id is not None and bool(get("engine.paused", user_id=user_id)))
+            or (user_id is not None and get("strategy.enabled", user_id=user_id) is False))
 
 
 def reset_cache() -> None:

@@ -10,7 +10,7 @@ import './admin.css'
 
 interface Row {
   id: string; username: string; name: string; email: string | null; role: string; status: string; online: boolean; device: string | null; last_active: string | null
-  can_view: boolean; instruments: number; open_positions: number; state: string; unrealized: number; live_realized: number; fault: string | null; paused: boolean
+  can_view: boolean; instruments: number; open_positions: number; state: string; unrealized: number; live_realized: number; fault: string | null; paused: boolean; strategy_on?: boolean; strategy_locked?: boolean
 }
 interface Created { setup_url: string; setup_path: string; expires_in_hours: number; user: { username: string; name: string } }
 
@@ -34,7 +34,8 @@ export default function UsersPage() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : 'Could not create the user.'),
   })
   const act = useMutation({
-    mutationFn: async (v: { id: string; kind: 'disable' | 'enable' | 'remove' | 'logout' | 'reset' }) => {
+    mutationFn: async (v: { id: string; kind: 'disable' | 'enable' | 'remove' | 'logout' | 'reset' | 'strat_on' | 'strat_off' }) => {
+      if (v.kind === 'strat_on' || v.kind === 'strat_off') return post(v.id === me?.user.id ? '/api/me/strategy' : `/api/admin/users/${v.id}/strategy`, { enabled: v.kind === 'strat_on' })
       if (v.kind === 'disable') return api(`/api/admin/users/${v.id}`, { method: 'PATCH', json: { status: 'DISABLED' } })
       if (v.kind === 'enable') return api(`/api/admin/users/${v.id}`, { method: 'PATCH', json: { status: 'ACTIVE' } })
       if (v.kind === 'remove') return api(`/api/admin/users/${v.id}`, { method: 'DELETE' })
@@ -42,7 +43,7 @@ export default function UsersPage() {
       return post<Created>(`/api/admin/users/${v.id}/reset-totp`)
     },
     onSuccess: (d, v) => {
-      toast({ disable: 'User disabled and signed out', enable: 'User enabled', remove: 'User removed', logout: 'User signed out', reset: 'Authenticator reset: share the new setup link' }[v.kind])
+      toast({ disable: 'User disabled and signed out', enable: 'User enabled', remove: 'User removed', logout: 'User signed out', reset: 'Authenticator reset: share the new setup link', strat_on: 'Strategy switched ON', strat_off: 'Strategy switched OFF' }[v.kind])
       if (v.kind === 'reset') setCreated(d as Created)
       refresh()
     },
@@ -55,7 +56,13 @@ export default function UsersPage() {
   })
   const tick = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
   const sure = (text: string, fn: () => void) => { if (confirm(text)) fn() }
-  const submit = (ev: FormEvent) => { ev.preventDefault(); setErr(''); create.mutate() }
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault()
+    // our own checks, shown inside the page: no browser pop-up bubble
+    if (!form.name.trim()) { setErr('Enter the full name.'); return }
+    if (!/^[a-z0-9][a-z0-9._-]{2,31}$/.test(form.username)) { setErr('Username must be 3-32 characters: lower-case letters, digits, dot, dash or underscore.'); return }
+    setErr(''); create.mutate()
+  }
   const rows = q.data?.users ?? []
 
   return (
@@ -68,9 +75,9 @@ export default function UsersPage() {
         <span className="sub">Nobody can sign up on their own. You add and remove people here.</span>
       </div>
 
-      <form className="card row" onSubmit={submit}>
+      <form className="card row" onSubmit={submit} noValidate autoComplete="off">
         <label className="field">Full name<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Rahul Sharma" /></label>
-        <label className="field">Username<input required pattern="[a-z0-9][a-z0-9._-]{2,31}" title="3-32 characters: lower-case letters, digits, . _ -" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="rahul" /></label>
+        <label className="field">Username<input required pattern="[a-z0-9][a-z0-9._\-]{2,31}" title="3-32 characters: lower-case letters, digits, . _ -" value={form.username} autoCapitalize="none" autoCorrect="off" autoComplete="off" data-lpignore="true" data-form-type="other" spellCheck={false} maxLength={32} onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '') })} placeholder="rahul" /><small className="sub">3–32 letters, digits, . _ - (no spaces, no capitals)</small></label>
         <label className="field">Role
           <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
             <option value="user">user</option>
@@ -112,16 +119,22 @@ export default function UsersPage() {
                   <td className="l">{r.online ? <span className="online"><i />online</span> : <span className="sub">offline</span>}</td>
                   <td className="l dim">{r.device ?? '–'}</td>
                   <td className="l">
-                    {r.fault ? <span className="chip bad" title={r.fault}>FAULT</span> : r.paused ? <span className="chip warn">paused</span> : r.state === 'BUY' || r.state === 'SELL' ? <span className={`badge ${r.state}`}>{r.state}</span> : <span className="sub">{r.state}</span>}
+                    {r.strategy_on === false ? <span className="chip warn">switched off{r.strategy_locked ? ' (admin)' : ''}</span> : r.fault ? <span className="chip bad" title={r.fault}>FAULT</span> : r.paused ? <span className="chip warn">paused</span> : r.state === 'BUY' || r.state === 'SELL' ? <span className={`badge ${r.state}`}>{r.state}</span> : <span className="sub">{r.state}</span>}
                   </td>
                   <td className="num">{r.open_positions}</td>
                   <td className={`num ${sign(r.unrealized)}`}>{money(r.unrealized)}</td>
                   <td className={`num ${sign(r.live_realized)}`}>{money(r.live_realized)}</td>
                   <td>
-                    <span className="btnrow">
+                    <span className="btnrow acts">
+                      {r.id === me?.user.id && (r.strategy_on === false
+                        ? <button className="btn sm" disabled={!!r.strategy_locked} title={r.strategy_locked ? 'Switched off by an admin' : undefined} onClick={() => act.mutate({ id: r.id, kind: 'strat_on' })}>Strategy ON</button>
+                        : <button className="btn sm" onClick={() => sure('Switch your own strategy OFF? Nothing new is evaluated for you until you switch it back on.', () => act.mutate({ id: r.id, kind: 'strat_off' }))}>Strategy OFF</button>)}
                       {r.can_view && <button className="btn sm" onClick={() => setOpen(r)}>Limits &amp; notes</button>}
                       {r.can_view && <Link className="btn sm primary" to={`/admin/users/${r.id}/view/top-bottom`}>View as user</Link>}
                       {r.can_view && r.status !== 'DELETED' && r.id !== me?.user.id && <>
+                        {r.strategy_on === false
+                          ? <button className="btn sm" onClick={() => act.mutate({ id: r.id, kind: 'strat_on' })}>Strategy ON</button>
+                          : <button className="btn sm" onClick={() => sure(`Switch the strategy of ${r.name} OFF? Nothing new is evaluated for them until you switch it back on.`, () => act.mutate({ id: r.id, kind: 'strat_off' }))}>Strategy OFF</button>}
                         <button className="btn sm" disabled={!r.online} onClick={() => sure(`Sign ${r.name} out now?`, () => act.mutate({ id: r.id, kind: 'logout' }))}>Sign out</button>
                         <button className="btn sm" onClick={() => sure(`Reset the authenticator of ${r.name}? They get a new setup link and are signed out.`, () => act.mutate({ id: r.id, kind: 'reset' }))}>Reset TOTP</button>
                         {r.status === 'DISABLED'
@@ -138,7 +151,7 @@ export default function UsersPage() {
           </table>
         </div>
       </div>
-      {open && <UserDrawer user={open} canManage={open.id !== me?.user.id} onClose={() => setOpen(null)} />}
+      {open && <UserDrawer user={open} canManage={open.id !== me?.user.id} isSelf={open.id === me?.user.id} onClose={() => setOpen(null)} />}
     </div>
   )
 }

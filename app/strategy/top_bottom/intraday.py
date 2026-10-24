@@ -111,6 +111,7 @@ def run_intraday(
     entry_day_stop_pct: float | None = None,
     struct_cap_distance: float | None = None,
     roll_in: str | None = None,
+    breakeven_pct: float | None = None,       # None = the index rule (2%); stocks pass 3%
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
@@ -303,7 +304,8 @@ def run_intraday(
             if t is None or t.breakeven_date is not None:
                 return
             buy = t.direction == "BUY"
-            thr = t.entry_price * (1 + BREAKEVEN_TRIGGER_PCT if buy else 1 - BREAKEVEN_TRIGGER_PCT)
+            be = BREAKEVEN_TRIGGER_PCT if breakeven_pct is None else breakeven_pct
+            thr = t.entry_price * (1 + be if buy else 1 - be)
             if (c.high < thr) if buy else (c.low > thr):
                 return
             kind = "TOP" if buy else "BOTTOM"

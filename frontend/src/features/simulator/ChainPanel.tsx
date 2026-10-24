@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { dmy, lakh, n0, num } from '../../lib/format'
 import type { Chain, ChainRow, Leg, Opt, Side } from './sim'
 
@@ -41,7 +41,9 @@ function LtpCell({ leg, opt, strike, chain, live, canTrade, onAdd, itm }: { leg:
   )
 }
 
-const Plain = ({ v, f, itm }: { v: number | null | undefined; f: (n: number) => string; itm: boolean }) => <td className={(itm ? 'itm ' : '') + (v == null ? 'na' : '')}>{v == null ? '–' : f(v)}</td>
+const Plain = ({ v, f, itm, cls = '', bar }: { v: number | null | undefined; f: (n: number) => string; itm: boolean; cls?: string; bar?: number }) => (
+  <td className={(itm ? 'itm ' : '') + (v == null ? 'na ' : '') + cls} style={bar != null ? ({ '--bar': `${bar}%` } as CSSProperties) : undefined}>{v == null ? '–' : f(v)}</td>
+)
 
 interface Props {
   chain: Chain | null; error: string; loading: boolean; live: boolean; canTrade: boolean; onAdd: (s: Side, o: Opt, k: number) => void
@@ -56,6 +58,9 @@ export function ChainPanel({ chain, error, loading, live, canTrade, onAdd, strik
     return chain.rows.filter((r, i) => (strikeView === 'all' || Math.abs(i - ai) <= 10) && (!onlyTraded || r.strike === chain.atm || (r.CE?.volume ?? 0) > 0 || (r.PE?.volume ?? 0) > 0))
   }, [chain, strikeView, onlyTraded])
 
+  const maxOi = useMemo(() => ({ ce: Math.max(1, ...rows.map((r) => r.CE?.oi ?? 0)), pe: Math.max(1, ...rows.map((r) => r.PE?.oi ?? 0)) }), [rows])
+  const pct = (v: number | null | undefined, m: number) => (v ? Math.max(3, Math.round((v / m) * 100)) : 0)
+
   useEffect(() => {                         // centre the ATM row when the day / minute / expiry changes, but not on every LIVE refresh
     const el = box.current?.querySelector('tr.atm') as HTMLElement | null
     if (el && box.current) box.current.scrollTop = el.offsetTop - box.current.clientHeight / 2 + el.offsetHeight / 2
@@ -65,16 +70,16 @@ export function ChainPanel({ chain, error, loading, live, canTrade, onAdd, strik
     <div className="card chainpanel">
       <div className="card-head">
         <h2>{title}</h2><span className="spacer" />
-        <span className="chip muted hide1500" title="IV and delta are computed with Black-Scholes (r = 6.5%, q = 0). They are not broker values.">IV / Δ calculated</span>
-        <span className={'chip ' + (chain?.mode === 'live' ? 'bad' : 'warn')}>{asof}</span>
+        <span className="seg"><button className={strikeView === 'near' ? 'on' : ''} onClick={() => setStrikeView('near')} title="Near = ATM ± 10 strikes">Near</button><button className={strikeView === 'all' ? 'on' : ''} onClick={() => setStrikeView('all')}>All</button></span>
+        <label className="inline" title="Hide strikes that did not trade"><input type="checkbox" checked={onlyTraded} onChange={(e) => setOnlyTraded(e.target.checked)} /> Traded only</label>
+        <span className={'chip ' + (chain?.mode === 'live' ? 'bad' : 'warn')} title="IV and delta are computed with Black-Scholes (r = 6.5%, q = 0); they are not broker values. ITM rows are shaded; NT = not traded, the NSE close is shown.">{asof.replace(/^As of /, '').replace(/ 20\d\d/, '')}</span>
       </div>
       <div className="chainbox" ref={box}>
         {loading && <div className="overlay">Loading…</div>}
         {error ? <div className="empty err">{error}</div> : !chain ? <div className="empty">Loading…</div> : (
           <table className="oc">
             <thead>
-              <tr><th colSpan={3} className="side">CALLS</th><th /><th colSpan={3} className="side">PUTS</th></tr>
-              <tr><th>LTP (Δ)</th><th>IV</th><th>OI</th><th className="mid">Strike</th><th>OI</th><th>IV</th><th className="pl">LTP (Δ)</th></tr>
+              <tr><th className="ce">CALL LTP (Δ)</th><th className="iv">IV</th><th>OI</th><th className="mid">Strike<small>spot {num(chain.underlying)}</small></th><th>OI</th><th className="iv">IV</th><th className="pl pe">PUT LTP (Δ)</th></tr>
             </thead>
             <tbody>
               {rows.map((r) => {
@@ -82,9 +87,9 @@ export function ChainPanel({ chain, error, loading, live, canTrade, onAdd, strik
                 return (
                   <tr key={r.strike} className={atm ? 'atm' : ''}>
                     <LtpCell leg={r.CE} opt="CE" strike={r.strike} chain={chain} live={live} canTrade={canTrade} onAdd={onAdd} itm={ceItm && !atm} />
-                    <Plain v={r.CE?.iv} f={(n) => `${num(n, 1)}%`} itm={ceItm && !atm} /><Plain v={r.CE?.oi} f={lakh} itm={ceItm && !atm} />
+                    <Plain v={r.CE?.iv} f={(n) => `${num(n, 1)}%`} itm={ceItm && !atm} cls="iv" /><Plain v={r.CE?.oi} f={lakh} itm={ceItm && !atm} cls="oibar ce" bar={pct(r.CE?.oi, maxOi.ce)} />
                     <td className="k">{n0(r.strike)}<small>{atm ? 'ATM' : `ATM ${off > 0 ? '+' : '−'}${n0(Math.abs(off))}`}</small></td>
-                    <Plain v={r.PE?.oi} f={lakh} itm={peItm && !atm} /><Plain v={r.PE?.iv} f={(n) => `${num(n, 1)}%`} itm={peItm && !atm} />
+                    <Plain v={r.PE?.oi} f={lakh} itm={peItm && !atm} cls="oibar pe" bar={pct(r.PE?.oi, maxOi.pe)} /><Plain v={r.PE?.iv} f={(n) => `${num(n, 1)}%`} itm={peItm && !atm} cls="iv" />
                     <LtpCell leg={r.PE} opt="PE" strike={r.strike} chain={chain} live={live} canTrade={canTrade} onAdd={onAdd} itm={peItm && !atm} />
                   </tr>
                 )
@@ -92,14 +97,6 @@ export function ChainPanel({ chain, error, loading, live, canTrade, onAdd, strik
             </tbody>
           </table>
         )}
-      </div>
-      <div className="legend2">
-        <span className="hint">Hover a row, click <b className="pos">B</b> / <b className="neg">S</b> to add</span>
-        <span><i className="sw itm" />ITM</span><span><i className="sw atm" />ATM</span>
-        <span><b className="nt">NT</b> not traded (NSE close)</span>
-        <span className="spacer" />
-        <span className="seg"><button className={strikeView === 'near' ? 'on' : ''} onClick={() => setStrikeView('near')} title="Near = ATM ± 10 strikes">Near strikes</button><button className={strikeView === 'all' ? 'on' : ''} onClick={() => setStrikeView('all')}>All strikes</button></span>
-        <label className="inline"><input type="checkbox" checked={onlyTraded} onChange={(e) => setOnlyTraded(e.target.checked)} /> Traded only</label>
       </div>
       {chain && chain.mode !== 'live' && <p className="sr" hidden>{dmy(chain.date)}</p>}
     </div>

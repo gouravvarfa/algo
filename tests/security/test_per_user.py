@@ -178,3 +178,33 @@ def test_identical_candle_requests_from_different_users_share_one_angel_call(eng
         return b, c, d
     b, c, d = asyncio.run(go())
     assert len(calls) == 2 and d["close"].iloc[0] == 1.0
+
+
+def test_only_an_admin_assigns_other_symbols_and_only_to_that_account(db, new_client, eng, monkeypatch):
+    admin, user, other = make_user(db, "adminx", "admin"), make_user(db, "anil"), make_user(db, "bina")
+    ca, cu, co = _login(new_client, admin), _login(new_client, user), _login(new_client, other)
+
+    async def fake_add(symbol, instrument_type, timeframe, size, lookback_days, owner=None):
+        i = _inst(f"x{len(eng.instruments)}", owner, symbol)
+        i.lots = size
+        eng.instruments[i.id] = i
+        return i
+    monkeypatch.setattr(eng, "add", fake_add)
+
+    # a person cannot pick another symbol, not even for themselves; BankNifty on their own is still allowed
+    assert api(cu, "POST", "/api/instruments", json={"symbol": "RELIANCE", "instrument_type": "FUTURE", "timeframe": "1D", "size": 1}).status_code == 403
+    assert api(cu, "POST", "/api/instruments", json={"symbol": "BANKNIFTY", "instrument_type": "FUTURE", "timeframe": "1D", "size": 1}).status_code == 200
+    # only an admin assigns, and only to the chosen account
+    assert api(cu, "POST", f"/api/admin/users/{user.id}/strategies", json={"symbol": "RELIANCE"}).status_code == 403
+    r = api(ca, "POST", f"/api/admin/users/{user.id}/strategies", json={"symbol": "reliance", "lots": 2})
+    assert r.status_code == 200 and r.json()["symbol"] == "RELIANCE"
+    assert api(ca, "POST", f"/api/admin/users/{user.id}/strategies", json={"symbol": "RELIANCE"}).status_code == 409           # already assigned
+    assert api(ca, "POST", f"/api/admin/users/{user.id}/strategies", json={"symbol": "bad symbol!"}).status_code == 400
+    assert api(ca, "POST", f"/api/admin/users/{user.id}/strategies", json={"symbol": "NOTASTOCK"}).status_code == 400           # not in the F&O list
+    assert "RELIANCE" in ca.get("/api/admin/fo-stocks").json()["symbols"] and len(ca.get("/api/admin/fo-stocks").json()["symbols"]) > 200
+    assert {s["symbol"] for s in ca.get(f"/api/admin/users/{user.id}/strategies").json()["strategies"]} == {"BANKNIFTY", "RELIANCE"}
+    assert ca.get(f"/api/admin/users/{other.id}/strategies").json()["strategies"] == []
+    assert {i["instrument"]["symbol"] for i in cu.get("/api/overview").json()["items"]} >= {"RELIANCE"}
+    assert not any(i["instrument"]["symbol"] == "RELIANCE" for i in co.get("/api/overview").json()["items"])             # nobody else sees it
+    assert "admin.assign_strategy" in {v["what"] for v in cu.get("/api/me/activity").json()["views"]}
+    assert api(ca, "POST", f"/api/admin/users/{admin.id}/strategies", json={"symbol": "TCS"}).status_code == 200            # an admin may assign to their own account

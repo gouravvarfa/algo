@@ -90,3 +90,23 @@ def test_admin_can_change_an_accounts_data_and_the_user_sees_it(db, new_client):
     # an admin cannot change another admin or a developer
     owner_row = db.execute("SELECT id FROM users WHERE role='developer'").fetchone()
     assert api(c_admin, "PATCH", f"/api/admin/users/{owner_row['id']}/profile", json={"name": "x"}).status_code == 403
+
+
+def test_strategy_switch_person_and_admin_lock(db, new_client):
+    from app.ops import flags
+    flags.reset_cache()
+    _, _, user, c_admin, c_user = _two(db, new_client)
+    assert c_user.get("/api/me/strategy").json() == {"enabled": True, "locked": False} and not flags.engine_paused(user.id)
+    assert api(c_user, "POST", "/api/me/strategy", json={"enabled": False}).json()["enabled"] is False
+    flags.reset_cache()
+    assert flags.engine_paused(user.id)                                                            # the engine stops for this person only
+    assert api(c_user, "POST", "/api/me/strategy", json={"enabled": True}).json()["enabled"] is True   # a person can switch their own back on
+    r = api(c_admin, "POST", f"/api/admin/users/{user.id}/strategy", json={"enabled": False}).json()
+    assert r == {"enabled": False, "locked": True}
+    assert api(c_user, "POST", "/api/me/strategy", json={"enabled": True}).status_code == 403          # locked by the admin
+    assert api(c_user, "POST", f"/api/admin/users/{user.id}/strategy", json={"enabled": True}).status_code == 403
+    assert api(c_admin, "POST", f"/api/admin/users/{user.id}/strategy", json={"enabled": True}).json() == {"enabled": True, "locked": False}
+    flags.reset_cache()
+    assert not flags.engine_paused(user.id)
+    acts = [e["action"] for e in c_admin.get("/api/admin/audit?limit=20").json()["entries"]]
+    assert "strategy.off" in acts and "strategy.on" in acts

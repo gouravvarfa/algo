@@ -11,7 +11,7 @@ from app.strategy.top_bottom.intraday import IntradayInitial
 SYMBOL = "BANKNIFTY"
 
 
-def reconstruct_state(daily_rows: list[tuple], first_day: dt.date) -> tuple[IntradayInitial | None, list[str]]:
+def reconstruct_state(daily_rows: list[tuple], first_day: dt.date, breakeven_pct: float | None = None) -> tuple[IntradayInitial | None, list[str]]:
     """Strategy state at the open of `first_day`, rebuilt from the Daily candles BEFORE it (no future data):
     runs the Daily-close engine over that history and hands over an open position (stop, breakeven status)
     or the waiting state after a breakeven exit. Always returns a user-visible warning describing what was assumed."""
@@ -20,7 +20,7 @@ def reconstruct_state(daily_rows: list[tuple], first_day: dt.date) -> tuple[Intr
         return None, [f"Only {len(prior)} Daily candle(s) exist before {first_day}: not enough history to reconstruct earlier positions, so the run starts FLAT."]
     _, trs = run_top_bottom_backtest(
         SYMBOL, SYMBOL, "", "INDEX", 0, [r[0] for r in prior], [r[4] for r in prior], [r[1] for r in prior], None,
-        [r[2] for r in prior], [r[3] for r in prior],
+        [r[2] for r in prior], [r[3] for r in prior], breakeven_pct,
     )
     last = trs[-1] if trs else None
     basis = f"reconstructed from {len(prior)} Daily candles before {first_day} (close-based Daily semantics; the exact intraday fills of earlier days are not reproduced)"

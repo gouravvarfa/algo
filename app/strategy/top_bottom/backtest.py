@@ -63,6 +63,7 @@ BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
 
 def _maybe_activate_breakeven(
     trade: Trade, i: int, date: dt.datetime, high: float, low: float, all_swings: list, stop_hit_first: bool,
+    pct: float | None = None,
 ) -> None:
     """
     2% profit -> breakeven stop. BUY: bar HIGH reaches entry*1.02; SELL: bar
@@ -79,7 +80,8 @@ def _maybe_activate_breakeven(
     if trade.breakeven_date is not None or stop_hit_first or trade.entry_index < 0 or i <= trade.entry_index:
         return
     buy = trade.direction == "BUY"
-    threshold = trade.entry_price * (1 + BREAKEVEN_TRIGGER_PCT if buy else 1 - BREAKEVEN_TRIGGER_PCT)
+    pct = BREAKEVEN_TRIGGER_PCT if pct is None else pct
+    threshold = trade.entry_price * (1 + pct if buy else 1 - pct)
     if (high < threshold) if buy else (low > threshold):
         return
     kind = "TOP" if buy else "BOTTOM"
@@ -157,6 +159,7 @@ def run_top_bottom_backtest(
     intraday: dict[dt.date, list[Bar15]] | None = None,
     highs: list[float] | None = None,
     lows: list[float] | None = None,
+    breakeven_pct: float | None = None,        # profit that arms the breakeven stop; None = the index rule (2%). Stocks pass 3%
 ) -> tuple[list[Signal], list[Trade]]:
     """
     Pure function: bar arrays in, signals + trades out. Entries, exits and
@@ -249,7 +252,7 @@ def run_top_bottom_backtest(
                         open_trade.protective_sl = res.protective_sl
                         open_trade.protective_sl_date = date.date()
                         if highs is not None and lows is not None:
-                            _maybe_activate_breakeven(open_trade, i, date, highs[i], lows[i], all_swings, False)
+                            _maybe_activate_breakeven(open_trade, i, date, highs[i], lows[i], all_swings, False, breakeven_pct)
                         # Structural stop is suspended for today only; it
                         # still trails and is evaluated again from tomorrow.
                         if direction == "BUY":
@@ -336,7 +339,7 @@ def run_top_bottom_backtest(
         if highs is not None and lows is not None:
             _maybe_activate_breakeven(
                 open_trade, i, date, highs[i], lows[i], all_swings,
-                _is_stop_hit(open_trade.direction, open_trade.active_stop, close),
+                _is_stop_hit(open_trade.direction, open_trade.active_stop, close), breakeven_pct,
             )
 
         if highs is not None and lows is not None and not _is_stop_hit(open_trade.direction, open_trade.active_stop, close):

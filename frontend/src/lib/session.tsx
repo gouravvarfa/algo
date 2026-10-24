@@ -78,7 +78,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try { await post('/api/auth/logout') } catch { /* already signed out */ }
     qc.clear()
-    await qc.invalidateQueries({ queryKey: ['auth'] })
+    // go straight to the login page and drop everything held in memory (the old session, cached data, the open menu)
+    window.location.replace('/app/login')
   }, [qc])
 
   const value = useMemo<SessionValue>(() => ({

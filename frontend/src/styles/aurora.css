@@ -1,0 +1,27 @@
+/* ============================================================================================================================
+   AURORA BACKGROUND (optional layer). Slow silver / steel-blue / teal-grey ribbons that drift and slowly change colour, behind the fog.
+   TO REMOVE: delete the line  import './styles/aurora.css'  in src/main.tsx (and, if you like, this file) and rebuild. Nothing else depends on it.
+   Only transform / opacity / hue are animated (cheap for the GPU); content sits above on glass cards; colours stay very soft so numbers read clearly.
+   ============================================================================================================================ */
+:root { --au-1: rgba(120, 150, 175, .55); --au-2: rgba(150, 170, 205, .48); --au-3: rgba(255, 255, 255, .70); --au-4: rgba(114, 122, 154, .32); }
+:root[data-theme="dark"] { --au-1: rgba(120, 150, 170, .13); --au-2: rgba(150, 165, 200, .10); --au-3: rgba(255, 255, 255, .06); --au-4: rgba(100, 120, 150, .10); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]):not([data-theme="dark"]) { --au-1: rgba(120, 150, 170, .13); --au-2: rgba(150, 165, 200, .10); --au-3: rgba(255, 255, 255, .06); --au-4: rgba(100, 120, 150, .10); } }
+
+html::before, html::after { content: ""; position: fixed; z-index: 0; pointer-events: none; will-change: transform, filter; }
+/* two long ribbons, tilted, each a soft gradient band */
+html::before { width: 150vmax; height: 46vmax; left: -30vmax; top: -8vmax;
+  background: linear-gradient(100deg, transparent 0%, var(--au-1) 22%, var(--au-3) 46%, var(--au-2) 70%, transparent 100%);
+  filter: blur(54px) hue-rotate(0deg); border-radius: 50%; transform: rotate(-14deg);
+  animation: auA 22s ease-in-out infinite alternate, auHue 40s ease-in-out infinite alternate; }
+html::after { width: 140vmax; height: 40vmax; right: -34vmax; bottom: -10vmax;
+  background: linear-gradient(80deg, transparent 0%, var(--au-4) 20%, var(--au-3) 50%, var(--au-1) 78%, transparent 100%);
+  filter: blur(60px) hue-rotate(0deg); border-radius: 50%; transform: rotate(11deg);
+  animation: auB 28s ease-in-out infinite alternate, auHue 48s ease-in-out infinite alternate-reverse; }
+@keyframes auA { 0% { transform: translate3d(-12%, -4%, 0) rotate(-14deg) scale(1); } 50% { transform: translate3d(6%, 16%, 0) rotate(-8deg) scale(1.12); } 100% { transform: translate3d(14%, 4%, 0) rotate(-19deg) scale(1.03); } }
+@keyframes auB { 0% { transform: translate3d(12%, 6%, 0) rotate(11deg) scale(1.05); } 50% { transform: translate3d(-8%, -15%, 0) rotate(5deg) scale(1); } 100% { transform: translate3d(-15%, -3%, 0) rotate(16deg) scale(1.12); } }
+/* the colour slowly slides between steel-blue, teal-grey and silver; kept to +-16 degrees so it never turns purple or loud */
+@keyframes auHue { 0% { filter: blur(54px) hue-rotate(-16deg); } 100% { filter: blur(54px) hue-rotate(16deg); } }
+/* background motion is controlled by the Motion switch in the top-right corner (it does not follow the system setting) */
+html[data-motion="off"]::before, html[data-motion="off"]::after, html[data-motion="off"] body::before, html[data-motion="off"] body::after { animation: none !important; }
+/* phones and small tablets: one ribbon, lighter work for the GPU */
+@media (max-width: 860px) { html::after { display: none; } }

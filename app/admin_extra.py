@@ -13,6 +13,7 @@ import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
@@ -271,8 +272,10 @@ def security_policy(_=Depends(require("users.read"))):
 
 # ---- admins can change what belongs to an account (never its password or authenticator secret: those are reset through a new setup link) ----
 # Every change below is written to the audit log and shown to the person under "Account activity" (GET /api/me/activity).
-def _managed(c, actor, user_id: str):
+def _managed(c, actor, user_id: str, allow_self: bool = False):
     t = _target(c, actor, user_id)
+    if allow_self and t["id"] == actor["id"]:
+        return t                                   # stock-futures strategies: an admin may assign them to their own account too
     if not authz.can_manage(actor, t):
         raise AuthError(403, "FORBIDDEN", "You cannot change this account.")
     return t
@@ -331,7 +334,7 @@ def edit_positions(user_id: str, body: PositionsEdit, symbol: str = "NIFTY", act
 def remove_instrument(user_id: str, instrument_id: str, actor=Depends(require("users.manage")), c=Depends(db)):
     from fastapi import HTTPException
     from app.ops import context
-    _managed(c, actor, user_id)
+    _managed(c, actor, user_id, allow_self=True)
     if context.engine is None:
         raise HTTPException(503, "engine not running")
     if not context.engine.remove(instrument_id, owner=user_id):
@@ -355,3 +358,117 @@ def edit_setting(user_id: str, key: str, body: SettingEdit, actor=Depends(requir
     c.commit()
     audit.append(c, "admin.edit_setting", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id, detail={"actor": actor["username"], "key": key})
     return {"ok": True}
+
+
+# ---- Top-Bottom strategy on / off per account --------------------------------------------------------------------------------------------
+# Off = the engine stops evaluating that person's strategy (no new signals, entries or exits); pages and stored data keep working.
+# A person can switch their own off and on. When an admin switches it off the account is "locked": only an admin can switch it back on.
+class StrategyBody(BaseModel):
+    enabled: bool
+
+
+def strategy_state(user_id: str) -> dict:
+    from app.ops import flags
+    return {"enabled": flags.get("strategy.enabled", user_id=user_id) is not False, "locked": bool(flags.get("strategy.locked", user_id=user_id))}
+
+
+@router.get("/api/me/strategy")
+def my_strategy(request: Request):
+    u = getattr(request.state, "user", None)
+    return strategy_state(u["id"]) if u else {"enabled": True, "locked": False}
+
+
+@router.post("/api/me/strategy")
+def set_my_strategy(body: StrategyBody, request: Request, c=Depends(db)):
+    from app.ops import flags
+    u = getattr(request.state, "user", None)
+    if u is None:
+        raise AuthError(401, "LOGIN_REQUIRED", "Login required.")
+    if body.enabled and strategy_state(u["id"])["locked"]:
+        raise AuthError(403, "LOCKED", "An admin switched your strategy off. Ask them to switch it back on.")
+    flags.set_flag("strategy.enabled", body.enabled, f"user:{u['id']}", updated_by=u["id"])
+    audit.append(c, "strategy.on" if body.enabled else "strategy.off", actor_id=u["id"], actor_role=u["role"], target_type="user", target_id=u["id"], detail={"actor": u["username"], "by": "self"})
+    return strategy_state(u["id"])
+
+
+@router.post("/api/admin/users/{user_id}/strategy")
+def set_user_strategy(user_id: str, body: StrategyBody, actor=Depends(require("users.manage")), c=Depends(db)):
+    from app.ops import flags
+    _managed(c, actor, user_id)
+    flags.set_flag("strategy.enabled", body.enabled, f"user:{user_id}", updated_by=actor["id"])
+    flags.set_flag("strategy.locked", not body.enabled, f"user:{user_id}", updated_by=actor["id"])
+    audit.append(c, "strategy.on" if body.enabled else "strategy.off", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id,
+                 detail={"actor": actor["username"], "by": "admin"})
+    return strategy_state(user_id)
+
+
+# ---- strategies assigned by an admin -----------------------------------------------------------------------------------------------------
+# A person gets the BankNifty strategy on their own; any other symbol (stock futures) is assigned to ONE account by an admin. The strategy is
+# Top-Bottom on the daily candles of that futures contract, rolled from contract to contract with the same rule as BankNifty.
+import re  # noqa: E402
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9&-]{1,20}$")
+HISTORY_SINCE = "2026-01-01"
+
+
+def fo_stocks() -> list[str]:
+    """The stock-futures underlyings an admin may assign (NSE's list of F&O stocks, kept in app/providers/fo_stocks.json)."""
+    try:
+        return json.loads((Path(__file__).resolve().parent / "providers" / "fo_stocks.json").read_text(encoding="utf8"))["symbols"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+@router.get("/api/admin/fo-stocks")
+def fo_stock_list(_=Depends(require("users.read"))):
+    return {"symbols": fo_stocks()}
+
+
+class AssignBody(BaseModel):
+    symbol: str = Field(min_length=1, max_length=20)
+    lots: int = Field(default=1, ge=1, le=50)
+
+
+def _engine_or_503():
+    from fastapi import HTTPException
+    from app.ops import context
+    if context.engine is None:
+        raise HTTPException(503, "engine not running")
+    return context.engine
+
+
+@router.get("/api/admin/users/{user_id}/strategies")
+def list_strategies(user_id: str, actor=Depends(require("users.read")), c=Depends(db)):
+    _target(c, actor, user_id)
+    e = _engine_or_503()
+    out = []
+    for i in e.instruments.values():
+        if i.owner != user_id:
+            continue
+        live = ((e.snapshots.get(i.id) or {}).get("instrument") or {})       # the contract the strategy is on NOW (after any roll), not the one it started on
+        out.append({"id": i.id, "symbol": i.symbol, "trading_symbol": live.get("trading_symbol") or i.trading_symbol, "lots": i.lots, "quantity": i.quantity,
+                    "expiry": live.get("expiry") or i.expiry, "timeframe": i.timeframe, "fault": (e.faults.get(i.id) or {}).get("message")})
+    return {"strategies": out}
+
+
+@router.post("/api/admin/users/{user_id}/strategies")
+async def assign_strategy(user_id: str, body: AssignBody, actor=Depends(require("users.manage")), c=Depends(db)):
+    from fastapi import HTTPException
+    from app.paper_trading.engine import PaperError
+    _managed(c, actor, user_id, allow_self=True)
+    e = _engine_or_503()
+    symbol = body.symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol) or symbol not in fo_stocks():
+        raise AuthError(400, "BAD_SYMBOL", f"{symbol} is not in the F&O stock list. Pick one from the list.")
+    if any(i.owner == user_id and i.symbol == symbol and i.timeframe == "1D" and i.instrument_type == "FUTURE" for i in e.instruments.values()):
+        raise AuthError(409, "ALREADY_ASSIGNED", f"{symbol} is already assigned to this account.")
+    lookback = (datetime.now(timezone.utc).date() - datetime.fromisoformat(HISTORY_SINCE).date()).days + 1
+    try:
+        inst = await e.add(symbol, "FUTURE", "1D", body.lots, lookback, owner=user_id)
+    except PaperError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"Angel One error: {exc}")
+    audit.append(c, "admin.assign_strategy", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id,
+                 detail={"actor": actor["username"], "symbol": symbol, "lots": body.lots})
+    return {"id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol, "error": e.errors.get(inst.id)}

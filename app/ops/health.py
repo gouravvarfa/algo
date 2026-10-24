@@ -166,8 +166,11 @@ def functions_tile() -> dict:
 
 
 def incidents_tile() -> dict:
-    n = incidents.count_since(3600)
-    return _tile("incidents", "Incidents (last hour)", OK if n == 0 else DEGRADED if n < 20 else DOWN, f"{n} incident(s) recorded in the last hour", count_hour=n)
+    total = incidents.count_since(3600)
+    notes = incidents.count_since(3600, "info")       # informational records (e.g. a developer released a circuit by hand) are not problems
+    n = total - notes
+    text = f"{n} problem(s) in the last hour" + (f", {notes} note(s)" if notes else "")
+    return _tile("incidents", "Incidents (last hour)", OK if n == 0 else DEGRADED if n < 20 else DOWN, text, count_hour=n)
 
 
 def host_tile() -> dict:

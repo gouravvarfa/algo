@@ -67,6 +67,21 @@ DAILY_RAW_CACHE_WITH_FEED = 120
 CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
 ALL = object()                        # "every owner" (internal callers and tests)
 LEGACY_OWNER_PATH = Path("data/paper_trading/legacy_owner.txt")   # the account that adopted the pre-platform watchlist and journal
+STOCK_BREAKEVEN_PCT = 0.03          # stocks arm the breakeven stop at +3% profit; the indexes (BankNifty / Nifty) keep +2%
+
+
+def breakeven_pct_for(symbol: str) -> float | None:
+    """None = the strategy's own index rule (2%). Every other symbol is a stock future: 3%."""
+    return None if symbol in INDEX_TOKENS else STOCK_BREAKEVEN_PCT
+
+
+STOCK_STRUCT_CAP = 0.03             # stocks: a structural stop 3%+ away from the entry keeps the entry-day 1% stop (the indexes use 2%)
+
+
+def struct_cap_for(symbol: str) -> float:
+    return STRUCT_CAP_DISTANCE if symbol in INDEX_TOKENS else STOCK_STRUCT_CAP
+
+
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
 LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
 LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
@@ -104,17 +119,21 @@ def market_open(now: dt.datetime | None = None) -> bool:
     return now.weekday() < 5 and dt.time(9, 15) <= now.time() <= dt.time(15, 30)
 
 
-def trim_partial_first_day(mins: list) -> list:
+def trim_partial_first_day(mins: list, lenient: bool = False) -> list:
     """The REST window starts N days back at the current time of day, so its FIRST day is usually only a partial session. A
     partial first day hides the morning crossings that happened before the window began (the engine then 'enters' on the
     window's first minute, at a wrong price and time, and the result changes every time the window moves). Drop leading minutes
-    until the first complete session (it must start by 09:20); earlier history is rebuilt from the daily candles instead."""
+    until the first complete session (it must start by 09:20); earlier history is rebuilt from the daily candles instead.
+    `lenient` (stock futures): a thinly traded contract may print its first trade of a day after 09:20 even in a complete session, so only the
+    first (partial) day is dropped and the next day is accepted as it is."""
     if not mins:
         return mins
     first_day = mins[0].ts.date()
     if mins[0].ts.time() <= dt.time(9, 20):
         return mins
     rest = [m for m in mins if m.ts.date() > first_day]
+    if lenient:
+        return rest
     return rest if rest and rest[0].ts.time() <= dt.time(9, 20) else []
 
 
@@ -159,9 +178,19 @@ class PaperEngine:
     # ---- persistence -----------------------------------------------------
     def _load(self) -> None:
         if STATE_PATH.exists():
+            seen: dict[tuple, str] = {}
+            dropped = 0
             for raw in json.loads(STATE_PATH.read_text()):
                 inst = Instrument.model_validate(raw)
+                key = (inst.owner, inst.symbol, inst.instrument_type, inst.timeframe)
+                if key in seen:                  # the same strategy added twice for one person (two opens of the page at once): keep the first
+                    dropped += 1
+                    continue
+                seen[key] = inst.id
                 self.instruments[inst.id] = inst
+            if dropped:
+                log.warning("removed %d duplicate instrument(s) from the watchlist", dropped)
+                self._save()
 
     def _save(self) -> None:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -175,6 +204,9 @@ class PaperEngine:
             raise PaperError(f"Timeframe must be one of {list(TIMEFRAMES)}")
         if size <= 0:
             raise PaperError("Quantity / lots must be at least 1")
+        for existing in self.instruments.values():       # adding the same strategy again for the same person returns the one they already have
+            if existing.owner == owner and existing.symbol == symbol and existing.instrument_type == instrument_type and existing.timeframe == timeframe:
+                return existing
         max_days = TIMEFRAMES[timeframe][2]
         lookback = min(lookback_days or DEFAULT_LOOKBACK_DAYS[timeframe], max_days - 30)
         now = now_ist()
@@ -278,7 +310,7 @@ class PaperEngine:
         # for days Angel One still serves; older days use the close rules).
         intraday = await self._gap_bars(inst, from_dt, now) if minutes is None else None
         chain = None
-        if minutes is None and inst.instrument_type == "FUTURE" and inst.symbol in INDEX_TOKENS:
+        if minutes is None and inst.instrument_type == "FUTURE":
             try:
                 chain = await self._chain(inst, now, from_dt)
             except Exception:
@@ -310,7 +342,7 @@ class PaperEngine:
         else:
             signals, trades = run_top_bottom_backtest(
                 inst.symbol, inst.trading_symbol, inst.expiry, "STOCK", inst.quantity, dates, closes, list(confirmed["open"]),
-                intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]],
+                intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]], breakeven_pct_for(inst.symbol),
             )
             engine_note, engine_warn = "Daily-close rules only", False
             if minutes is None:
@@ -410,6 +442,7 @@ class PaperEngine:
             "position": position,
             "waiting": waiting,
             "stats": stats,
+            "rules": {"breakeven_pct": (breakeven_pct_for(inst.symbol) or 0.02) * 100, "struct_cap_pct": struct_cap_for(inst.symbol) * 100},
             "engine_note": engine_note,
             "engine_warning": engine_warn,
             "trades": rows[::-1],
@@ -491,7 +524,7 @@ class PaperEngine:
         self._chain_cache[key] = (now, df)
         return df
 
-    async def _contract_minutes(self, c: ContractRef, first_day: dt.date, now: dt.datetime, pin: dt.date | None = None) -> list:
+    async def _contract_minutes(self, c: ContractRef, first_day: dt.date, now: dt.datetime, pin: dt.date | None = None, lenient: bool = False) -> list:
         key = ("m", c.token)
         hit = self._chain_cache.get(key)
         refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(c.token) else LIVE_MINUTES_REFRESH_SECONDS
@@ -513,7 +546,7 @@ class PaperEngine:
             df = candle_store.merge(stored, fresh)
             base = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
             self._chain_cache[key] = (now, base)
-        out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)))
+        out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)), lenient)
         return [m for m in out if m.ts.date() >= pin] if pin else out
 
     @tracked("chain_eval.chain")
@@ -534,18 +567,25 @@ class PaperEngine:
 
         async def get_minutes(c):
             if c.token == contracts[0].token:
-                return await self._contract_minutes(c, FIRST_CONTRACT_MINUTES_FROM, now, FIRST_CONTRACT_MINUTES_FROM)
-            return await self._contract_minutes(c, contract_cutoff(contracts[0].expiry), now)
+                # the index chain has tracked 1-minute data from a fixed day; a stock future starts on the day it was assigned
+                if inst.symbol in INDEX_TOKENS:
+                    start = FIRST_CONTRACT_MINUTES_FROM
+                else:   # a stock: from a week before the first contract's cutoff (or the day it was assigned, if that is earlier), so the roll can be priced
+                    start = min(dt.date.fromisoformat(inst.added_at[:10]), contract_cutoff(contracts[0].expiry) - dt.timedelta(days=6))
+                return await self._contract_minutes(c, start, now, start, lenient=inst.symbol not in INDEX_TOKENS)
+            return await self._contract_minutes(c, contract_cutoff(contracts[0].expiry), now, lenient=inst.symbol not in INDEX_TOKENS)
 
         def daily_engine(c, df):
             _sig, trs = run_top_bottom_backtest(inst.symbol, c.trading_symbol, c.expiry.isoformat(), "STOCK", inst.quantity,
                                                 [t.to_pydatetime() for t in df.index], [float(x) for x in df["close"]], list(df["open"]),
-                                                gap_bars if c.token == inst.token else None, [float(h) for h in df["high"]], [float(x) for x in df["low"]])
+                                                gap_bars if c.token == inst.token else None, [float(h) for h in df["high"]], [float(x) for x in df["low"]],
+                                                breakeven_pct_for(inst.symbol))
             return trs
 
         return await chain_eval.evaluate(
             contracts=contracts, from_dt=from_dt, now=now, symbol=inst.symbol, get_daily=get_daily, get_minutes=get_minutes,
-            daily_engine=daily_engine, reconstruct=reconstruct_state, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=STRUCT_CAP_DISTANCE)
+            daily_engine=daily_engine, reconstruct=lambda rows, fd: reconstruct_state(rows, fd, breakeven_pct_for(inst.symbol)),
+            entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol))
 
     async def _live_intraday(self, inst: Instrument, confirmed: pd.DataFrame, daily_trades: list, now: dt.datetime):
         """Live version of the replay's hybrid mode. Structure (System Points) still comes from confirmed DAILY closes;
@@ -573,7 +613,7 @@ class PaperEngine:
                 df = drop_incomplete_trailing_bars(df, 1, now)
                 mins = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
                 self._minutes[inst.id] = (now, mins)
-            mins = trim_partial_first_day(merge_minutes(mins, self.feed.builder.minutes(inst.token)))   # REST is authoritative; ticks fill the closing / forming minute
+            mins = trim_partial_first_day(merge_minutes(mins, self.feed.builder.minutes(inst.token)), inst.symbol not in INDEX_TOKENS)   # REST is authoritative; ticks fill the closing / forming minute
             if len(mins) < 30:
                 return None
             from app.strategy.top_bottom.warmup import reconstruct_state
@@ -581,10 +621,11 @@ class PaperEngine:
             if len(rows) < 5:
                 return None
             first_day = mins[0].ts.date()      # run_intraday never uses a day's own daily candle on that day, so no filtering is needed
-            initial, _warn = reconstruct_state(rows, first_day)
-            res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=STRUCT_CAP_DISTANCE)
+            initial, _warn = reconstruct_state(rows, first_day, breakeven_pct_for(inst.symbol))
+            res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol),
+                               breakeven_pct=breakeven_pct_for(inst.symbol))
             older = [t for t in daily_trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
-            note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {STRUCT_CAP_DISTANCE * 100:g}%+ away); earlier history uses daily closes"
+            note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {struct_cap_for(inst.symbol) * 100:g}%+ away); earlier history uses daily closes"
             out = older + res.trades
             self._live_good[inst.id] = (now, out, note)
             return out, note

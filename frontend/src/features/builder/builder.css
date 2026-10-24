@@ -9,3 +9,5 @@
 table.legs select { height: 30px; } table.legs input { height: 30px; }
 label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
 @media print { .noprint, .sidebar, .topbar { display: none !important; } .shell { padding-left: 0; } }
+
+.histtabs { padding: 16px 24px 0; }

@@ -46,3 +46,16 @@ def test_admin_sees_the_journal_read_only_and_only_for_people_below(db, new_clie
     api(cu, "PUT", "/api/me/sim-positions?symbol=NIFTY", json={"positions": [_leg(7)]})
     assert ca.get(f"/api/admin/users/{user.id}/option-journal").json()["stats"]["trades"] == 1
     assert cu.get(f"/api/admin/users/{admin.id}/option-journal").status_code == 403
+
+
+def test_backfill_records_positions_saved_before_the_journal_existed(db):
+    import json
+    import time
+    from app import option_journal
+    db.execute("INSERT INTO user_sim_positions (user_id, symbol, data_json, updated_at) VALUES (?,?,?,?)",
+               ("old-user", "NIFTY", json.dumps([_leg(1), _leg(2, closed=True, exit=100.0, exit_date="2026-10-20", realized=3000.0)]), time.time()))
+    db.commit()
+    option_journal.backfill(db)
+    option_journal.backfill(db)                                                   # running twice adds nothing
+    rows = db.execute("SELECT status FROM option_trades WHERE user_id='old-user' ORDER BY id").fetchall()
+    assert [r["status"] for r in rows] == ["OPEN", "CLOSED"]

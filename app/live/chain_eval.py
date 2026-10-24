@@ -78,7 +78,7 @@ async def evaluate(
     get_minutes: Callable[[ContractRef], Awaitable[list[Minute]]],
     daily_engine: Callable[[ContractRef, pd.DataFrame], list[Trade]],
     reconstruct: Callable[[list[tuple], dt.date], tuple[IntradayInitial | None, list[str]]],
-    entry_day_stop_pct: float | None, struct_cap_distance: float | None,
+    entry_day_stop_pct: float | None, struct_cap_distance: float | None, breakeven_pct: float | None = None,
 ) -> ChainResult | None:
     """None = the chain does not apply (no cutoff has been passed yet, or the next contract has no minutes on its cutoff day yet):
     the caller keeps its single-contract evaluation."""
@@ -119,7 +119,7 @@ async def evaluate(
                 first_day = mins[0].ts.date()
                 initial, _w = reconstruct(rows, first_day)
                 res = run_intraday(symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial,
-                                   entry_day_stop_pct=entry_day_stop_pct, struct_cap_distance=struct_cap_distance)
+                                   entry_day_stop_pct=entry_day_stop_pct, struct_cap_distance=struct_cap_distance, breakeven_pct=breakeven_pct)
                 older = [t for t in trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
                 trades = older + res.trades
                 notes += res.notes
@@ -138,7 +138,7 @@ async def evaluate(
                     n_before = sum(1 for d in dts if d.date() < waiting_exit.date())
                     initial = IntradayInitial(block_after=n_before - 1)
                 res = run_intraday(symbol, dts, cls, mins, initial, entry_day_stop_pct=entry_day_stop_pct,
-                                   struct_cap_distance=struct_cap_distance, roll_in=carry_dir)
+                                   struct_cap_distance=struct_cap_distance, roll_in=carry_dir, breakeven_pct=breakeven_pct)
                 trades = res.trades
                 notes += res.notes
                 if carry_dir and not any(t.rolled_in for t in trades):

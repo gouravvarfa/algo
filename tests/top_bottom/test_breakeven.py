@@ -72,3 +72,34 @@ def test_gap_through_breakeven_stop_uses_gap_protocol_not_stop_price():
     t = trades[0]
     assert t.breakeven_date is not None
     assert (t.exit_reason, t.exit_price) == ("GAP_EXIT_15M", 37)
+
+
+def _run_pct(closes, pct, overrides):
+    highs = [c + 0.1 for c in closes]
+    lows = [c - 0.1 for c in closes]
+    for idx, (h, l) in overrides.items():
+        highs[idx], lows[idx] = h, l
+    return run_top_bottom_backtest("X", "XFUT", "2026-09-29", "STOCK", 500, _dates(len(closes)), closes, _opens(closes), None, highs, lows, pct)
+
+
+def test_stocks_arm_breakeven_at_three_percent_not_two():
+    # BUY filled at 40: the 2% threshold is 40.8, the 3% threshold is 41.2
+    two = _run_pct(BUY, None, {7: (41.0, 40.0)})[1][0]
+    three = _run_pct(BUY, 0.03, {7: (41.0, 40.0)})[1][0]
+    assert two.breakeven_date is not None                                  # the index rule (default) fires at 41.0
+    assert three.breakeven_date is None and three.active_stop == 10        # +2.5% is not enough for a stock
+    reached = _run_pct(BUY, 0.03, {7: (41.3, 40.0)})[1][0]
+    assert reached.breakeven_date == _dates(9)[7] and reached.stop_history[-1][1] == 40
+
+
+def test_stock_sell_mirror_at_three_percent():
+    closes = SELL_PRE + [25, 19.5, 19.3, 20.1]                             # SELL filled at 20: 2% -> 19.6, 3% -> 19.4
+    assert _run_pct(closes, None, {7: (19.8, 19.5)})[1][0].breakeven_date is not None
+    assert _run_pct(closes, 0.03, {7: (19.8, 19.5)})[1][0].breakeven_date is None
+    assert _run_pct(closes, 0.03, {7: (19.8, 19.3)})[1][0].breakeven_date is not None
+
+
+def test_engine_uses_three_percent_for_stocks_and_two_for_the_indexes():
+    from app.paper_trading.engine import breakeven_pct_for, struct_cap_for
+    assert breakeven_pct_for("BANKNIFTY") is None and breakeven_pct_for("NIFTY") is None and breakeven_pct_for("DLF") == 0.03
+    assert struct_cap_for("BANKNIFTY") == 0.02 and struct_cap_for("DLF") == 0.03

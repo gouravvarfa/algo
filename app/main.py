@@ -37,6 +37,15 @@ async def lifespan(_: FastAPI):
     options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
     ops_context.engine = engine          # the developer panel reads the engine's health from here
     engine.start()
+    try:                                  # legs saved before the options journal existed go into it once (idempotent)
+        from app.db import platform_db
+        _c = platform_db.connect()
+        try:
+            option_journal.backfill(_c)
+        finally:
+            _c.close()
+    except Exception as e:                # the journal must never stop the app from starting
+        logging.getLogger(__name__).warning("options journal backfill failed: %s", e)
     asyncio.create_task(options_api.warm())
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
     asyncio.create_task(_selftest_loop())                  # known-answer checks every 10 minutes (developer panel)
@@ -254,6 +263,9 @@ async def instrument(instrument_id: str, request: Request):
 @app.post("/api/instruments")
 async def add_instrument(body: AddInstrument, request: Request):
     owner = _owner(request)
+    if getattr(request.state, "user", None) is not None and not (body.symbol.strip().upper() == "BANKNIFTY" and body.instrument_type.upper() == "FUTURE" and body.timeframe == "1D"):
+        # with accounts, a person only gets the BankNifty strategy on their own; every other symbol is assigned by an admin
+        raise HTTPException(403, "Only an admin can assign a strategy for another symbol.")
     try:
         inst = await engine.add(body.symbol, body.instrument_type, body.timeframe, body.size, body.lookback_days, owner=owner)
     except PaperError as exc:

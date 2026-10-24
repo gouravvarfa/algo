@@ -346,3 +346,9 @@ def test_developer_console_extra_pages_are_developer_only_and_return_data(db, ne
     assert "lines" in logs and isinstance(logs["lines"], list)
     att = c_dev.get("/api/dev/login-attempts").json()
     assert "failed_last_hour" in att and any(e["action"] == "login.success" for e in att["entries"])
+
+
+def test_an_informational_incident_does_not_degrade_the_board(db):
+    incidents.record("circuit.angelone.rest", "manually set to 'release' by someone", severity="info")
+    tile = health.incidents_tile()
+    assert tile["status"] == "OK" and "1 note" in tile["reason"]

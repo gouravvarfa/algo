@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
-import { get, post } from '../../lib/api'
+import { useMemo, useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { ApiError, get, post } from '../../lib/api'
+import { useToast } from '../../lib/toast'
 import { useDataSource } from '../../lib/datasource'
 import { dt, money, n2, num, sign, words } from '../../lib/format'
 import type { IndexQuote, JournalEvent, Overview, Snapshot, Trade } from '../../lib/types'
@@ -17,20 +19,26 @@ function useInstrumentId() {
     queryFn: ds.overview,
     refetchInterval: (q) => (q.state.data?.market_open ? 10_000 : 60_000),
   })
-  const found = ov.data?.items.find((i) => i.instrument.symbol === 'BANKNIFTY' && i.instrument.timeframe === '1D')
+  const [params] = useSearchParams()
+  const futures = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)
+  const want = (params.get('s') ?? 'BANKNIFTY').toUpperCase()
+  const bank = futures.find((i) => i.instrument.symbol === 'BANKNIFTY')
+  // the symbol picked in the tabs; the person's own BankNifty is always created on first visit, other symbols exist only if an admin assigned them
+  const found = futures.find((i) => i.instrument.symbol === want) ?? bank ?? futures[0]
   const add = useMutation({
     mutationFn: () => post('/api/instruments', { symbol: 'BANKNIFTY', instrument_type: 'FUTURE', timeframe: '1D', size: 1, lookback_days: Math.ceil((Date.now() - new Date(SINCE).getTime()) / 864e5) }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['tb', ds.key, 'overview'] }) },
   })
   // a person's own page adds the BankNifty futures strategy the first time it is opened; an admin looking at someone else never creates anything
-  const needsAdd = ov.isSuccess && !found && !ds.readOnly
-  return { ov, found, add, needsAdd }
+  const needsAdd = ov.isSuccess && !bank && !ds.readOnly && futures.length === 0
+  return { ov, found, add, needsAdd, futures }
 }
 
 export default function TopBottomPage() {
   const ds = useDataSource()
   const qc = useQueryClient()
-  const { ov, found, add, needsAdd } = useInstrumentId()
+  const { ov, found, add, needsAdd, futures } = useInstrumentId()
+  const [, setParams] = useSearchParams()
   const [kind, setKind] = useState<'line' | 'candle'>(() => { try { return localStorage.getItem('dash.ctype') === 'candle' ? 'candle' : 'line' } catch { return 'line' } })
   const [fit, setFit] = useState(0)
   const [showAll, setShowAll] = useState(false)
@@ -53,9 +61,10 @@ export default function TopBottomPage() {
 
   if (ov.isError) return <div className="page"><div className="alert">Could not load: {(ov.error as Error).message}</div></div>
   if (ds.readOnly && ov.isSuccess && !found) return <div className="page"><div className="card"><h2>No strategy yet</h2><p className="sub" style={{ marginTop: 6 }}>This user has not opened Top Bottom yet, so no strategy is running for them.</p></div></div>
-  if (!snap) return <div className="page"><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" style={{ height: 420 }} />{(add.isError || snapQ.isError) && <div className="alert">Could not load BankNifty: {((add.error ?? snapQ.error) as Error)?.message}. Retrying.</div>}</div>
+  if (!snap) return <div className="page"><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" style={{ height: 420 }} />{(add.isError || snapQ.isError) && <div className="alert">Could not load the strategy: {((add.error ?? snapQ.error) as Error)?.message}. Retrying.</div>}</div>
 
-  return <Content snap={snap} ov={ov.data!} idx={idx.data} journal={jq.data} kind={kind} setKind={setKindSaved} fit={fit} onFit={() => setFit((f) => f + 1)}
+  const tabs = futures.length > 1 ? <div className="symtabs" role="tablist">{futures.map((f) => <button key={f.instrument.id} role="tab" aria-selected={f.instrument.id === found?.instrument.id} className={f.instrument.id === found?.instrument.id ? 'on' : ''} onClick={() => setParams({ s: f.instrument.symbol })}>{f.instrument.symbol}</button>)}</div> : null
+  return <Content tabs={tabs} snap={snap} ov={ov.data!} idx={idx.data} journal={jq.data} kind={kind} setKind={setKindSaved} fit={fit} onFit={() => setFit((f) => f + 1)}
     showAll={showAll} onToggleAll={() => setShowAll((s) => !s)} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} readOnly={ds.readOnly} updated={snapQ.dataUpdatedAt} />
 }
 
@@ -73,12 +82,41 @@ function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: 
 }
 
 interface CP {
+  tabs?: ReactNode
   snap: Snapshot; ov: Overview; idx?: IndexQuote; journal?: JournalEvent[]; kind: 'line' | 'candle'; setKind: (k: 'line' | 'candle') => void; fit: number; onFit: () => void
   showAll: boolean; onToggleAll: () => void; onRefresh: () => void; refreshing: boolean; readOnly: boolean; updated: number
 }
 
-function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
+/** Switch the Top-Bottom strategy off or on for this account. Off = nothing new is evaluated (no signals, entries or exits); an admin's switch-off can only be undone by an admin. */
+function StrategySwitch() {
+  const qc = useQueryClient()
+  const toast = useToast()
+  const q = useQuery({ queryKey: ['me', 'strategy'], queryFn: () => get<{ enabled: boolean; locked: boolean }>('/api/me/strategy'), refetchInterval: 30_000 })
+  const set = useMutation({
+    mutationFn: (enabled: boolean) => post<{ enabled: boolean; locked: boolean }>('/api/me/strategy', { enabled }),
+    onSuccess: (d) => { toast(d.enabled ? 'Strategy is ON' : 'Strategy is OFF'); void qc.invalidateQueries({ queryKey: ['me', 'strategy'] }) },
+    onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not change the strategy'),
+  })
+  const on = q.data?.enabled !== false
+  return (
+    <div className="stratswitch" title={q.data?.locked ? 'An admin switched this off; only an admin can switch it back on.' : 'Switch the strategy off to stop new signals, entries and exits.'}>
+      <span className="k">Strategy</span>
+      <button className={'toggle' + (on ? ' on' : '')} role="switch" aria-checked={on} aria-label="Top-Bottom strategy on or off" disabled={set.isPending || (!on && !!q.data?.locked)}
+        onClick={() => { if (on && !confirm('Switch the strategy OFF? Nothing new will be evaluated: no signals, entries or exits (the open position is not closed).')) return; set.mutate(!on) }}><i /></button>
+      <b className={on ? 'pos' : 'neg'}>{on ? 'ON' : q.data?.locked ? 'OFF · locked by admin' : 'OFF'}</b>
+    </div>
+  )
+}
+
+function StrategyOffBanner() {
+  const q = useQuery({ queryKey: ['me', 'strategy'], queryFn: () => get<{ enabled: boolean; locked: boolean }>('/api/me/strategy'), refetchInterval: 30_000 })
+  if (q.data?.enabled !== false) return null
+  return <div className="banner warn" role="status"><span><b>Strategy is OFF.</b> {q.data.locked ? 'An admin switched it off; only an admin can switch it back on. ' : ''}Nothing new is evaluated: no signals, entries or exits. An open position is not closed.</span></div>
+}
+
+function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
   const p = s.position, st = s.stats, inst = s.instrument
+  const be = (s as { rules?: { breakeven_pct?: number } }).rules?.breakeven_pct ?? 2
   const closed = useMemo(() => s.trades.filter((t) => t.status !== 'OPEN'), [s.trades])
   const wins = closed.filter((t) => (t.pnl_amount ?? 0) > 0)
   const pts = closed.reduce((a, t) => a + (t.pnl_points ?? 0), 0)
@@ -91,10 +129,12 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
 
   return (
     <div className="page tbpage">
+      {tabs}
+      <StrategyOffBanner />
       <section className={`tbhero ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}>
         <div className="hero-main">
           <div className="hero-top">
-            <span className="eyebrow">Top-Bottom strategy · BankNifty futures · daily</span>
+            <span className="eyebrow">Top-Bottom strategy · {inst.symbol} futures · daily</span>
             <span className={'livepill' + (ov.market_open ? ' on' : '')}><i />{live}</span>
           </div>
           <div className="hero-pos">
@@ -110,16 +150,17 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
           {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={s.ltp} /> : <p className="sub">{s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
         </div>
         <div className="hero-side">
-          <div className="hero-q"><span className="k">BankNifty fut</span><b className="num">{num(s.ltp)}</b></div>
-          {idx?.price != null && <div className="hero-q" title={`previous close ${num(idx.prev_close)} · source: ${idx.source}`}><span className="k">BankNifty index</span><b className="num">{num(idx.price)}</b>{idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '+' : '−'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}</div>}
+          <div className="hero-q"><span className="k">{inst.symbol} fut</span><b className="num">{num(s.ltp)}</b></div>
+          {idx?.price != null && inst.symbol === 'BANKNIFTY' && <div className="hero-q" title={`previous close ${num(idx.prev_close)} · source: ${idx.source}`}><span className="k">BankNifty index</span><b className="num">{num(idx.price)}</b>{idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '+' : '−'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}</div>}
           <div className="hero-q"><span className="k">Updated</span><span className="num">{updated ? new Date(updated).toLocaleTimeString() : '–'}</span></div>
+          {!readOnly && <StrategySwitch />}
           {!readOnly && <button className="btn sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
         </div>
       </section>
 
       <div className="tbkpis">
         <div className="stat"><div className="k">Entry</div><div className="v">{p ? num(p.entry_price) : '–'}</div><div className="s">{p ? dt(p.entry_date) : 'no open position'}</div></div>
-        <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{p ? (p.breakeven ? 'breakeven SL (2% done)' : 'structural / trailing') : ''}</div></div>
+        <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{p ? (p.breakeven ? `breakeven SL (${be}% done)` : 'structural / trailing') : ''}</div></div>
         <div className="stat"><div className="k">Latest top</div><div className="v">{n2(s.latest_top)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Latest bottom</div><div className="v">{n2(s.latest_bottom)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Closed trades · win</div><div className="v">{closed.length} · {closed.length ? `${(wins.length / closed.length * 100).toFixed(0)}%` : '–'}</div><div className="s">all closed trades</div></div>
@@ -154,7 +195,7 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
               <dt>Entry</dt><dd>{p ? <>{num(p.entry_price)}<br /><span className="sub">{dt(p.entry_date)}</span></> : '–'}</dd>
               <dt>Initial SL</dt><dd>{p ? num(p.initial_sl) : '–'}</dd>
               <dt>Active stop</dt><dd>{p ? num(p.active_stop) : '–'}</dd>
-              <dt>2% breakeven</dt><dd>{p ? (p.breakeven ? 'reached' : 'not yet') : '–'}</dd>
+              <dt>{be}% breakeven</dt><dd>{p ? (p.breakeven ? 'reached' : 'not yet') : '–'}</dd>
               <dt>Gap protocol</dt><dd>{p?.gap_state ? words(p.gap_state) : '–'}</dd>
               <dt>Protective SL today</dt><dd>{p?.protective_sl ? num(p.protective_sl) : '–'}</dd>
             </dl>
@@ -184,7 +225,7 @@ function Content({ snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll
       <div className="card">
         <div className="card-head"><h2>Live event log</h2></div>
         <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>Every ENTRY, EXIT, stop-to-breakeven and gap-protocol event of the live trades, written the moment the engine first sees it. Rows marked <b>backfill</b> were already in history when the log started.</p>
-        <div className="scroll" style={{ maxHeight: 360, overflowY: 'auto' }}><JournalTable events={journal} /></div>
+        <div className="scroll" style={{ maxHeight: 360, overflowY: 'auto' }}><JournalTable events={journal?.filter((e) => !e.symbol || e.symbol === inst.symbol)} /></div>
       </div>
     </div>
   )
@@ -199,7 +240,7 @@ function TradesTable({ rows }: { rows: Trade[] }) {
           <tr key={`${t.n}-${t.entry_date}`} className={t.live ? '' : 'replay'}>
             <td className="num">{t.n}</td>
             <td className="l"><span className={`badge ${t.direction}`}>{t.direction}</span></td>
-            <td className="l">{(t.contract ?? '').replace(/^BANKNIFTY|FUT$/g, '')}{t.rolled_in && <span className="chip muted" style={{ marginLeft: 6 }} title="Continued from the previous contract at its cutoff">rolled in</span>}</td>
+            <td className="l">{(t.contract ?? '').replace(/^[A-Z&-]+?(?=\d{2}[A-Z]{3}\d{2}FUT$)|FUT$/g, '')}{t.rolled_in && <span className="chip muted" style={{ marginLeft: 6 }} title="Continued from the previous contract at its cutoff">rolled in</span>}</td>
             <td className="l">{dt(t.entry_date)}</td><td className="num">{num(t.entry_price)}</td><td className="num">{num(t.active_stop)}</td>
             <td className="l">{dt(t.exit_date)}</td><td className="num">{num(t.exit_price)}</td>
             <td className={`num ${sign(t.pnl_points)}`}>{num(t.pnl_points)}</td><td className={`num ${sign(t.pnl_amount)}`}>{money(t.pnl_amount)}</td>

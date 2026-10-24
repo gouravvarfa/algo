@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { Suspense } from 'react'
+import { Suspense, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { get } from '../lib/api'
 import { useSession } from '../lib/session'
-import { useTheme } from '../lib/theme'
 import { Icon, type IconName } from './Icon'
+import { Hamburger, NavBackdrop } from './MobileNav'
+import { ThemeToggle } from './ThemeToggle'
 
 export type ConsoleKind = 'admin' | 'dev'
 interface Item { to: string; label: string; icon: IconName; end?: boolean }
@@ -43,30 +44,26 @@ function titleFor(kind: ConsoleKind, pathname: string): string {
  * The trading app never shows these screens in its own sidebar. */
 export function ConsoleShell({ kind }: { kind: ConsoleKind }) {
   const { me, can, logout } = useSession()
-  const { dark, set } = useTheme()
   const { pathname } = useLocation()
   const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 60_000, retry: false })
   const sys = useQuery({ queryKey: ['console', 'summary'], queryFn: () => get<{ overall: string }>('/api/admin/system-summary'), refetchInterval: 15_000, retry: false, enabled: can('users.read') })
   const open = ov.data?.market_open
+  const [nav, setNav] = useState(false)
   const other: ConsoleKind | null = kind === 'admin' ? (can('system.read') ? 'dev' : null) : can('users.read') ? 'admin' : null
   return (
-    <div className={`shell console console-${kind}`}>
-      <aside className="sidebar">
+    <div className={`shell console console-${kind}` + (nav ? ' nav-open' : '')}>
+      <aside className="sidebar" id="app-sidebar">
         <NavLink className="logo" to={kind === 'admin' ? '/admin' : '/dev'}>
           <i><Icon name={kind === 'admin' ? 'users' : 'shield'} /></i>
           <span>{BRAND[kind].name}<small>{BRAND[kind].sub}</small></span>
         </NavLink>
         {ITEMS[kind].map((i) => (
-          <NavLink key={i.to} to={i.to} end={i.end} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}><Icon name={i.icon} /><span>{i.label}</span></NavLink>
+          <NavLink key={i.to} to={i.to} end={i.end} title={i.label} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}><Icon name={i.icon} /><span>{i.label}</span></NavLink>
         ))}
         <div className="navgroup">Go to</div>
         <NavLink className="navlink" to="/top-bottom"><Icon name="chart" /><span>Trading app</span></NavLink>
         {other && <NavLink className="navlink" to={other === 'admin' ? '/admin' : '/dev'}><Icon name={other === 'admin' ? 'users' : 'shield'} /><span>{BRAND[other].name}</span></NavLink>}
         <div className="idxcards" />
-        <div className="themeseg" role="group" aria-label="Theme">
-          <button className={!dark ? 'on' : ''} onClick={() => set('light')}>Light</button>
-          <button className={dark ? 'on' : ''} onClick={() => set('dark')}>Dark</button>
-        </div>
         {me && (
           <div className="accountbox">
             <NavLink className="navlink" to="/account" title="Account and password"><Icon name="user" /><span>{me.user.name}</span></NavLink>
@@ -74,13 +71,16 @@ export function ConsoleShell({ kind }: { kind: ConsoleKind }) {
           </div>
         )}
       </aside>
+      <NavBackdrop open={nav} onClose={() => setNav(false)} />
       <header className="topbar">
+        <Hamburger open={nav} onClick={() => setNav((v) => !v)} />
         <span className={`consolebadge ${kind}`}>{kind === 'admin' ? 'ADMIN' : 'DEVELOPER'}</span>
         <span className="title">{titleFor(kind, pathname)}</span>
         <span className="spacer" />
         {sys.data && <span className={`pill sys ${sys.data.overall === 'OK' ? 'okk' : sys.data.overall === 'DEGRADED' ? 'degr' : 'down'}`} title="Overall system health (details in the Developer console)"><i />System {sys.data.overall}</span>}
         <span className={'pill' + (open ? ' open' : '')}><i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}</span>
         <span className="pill paper" title="Paper trading only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>
+        <ThemeToggle />
       </header>
       <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 320 }} /></div>}><Outlet /></Suspense>
     </div>

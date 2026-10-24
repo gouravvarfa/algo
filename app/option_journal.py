@@ -73,6 +73,19 @@ def sync(c, user_id: str, symbol: str, positions: list[dict], now: float | None 
     c.commit()
 
 
+def backfill(c) -> int:
+    """Record legs that were saved before the journal existed (or while it was off). Safe to run on every start: rows already there are only updated."""
+    n = 0
+    for r in c.execute("SELECT user_id, symbol, data_json, updated_at FROM user_sim_positions").fetchall():
+        try:
+            positions = json.loads(r["data_json"])
+        except ValueError:
+            continue
+        sync(c, r["user_id"], r["symbol"], positions, r["updated_at"])
+        n += len(positions)
+    return n
+
+
 def _rows(c, user_id: str, symbol: str | None = None, status: str | None = None, limit: int = 2000) -> list[dict]:
     q, args = "SELECT * FROM option_trades WHERE user_id=?", [user_id]
     if symbol:

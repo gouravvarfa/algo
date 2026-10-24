@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { get } from '../lib/api'
 import { num, sign } from '../lib/format'
 import { useSession } from '../lib/session'
-import { useTheme } from '../lib/theme'
 import type { IndexQuote } from '../lib/types'
 import { Icon, type IconName } from './Icon'
+import { Hamburger, NavBackdrop } from './MobileNav'
+import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
 
 interface Item { to: string; label: string; icon: IconName }
@@ -44,10 +46,9 @@ function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string
 }
 
 export function Sidebar() {
-  const { me, mode, logout } = useSession()
-  const { dark, set } = useTheme()
+  const { me, mode, logout, can } = useSession()
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" id="app-sidebar">
       <NavLink className="logo" to="/top-bottom">
         <i><Icon name="chart" /></i>
         <span>Algo Trading<small>Research · paper trading</small></span>
@@ -57,12 +58,10 @@ export function Sidebar() {
         <IndexCard name="NIFTY" label="NIFTY 50" />
         <IndexCard name="BANKNIFTY" label="BANKNIFTY" />
       </div>
-      <div className="themeseg" role="group" aria-label="Theme">
-        <button className={!dark ? 'on' : ''} onClick={() => set('light')}>Light</button>
-        <button className={dark ? 'on' : ''} onClick={() => set('dark')}>Dark</button>
-      </div>
       {mode === 'platform' && me && (
         <div className="accountbox">
+          {can('system.read') && <NavLink className="navlink consolelink" to="/dev"><Icon name="shield" /><span>Developer console</span></NavLink>}
+          {can('users.read') && <NavLink className="navlink consolelink" to="/admin"><Icon name="users" /><span>Admin console</span></NavLink>}
           <NavLink className="navlink" to="/account" title="Account and password"><Icon name="user" /><span>{me.user.name}</span></NavLink>
           <button className="navlink linkbtn" onClick={() => void logout()}><Icon name="logout" /><span>Sign out</span></button>
         </div>
@@ -73,35 +72,39 @@ export function Sidebar() {
 
 function NavItem({ item }: { item: Item }) {
   return (
-    <NavLink to={item.to} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
+    <NavLink to={item.to} title={item.label} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
       <Icon name={item.icon} />
       <span>{item.label}</span>
     </NavLink>
   )
 }
 
-function StatusBar() {
+function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) {
   const { pathname } = useLocation()
   const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 60_000, retry: false })
   const open = ov.data?.market_open
   return (
     <header className="topbar">
+      <Hamburger open={navOpen} onClick={onNav} />
       <span className="title">{titleFor(pathname)}</span>
       <span className="spacer" />
       <span className={'pill' + (open ? ' open' : '')} title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected.">
         <i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}
       </span>
       <span className="pill paper" title="Paper trading and research only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>
+      <ThemeToggle />
     </header>
   )
 }
 
 /** The frame around every signed-in page: left navigation (admin and developer groups only for those roles), status bar, and the page. */
 export function Shell() {
+  const [nav, setNav] = useState(false)
   return (
-    <div className="shell">
+    <div className={'shell' + (nav ? ' nav-open' : '')}>
       <Sidebar />
-      <StatusBar />
+      <NavBackdrop open={nav} onClose={() => setNav(false)} />
+      <StatusBar navOpen={nav} onNav={() => setNav((v) => !v)} />
       <AnnouncementBanner />
       <Outlet />
     </div>

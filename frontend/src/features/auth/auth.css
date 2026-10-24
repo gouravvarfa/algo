@@ -3,7 +3,11 @@
 .auth-card.narrow { max-width: 460px; padding: 28px; }
 .auth-card.login { max-width: 1040px; display: grid; grid-template-columns: 1.05fr 1fr; min-height: 600px; }
 .auth-brand { color: #fff; padding: 44px 44px 36px; background: linear-gradient(145deg, #0b1f4d 0%, #1456f0 60%, #0e9f8e 130%); position: relative; overflow: hidden; display: flex; flex-direction: column; }
-.auth-brand::before { content: ""; position: absolute; right: -120px; top: -120px; width: 360px; height: 360px; border-radius: 50%; background: rgba(255, 255, 255, .09); }
+.auth-brand::before { content: ""; position: absolute; right: -120px; top: -120px; width: 360px; height: 360px; border-radius: 50%; background: rgba(255, 255, 255, .09); animation: orbA 17s ease-in-out infinite alternate; will-change: transform; }
+.auth-brand::after { content: ""; position: absolute; left: -90px; bottom: -110px; width: 280px; height: 280px; border-radius: 50%; background: rgba(255, 255, 255, .07); animation: orbB 23s ease-in-out infinite alternate; will-change: transform; pointer-events: none; }
+/* the circles wander about but the card clips them (overflow: hidden), so they never leave the blue panel */
+@keyframes orbA { 0% { transform: translate(0, 0) scale(1); } 33% { transform: translate(-150px, 120px) scale(1.12); } 66% { transform: translate(-60px, 300px) scale(.92); } 100% { transform: translate(-260px, 180px) scale(1.06); } }
+@keyframes orbB { 0% { transform: translate(0, 0) scale(1); } 40% { transform: translate(190px, -150px) scale(1.15); } 75% { transform: translate(90px, -300px) scale(.9); } 100% { transform: translate(300px, -120px) scale(1.05); } }
 .auth-brand > * { position: relative; }
 .auth-logo { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 20px; }
 .bars { display: inline-flex; align-items: flex-end; gap: 3px; height: 26px; }

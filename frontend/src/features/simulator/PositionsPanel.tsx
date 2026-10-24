@@ -66,7 +66,7 @@ export function PositionsPanel(p: Props) {
                 </tr>
               )
             })}
-            {!rows.length && <tr><td colSpan={6} className="empty">No simulated positions yet. Hover a strike in the option chain and click <b>B</b> or <b>S</b>.</td></tr>}
+            {!rows.length && <tr><td colSpan={6} className="empty">No simulated positions yet. Click or tap <b>B</b> or <b>S</b> beside a price in the option chain.</td></tr>}
           </tbody>
         </table>
       </div>

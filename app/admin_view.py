@@ -52,11 +52,13 @@ def _note_view(c, actor, target) -> None:
 
 def _summary(user_id: str) -> dict:
     e = context.engine
-    out = {"instruments": 0, "open_positions": 0, "state": "no strategy", "unrealized": 0.0, "live_realized": 0.0, "live_trades": 0, "fault": None, "paused": False}
+    out = {"instruments": 0, "open_positions": 0, "state": "no strategy", "unrealized": 0.0, "live_realized": 0.0, "live_trades": 0, "fault": None, "paused": False, "strategy_on": True, "strategy_locked": False}
     if e is None:
         return out
     from app.ops import flags
     out["paused"] = flags.engine_paused(user_id)
+    out["strategy_on"] = flags.get("strategy.enabled", user_id=user_id) is not False
+    out["strategy_locked"] = bool(flags.get("strategy.locked", user_id=user_id))
     for inst in e.instruments.values():
         if inst.owner != user_id:
             continue
@@ -136,6 +138,6 @@ def my_activity(request: Request, limit: int = 50, c=Depends(db)):
     u = getattr(request.state, "user", None)
     if u is None:
         return {"views": []}
-    rows = c.execute("SELECT ts, action, detail_json FROM audit_log WHERE action IN ('admin.view_as','admin.edit_profile','admin.edit_positions','admin.remove_instrument','admin.edit_setting','user.limits') AND target_id=? ORDER BY id DESC LIMIT ?",
+    rows = c.execute("SELECT ts, action, detail_json FROM audit_log WHERE action IN ('admin.view_as','admin.edit_profile','admin.edit_positions','admin.remove_instrument','admin.assign_strategy','admin.edit_setting','user.limits','strategy.off','strategy.on') AND target_id=? ORDER BY id DESC LIMIT ?",
                      (u["id"], max(1, min(limit, 200)))).fetchall()
     return {"views": [{"at": r["ts"], "by": (json.loads(r["detail_json"]) or {}).get("actor"), "what": r["action"]} for r in rows]}

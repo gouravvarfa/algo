@@ -5,12 +5,16 @@ import { BrowserRouter } from 'react-router-dom'
 import { App } from './app/App'
 import { SessionProvider } from './lib/session'
 import { ToastProvider } from './lib/toast'
+import { applyMotion } from './lib/theme'
 import './styles/app.css'
+import './styles/mobile.css'      // phone / small-tablet layout: hamburger menu and drawer
+import './styles/aurora.css'     // optional animated background: delete this line (and the file) to go back
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 5_000 } },
 })
 
+applyMotion()
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

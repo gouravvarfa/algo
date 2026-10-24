@@ -1,0 +1,64 @@
+/* ================= phone / small tablet: hamburger menu + slide-in drawer =================
+   Loaded after app.css. TO REMOVE the mobile layout: delete the import of this file in src/main.tsx and rebuild (the hamburger button then stays hidden). */
+.hamburger { display: none; }
+.navbackdrop { display: none; }
+@media (max-width: 860px) {
+  .shell { padding-left: 0; }
+  .hamburger { display: inline-grid; align-content: center; justify-items: center; gap: 4px; width: 40px; height: 40px; flex: none; margin-left: -6px; border: 0; border-radius: 12px; background: transparent; cursor: pointer; transition: background-color .2s ease; }
+  .hamburger:active, .hamburger:hover { background: var(--bg-hover); }
+  .hamburger span { display: block; width: 20px; height: 2px; border-radius: 2px; background: var(--text-primary); transition: transform .25s ease, opacity .2s ease; }
+  .nav-open .hamburger span:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+  .nav-open .hamburger span:nth-child(2) { opacity: 0; }
+  .nav-open .hamburger span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(84vw, 304px); height: 100vh; height: 100dvh; flex-direction: column; align-items: stretch; padding: 16px 12px calc(16px + env(safe-area-inset-bottom)); overflow-y: auto; overflow-x: hidden;
+    border-right: 1px solid var(--border); border-bottom: 0; z-index: 60; transform: translateX(-104%); visibility: hidden; transition: transform .28s cubic-bezier(.2, .7, .2, 1), visibility 0s linear .28s; box-shadow: none; -webkit-overflow-scrolling: touch; }
+  .nav-open .sidebar { transform: none; visibility: visible; transition: transform .28s cubic-bezier(.2, .7, .2, 1), visibility 0s; box-shadow: 18px 0 50px -20px rgba(8, 14, 30, .55); }
+  .nav-open .navbackdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(10, 16, 32, .46); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); animation: navfade .25s ease both; }
+  @keyframes navfade { from { opacity: 0; } to { opacity: 1; } }
+  body:has(.shell.nav-open) { overflow: hidden; }
+  .sidebar .logo span, .sidebar .idxcards, .sidebar .themeseg, .sidebar .navgroup { display: revert; }
+  .sidebar .logo span { display: block; }
+  .sidebar .navlink { padding: 12px; font-size: 14.5px; }
+  .sidebar .idxcards { margin-top: auto; }
+  .navlink.active::before { display: block; }
+
+  .topbar { position: sticky; top: 0; padding: 0 12px; gap: 6px; }
+  .topbar .title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page { padding: 12px 12px 28px; gap: 12px; }
+  .viewbanner { padding: 8px 12px; }
+  .banner { margin-left: 12px !important; margin-right: 12px !important; }
+  .card { padding: 14px; }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tbhero { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .hero-side { border-left: 0; padding-left: 0; justify-items: start; text-align: left; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+  .hero-q { justify-items: start; }
+  .tbkpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tbgrid, .simmain { grid-template-columns: minmax(0, 1fr); }
+  .actbar { left: 0; padding: 8px 10px; }
+  .drawer { width: 100vw; }
+  input, select, textarea { font-size: 16px; }               /* iOS zooms into smaller fields on focus */
+  .btn { min-height: 38px; }
+}
+@media (max-width: 560px) {
+  .topbar .pill.paper, .topbar .pill.sys { display: none; }
+  .topbar .pill { padding: 0 9px; font-size: 11px; }
+  .themecorner button { width: 30px; }
+  .tbhero .hero-pnl b { font-size: 28px; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* the right-hand column of the simulator is a grid with an implicit "auto" column: a wide table inside made the whole page wider than the phone */
+.rcol { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 860px) {
+  /* menu drawer: solid enough that the page behind never shows through the text */
+  .sidebar { background: linear-gradient(180deg, #e3e8f1 0%, #eef1f6 55%, #f6f8fb 100%) !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+  :root[data-theme="dark"] .sidebar { background: linear-gradient(180deg, #1c222b 0%, #141920 60%, #11151b 100%) !important; }
+  .sidebar .idxcard, .sidebar .accountbox { background: rgba(255, 255, 255, .6); }
+  :root[data-theme="dark"] .sidebar .idxcard, :root[data-theme="dark"] .sidebar .accountbox { background: rgba(255, 255, 255, .06); }
+  /* the time bar of the simulator stays compact so it does not cover the chain */
+  .actbar { padding: 6px 10px; gap: 4px; }
+  .actbar .tl { flex: 1 1 100%; }
+}
+@media (prefers-color-scheme: dark) { @media (max-width: 860px) { :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, #1c222b 0%, #141920 60%, #11151b 100%) !important; } } }

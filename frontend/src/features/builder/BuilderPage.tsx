@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { ApiError, api, get, post } from '../../lib/api'
 import { useToast } from '../../lib/toast'
 import { HistoryView } from './HistoryView'
+import OptionsJournalPage from '../journal/OptionsJournalPage'
 import { ResultView, type BtResult } from './ResultView'
 import { buildStrategy, defaultForm, fromLegacyState, HINT, L, MODES, PRESET_GROUPS, PRESET_NOTES, PRESETS, strikeText, toLegacyState, type FormState, type LegForm, type LegacyState } from './strategy'
 import './builder.css'
@@ -18,8 +19,20 @@ export const errorList = (e: unknown): string[] => {
   return [String(e)]
 }
 
+/** History: options paper trades (every leg from the Options Simulator) and saved backtests, one tab each. */
+function HistoryTabs() {
+  const [tab, setTab] = useState<'trades' | 'backtests'>(() => { try { return localStorage.getItem('history.tab') === 'backtests' ? 'backtests' : 'trades' } catch { return 'trades' } })
+  const pick = (t: 'trades' | 'backtests') => { setTab(t); try { localStorage.setItem('history.tab', t) } catch { /* ignore */ } }
+  return (
+    <>
+      <div className="histtabs"><span className="seg"><button className={tab === 'trades' ? 'on' : ''} onClick={() => pick('trades')}>Options paper trades</button><button className={tab === 'backtests' ? 'on' : ''} onClick={() => pick('backtests')}>Backtests</button></span></div>
+      {tab === 'trades' ? <OptionsJournalPage /> : <HistoryView />}
+    </>
+  )
+}
+
 export default function BuilderPage({ view }: { view: 'builder' | 'backtest' | 'history' }) {
-  if (view === 'history') return <HistoryView />
+  if (view === 'history') return <HistoryTabs />
   return <Workspace view={view} />
 }
 

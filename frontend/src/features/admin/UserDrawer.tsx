@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent } from 'react'
-import { ApiError, api, get, post, put } from '../../lib/api'
+import { ApiError, api, del, get, post, put } from '../../lib/api'
 import { dt } from '../../lib/format'
 import { useToast } from '../../lib/toast'
 import './admin.css'
@@ -10,11 +10,26 @@ interface Note { id: number; author_name: string; note: string; created_at: numb
 const SYMBOLS = ['NIFTY', 'BANKNIFTY']
 
 /** One account's limits (enforced on the server when the simulator saves positions) and the admins' private notes about it. */
-export function UserDrawer({ user, onClose, canManage }: { user: { id: string; name: string; username: string }; onClose: () => void; canManage: boolean }) {
+export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user: { id: string; name: string; username: string }; onClose: () => void; canManage: boolean; isSelf?: boolean }) {
+  const canAssign = canManage || isSelf
   const qc = useQueryClient()
   const toast = useToast()
   const lim = useQuery({ queryKey: ['admin', 'limits', user.id], queryFn: () => get<Limits>(`/api/admin/users/${user.id}/limits`) })
   const notes = useQuery({ queryKey: ['admin', 'notes', user.id], queryFn: () => get<{ notes: Note[] }>(`/api/admin/users/${user.id}/notes`) })
+  const strat = useQuery({ queryKey: ['admin', 'strategies', user.id], queryFn: () => get<{ strategies: { id: string; symbol: string; trading_symbol: string; lots: number | null; expiry: string | null; fault: string | null }[] }>(`/api/admin/users/${user.id}/strategies`) })
+  const fo = useQuery({ queryKey: ['admin', 'fo-stocks'], queryFn: () => get<{ symbols: string[] }>('/api/admin/fo-stocks'), staleTime: 3_600_000 })
+  const [sym, setSym] = useState('')
+  const [lots, setLots] = useState('1')
+  const assign = useMutation({
+    mutationFn: () => post(`/api/admin/users/${user.id}/strategies`, { symbol: sym.trim().toUpperCase(), lots: Number(lots) || 1 }),
+    onSuccess: () => { toast('Strategy assigned'); setSym(''); void qc.invalidateQueries({ queryKey: ['admin'] }) },
+    onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not assign'),
+  })
+  const unassign = useMutation({
+    mutationFn: (id: string) => del(`/api/admin/users/${user.id}/instruments/${id}`),
+    onSuccess: () => { toast('Strategy removed'); void qc.invalidateQueries({ queryKey: ['admin'] }) },
+    onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not remove'),
+  })
   const [maxLots, setMaxLots] = useState('')
   const [syms, setSyms] = useState<string[]>(SYMBOLS)
   const [note, setNote] = useState('')
@@ -47,6 +62,23 @@ export function UserDrawer({ user, onClose, canManage }: { user: { id: string; n
     <div className="drawer-wrap" onClick={onClose}>
       <aside className="drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`Details for ${user.name}`}>
         <div className="card-head"><h2>{user.name} <span className="sub mono">{user.username}</span></h2><span className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
+
+        <h3>Strategies <span className="sub">(Top-Bottom on stock futures, assigned by you)</span></h3>
+        <ul className="notes">
+          {(strat.data?.strategies ?? []).map((x) => (
+            <li key={x.id}><span><b>{x.symbol}</b> <span className="sub">{x.trading_symbol} · {x.lots ?? 1} lot · exp {x.expiry}</span>{x.fault ? <span className="chip bad" title={x.fault}> FAULT</span> : null}</span>
+              {canAssign && x.symbol !== 'BANKNIFTY' && <button className="btn sm danger" onClick={() => { if (confirm(`Remove ${x.symbol} from ${user.name}? Its trades stay in their history.`)) unassign.mutate(x.id) }}>Remove</button>}</li>
+          ))}
+          {!strat.data?.strategies.length && <li className="sub">No strategy yet. BankNifty is created when they first open Top Bottom.</li>}
+        </ul>
+        {canAssign && (
+          <form className="linkrow" onSubmit={(e: FormEvent) => { e.preventDefault(); if (sym.trim()) assign.mutate() }}>
+            <input list="fo-stocks" value={sym} onChange={(e) => setSym(e.target.value.toUpperCase())} placeholder="Type to pick an F&O stock, e.g. RELIANCE" maxLength={20} />
+            <datalist id="fo-stocks">{(fo.data?.symbols ?? []).map((x) => <option key={x} value={x} />)}</datalist>
+            <input type="number" min={1} max={50} value={lots} onChange={(e) => setLots(e.target.value)} style={{ width: 72 }} aria-label="Lots" title="Lots" />
+            <button className="btn primary" type="submit" disabled={assign.isPending || !(fo.data?.symbols ?? []).includes(sym.trim().toUpperCase())}>{assign.isPending ? 'Adding…' : 'Assign'}</button>
+          </form>
+        )}
 
         <h3>Profile</h3>
         <form className="stack" onSubmit={(e: FormEvent) => { e.preventDefault(); profile.mutate() }}>

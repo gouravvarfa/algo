@@ -72,7 +72,7 @@ def create_user(c: sqlite3.Connection, *, name: str, username: str, email: str |
                       (uid, username, name, email, role, created_by, now))
             token = _insert_invite(c, uid, now)
     except sqlite3.IntegrityError:
-        raise AuthError(409, "USERNAME_TAKEN", "That username is already taken.") from None
+        raise AuthError(409, "USERNAME_TAKEN", "That username is already taken (the names of removed users stay reserved). Pick another one, e.g. add a number.") from None
     return get_user(c, uid), token
 
 
