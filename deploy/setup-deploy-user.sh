@@ -12,6 +12,11 @@ echo "restrict $PUB" > /home/deploy/.ssh/authorized_keys          # 'restrict': 
 chown deploy:deploy /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/.ssh/authorized_keys
 
 curl -fsSL "$RAW" -o /tmp/algo-deploy.sh
+bash -n /tmp/algo-deploy.sh
+if [ -f /usr/local/sbin/algo-deploy ] && ! cmp -s /tmp/algo-deploy.sh /usr/local/sbin/algo-deploy; then
+  cp -a /usr/local/sbin/algo-deploy "/usr/local/sbin/algo-deploy.bak-$(date +%Y%m%d%H%M%S)"     # never lose a script someone else put there
+  echo "an older /usr/local/sbin/algo-deploy was kept as a .bak file"
+fi
 install -m 755 -o root -g root /tmp/algo-deploy.sh /usr/local/sbin/algo-deploy   # a root-owned copy: the app user cannot edit what root runs
 rm -f /tmp/algo-deploy.sh
 echo 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/algo-deploy' > /etc/sudoers.d/algo-deploy

@@ -20,6 +20,10 @@
 - Variable: `DEPLOY_ENABLED` = `true`.
 - Optional: Settings > Environments > `production` > "Required reviewers" so every deploy waits for your click.
 
+## The 2-minute timer on the server
+`algo-deploy.timer` (on the server) runs `/usr/local/sbin/algo-deploy` every 2 minutes with no argument. The script then deploys `origin/main` only if that commit's CI is green and no frontend build is needed; otherwise, and whenever the server is already on that commit, it does nothing (no restart). The GitHub Deploy workflow is the main path; the timer is a backup.
+After `deploy/deploy.sh` changes, update the server copy: `sudo install -m 755 -o root -g root <new file> /usr/local/sbin/algo-deploy`.
+
 ## Rollback
 If the health check after a deploy fails, the script goes back to the previous commit by itself and the workflow turns red. To go back by hand: `sudo /usr/local/sbin/algo-deploy <old-commit>`.
 
