@@ -9,3 +9,4 @@ pyotp
 argon2-cffi
 cryptography
 segno
+truststore

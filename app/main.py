@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+# use the OS certificate store for HTTPS and WebSocket: antivirus or office networks re-sign traffic and Python's own bundle then fails
+# with CERTIFICATE_VERIFY_FAILED
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
