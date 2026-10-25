@@ -9,6 +9,7 @@ import { applyMotion } from './lib/theme'
 import './styles/app.css'
 import './styles/mobile.css'      // phone / small-tablet layout: hamburger menu and drawer
 import './styles/aurora.css'     // optional animated background: delete this line (and the file) to go back
+import './styles/perf.css'       // smooth scrolling: no live blur on cards, transform-only background motion (load last)
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1, staleTime: 5_000 } },

@@ -17,7 +17,7 @@ export function SessionsPage() {
   return (
     <div className="page">
       <h1>Sessions</h1>
-      <p className="sub">Every account that is signed in right now. A page that stops pinging for 2 minutes counts as gone (offline); 30 minutes without any action ends the session on its own.</p>
+      <p className="sub">Every account that is signed in right now. A page that stops pinging for 2 minutes counts as gone (offline). Every session ends at 4:00 pm IST; there is no idle timeout.</p>
       <div className="card"><div className="scroll"><table>
         <thead><tr><th className="l">User</th><th className="l">Role</th><th className="l">Device</th><th className="l">Signed in</th><th className="l">Last ping</th><th>Idle</th><th className="l">State</th><th /></tr></thead>
         <tbody>

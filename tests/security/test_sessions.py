@@ -1,4 +1,6 @@
 """One account, one device; heartbeat, idle and absolute timeouts; atomic session creation (PDF 3.3 and 3.4)."""
+import datetime as dt
+import time
 import threading
 
 import pytest
@@ -64,29 +66,42 @@ def test_just_under_two_minutes_still_counts_as_live(db, new_client):
     assert login(new_client(), acct, code=acct.next_backup()).status_code == 409
 
 
-# ---- idle / absolute timeouts ----
-def test_thirty_minutes_without_user_activity_ends_the_session(db, client):
+# ---- one daily sign-out time (4 pm IST), no idle timeout ----
+def _ist(y, mo, d, h, mi):
+    return dt.datetime(y, mo, d, h, mi, tzinfo=sessions.IST).timestamp()
+
+
+def test_sessions_end_at_the_next_4pm_ist():
+    assert sessions.ends_at(_ist(2026, 10, 26, 9, 15)) == _ist(2026, 10, 26, 16, 0)       # morning login: 4 pm the same day
+    assert sessions.ends_at(_ist(2026, 10, 26, 15, 59)) == _ist(2026, 10, 26, 16, 0)
+    assert sessions.ends_at(_ist(2026, 10, 26, 16, 0)) == _ist(2026, 10, 27, 16, 0)       # at or after 4 pm: 4 pm the next day
+    assert sessions.ends_at(_ist(2026, 10, 26, 21, 30)) == _ist(2026, 10, 27, 16, 0)
+
+
+def test_hours_without_any_action_do_not_sign_the_person_out(db, client):
     acct = make_user(db)
     login(client, acct)
-    age(db, acct.id, last_activity_at=sessions.IDLE_TIMEOUT + 5)
-    assert client.get("/api/auth/me").status_code == 401
-    assert end_reason(db, acct.id) == ["idle"]
+    age(db, acct.id, last_activity_at=6 * 3600, last_seen_at=6 * 3600)              # six hours with no input and no ping
+    assert client.get("/api/auth/me").status_code == 200                            # still signed in: only 4 pm ends it
 
 
-def test_an_idle_session_does_not_block_a_new_login_even_if_its_page_is_still_pinging(db, new_client):
-    acct = make_user(db)
-    login(new_client(), acct)
-    age(db, acct.id, last_activity_at=sessions.IDLE_TIMEOUT + 5)                  # tab open (pinging) but nobody is there
-    assert login(new_client(), acct, code=acct.next_backup()).status_code == 200
-    assert end_reason(db, acct.id) == ["idle", None]
-
-
-def test_a_session_ends_twelve_hours_after_login_whatever_the_user_does(db, client):
+def test_the_session_ends_at_4pm(db, client):
     acct = make_user(db)
     login(client, acct)
-    age(db, acct.id, started_at=sessions.ABSOLUTE_LIFETIME + 5)
+    started = db.execute("SELECT started_at FROM sessions WHERE ended_at IS NULL").fetchone()[0]
+    yesterday_3pm = sessions.ends_at(started) - 86400 - 3600                       # a login at 3 pm yesterday: its 4 pm has passed
+    db.execute("UPDATE sessions SET started_at=? WHERE ended_at IS NULL", (yesterday_3pm,))
+    db.commit()
     assert client.get("/api/auth/me").status_code == 401
     assert end_reason(db, acct.id) == ["expired"]
+
+
+def test_the_cookie_lives_until_just_after_4pm(db, client):
+    acct = make_user(db)
+    r = login(client, acct)
+    cookie = [h for h in r.headers.get_list("set-cookie") if h.startswith(sessions.COOKIE + "=")][0]
+    max_age = int(cookie.split("Max-Age=")[1].split(";")[0])
+    assert abs(max_age - (sessions.seconds_left(time.time()) + 60)) <= 5
 
 
 def test_heartbeat_with_input_keeps_the_person_active_but_a_bare_ping_does_not(db, client):

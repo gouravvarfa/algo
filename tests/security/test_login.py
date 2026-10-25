@@ -14,7 +14,7 @@ def test_login_succeeds_and_sets_a_server_side_session_cookie(db, client):
     assert r.status_code == 200 and r.json()["user"]["username"] == "rahul"
     cookies = r.headers.get_list("set-cookie")
     sid = next(c for c in cookies if c.startswith("algo_sid="))
-    assert "HttpOnly" in sid and "SameSite=strict" in sid and "Max-Age=43200" in sid
+    assert "HttpOnly" in sid and "SameSite=strict" in sid and "Max-Age=" in sid
     csrf = next(c for c in cookies if c.startswith("algo_csrf="))
     assert "HttpOnly" not in csrf and "SameSite=strict" in csrf          # the page script must be able to read this one
     token = client.cookies.get("algo_sid")

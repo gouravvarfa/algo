@@ -1,0 +1,50 @@
+/* ============================================================================================================================
+   SMOOTH SCROLLING. Loaded last, so it wins over the glass / fog / aurora rules above.
+   Why scrolling stuttered: every card had `backdrop-filter: blur(...)`, so the browser re-blurred what is behind each card on every
+   scroll frame, and the aurora animated `filter: hue-rotate(...)` on two huge blurred layers, which re-paints them on every frame.
+   What stays: the look (translucent cards over the moving fog and aurora). What goes: the per-frame work.
+   - cards: a slightly more solid translucent fill instead of a live blur (the background is already soft, so it looks the same)
+   - the blur stays only on the fixed top bar (one small strip)
+   - the aurora / fog move with transform only (cheap, done by the GPU) and are promoted to their own layer once
+   TO UNDO: remove the import of this file in src/main.tsx.
+   ============================================================================================================================ */
+
+/* 1. no live blur behind cards, panels, KPI tiles, the hero, the sidebar or the simulator's bottom bar */
+.card, .stats, .tbkpis .stat, .kpi, .tile, .tbhero, .tbhero.up, .tbhero.down, .sidebar, .actbar, .drawer, .navbackdrop, .symtabs {
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+}
+:root:not([data-theme="dark"]) .card, :root:not([data-theme="dark"]) .stats, :root:not([data-theme="dark"]) .tbkpis .stat,
+:root:not([data-theme="dark"]) .kpi, :root:not([data-theme="dark"]) .tile {
+  background: linear-gradient(145deg, rgba(255, 255, 255, .80), rgba(255, 255, 255, .62)) !important;
+}
+:root:not([data-theme="dark"]) .tbhero, :root:not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="dark"]) .tbhero.down {
+  background: linear-gradient(135deg, rgba(255, 255, 255, .86), rgba(226, 231, 242, .70)) !important;
+}
+:root:not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, rgba(247, 249, 252, .92), rgba(240, 243, 248, .88)) !important; }
+:root:not([data-theme="dark"]) .actbar { background: rgba(245, 248, 252, .96) !important; }
+:root[data-theme="dark"] .card, :root[data-theme="dark"] .stats, :root[data-theme="dark"] .tbkpis .stat, :root[data-theme="dark"] .kpi, :root[data-theme="dark"] .tile {
+  background: linear-gradient(160deg, rgba(30, 36, 45, .92), rgba(22, 27, 34, .94)) !important;
+}
+:root[data-theme="dark"] .sidebar { background: linear-gradient(180deg, #181d25 0%, #12161c 100%) !important; }
+:root[data-theme="dark"] .actbar { background: rgba(16, 20, 26, .97) !important; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .card { background: linear-gradient(160deg, rgba(30, 36, 45, .92), rgba(22, 27, 34, .94)) !important; }
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, #181d25 0%, #12161c 100%) !important; }
+}
+/* the top bar keeps a light blur: one small strip is cheap */
+.topbar { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+
+/* 2. the moving background: transform only, its own GPU layer, never re-painted while scrolling */
+html::before, html::after, body::before, body::after { will-change: transform; transform: translateZ(0); backface-visibility: hidden; }
+html::before { animation-name: auA !important; animation-duration: 22s !important; animation-iteration-count: infinite !important; animation-direction: alternate !important; animation-timing-function: ease-in-out !important; }
+html::after { animation-name: auB !important; animation-duration: 28s !important; animation-iteration-count: infinite !important; animation-direction: alternate !important; animation-timing-function: ease-in-out !important; }
+
+/* 3. scrolling containers: momentum on touch, no scroll chaining jank, and isolate their painting */
+.scroll, .chainbox, .drawer, .sidebar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.chainbox, .scroll { contain: paint; }
+/* the page itself scrolls natively (smooth CSS scrolling only for in-page jumps, never for wheel/touch) */
+html { scroll-behavior: auto; }
+
+/* 4. hover lifts move with transform only; no shadow animation while the pointer passes over many cards */
+.shell:not(.console) .card, .shell:not(.console) .tbkpis .stat, .shell:not(.console) .tbhero { transition: transform .2s ease !important; }
+@media (hover: none) { .shell:not(.console) .tbkpis .stat:hover, .shell:not(.console) .card:hover { transform: none; } }

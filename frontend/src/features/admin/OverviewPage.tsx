@@ -10,7 +10,7 @@ interface Entry { id: number; ts: string; actor_role: string | null; action: str
 interface Summary { overall: string; feed: { status: string; reason: string } | null; engine: { status: string; reason: string } | null; users: { status: string; reason: string } | null; incidents: { status: string; reason: string } | null }
 
 interface Trends { days: string[]; logins: number[]; failed: number[]; joined: number[]; active_users: number[] }
-interface Policy { ip_allow_list: string[]; ip_allow_list_on: boolean; idle_timeout_min: number; absolute_timeout_h: number; lockout: string; mfa: string }
+interface Policy { ip_allow_list: string[]; ip_allow_list_on: boolean; idle_timeout_min: number | null; daily_signout?: string; absolute_timeout_h: number; lockout: string; mfa: string }
 
 function Bars({ values, cls = '', label }: { values: number[]; cls?: string; label: string }) {
   const max = Math.max(1, ...values)
@@ -79,7 +79,7 @@ export default function AdminOverview() {
           <dl className="kv2">
             <dt>Sign-in</dt><dd>{policy.data.mfa}</dd>
             <dt>Lock-out</dt><dd>{policy.data.lockout}</dd>
-            <dt>Idle / absolute timeout</dt><dd>{policy.data.idle_timeout_min} min / {policy.data.absolute_timeout_h} h</dd>
+            <dt>Automatic sign-out</dt><dd>{policy.data.daily_signout ? `every day at ${policy.data.daily_signout}` : `after ${policy.data.absolute_timeout_h} h`}{policy.data.idle_timeout_min ? ` · idle ${policy.data.idle_timeout_min} min` : ' · no idle timeout'}</dd>
             <dt>Admin network allow-list</dt><dd>{policy.data.ip_allow_list_on ? policy.data.ip_allow_list.join(', ') : <span className="chip warn">off: reachable from any address</span>}</dd>
           </dl>
         </div>

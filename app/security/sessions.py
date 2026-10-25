@@ -1,11 +1,12 @@
-"""Server-side sessions: one active session per user, heartbeat, idle and absolute timeouts.
+"""Server-side sessions: one active session per user, heartbeat, and one daily sign-out time.
 
 The cookie carries only a random 256-bit token; the database row is keyed by its SHA-256. Ending a session (logout, force-logout, disable)
 is therefore instant, which a signed stateless cookie cannot do.
 
   * heartbeat  : the open page pings every 30 s -> last_seen_at. No ping for 2 minutes = the page is gone (tab closed, laptop asleep).
-  * activity   : a ping that reports real user input -> last_activity_at. 30 minutes without it = idle timeout.
-  * lifetime   : 12 hours after login the session ends whatever the user does (one trading day).
+  * activity   : a ping that reports real user input -> last_activity_at (shown to developers; it no longer signs anyone out).
+  * daily end  : every session ends at the next 16:00 IST after it started (the owner's rule: stay signed in all trading day, sign out
+                 at 4 pm). Until then only logout, an admin, or a login from another device ends it.
 A second login is refused while the first session is live AND its page is still pinging; otherwise the old session is closed and replaced.
 """
 from __future__ import annotations
@@ -21,9 +22,23 @@ from app.db.platform_db import write_tx
 COOKIE = "algo_sid"
 CSRF_COOKIE = "algo_csrf"
 HEARTBEAT_DEAD = 120
-IDLE_TIMEOUT = 30 * 60
-ABSOLUTE_LIFETIME = 12 * 3600
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
+DAILY_END = dt.time(16, 0)                 # 4 pm IST: every session ends at the next one of these
+ABSOLUTE_LIFETIME = 24 * 3600              # a session can never be older than one day
+
+
+def ends_at(started_at: float) -> float:
+    """The next 16:00 IST after `started_at` (a login at 15:59 ends a minute later; at 16:00 or after, it ends at 16:00 the next day)."""
+    t = dt.datetime.fromtimestamp(started_at, IST)
+    end = t.replace(hour=DAILY_END.hour, minute=DAILY_END.minute, second=0, microsecond=0)
+    if end <= t:
+        end += dt.timedelta(days=1)
+    return end.timestamp()
+
+
+def seconds_left(started_at: float, now: float | None = None) -> int:
+    now = time.time() if now is None else now
+    return max(0, int(ends_at(started_at) - now))
 
 
 class AlreadyLoggedIn(Exception):
@@ -51,10 +66,8 @@ def device_label(user_agent: str | None) -> str:
 
 
 def _end_reason_if_dead(row: sqlite3.Row, now: float) -> str | None:
-    if now - row["started_at"] >= ABSOLUTE_LIFETIME:
+    if now >= ends_at(row["started_at"]):
         return "expired"
-    if now - row["last_activity_at"] >= IDLE_TIMEOUT:
-        return "idle"
     return None
 
 
@@ -96,7 +109,7 @@ def ended_reason(c: sqlite3.Connection, token: str | None) -> str | None:
 
 def lookup(c: sqlite3.Connection, token: str | None, now: float | None = None) -> sqlite3.Row | None:
     """The session row (joined with its user) if the cookie token is a live session of an ACTIVE user, else None.
-    A session found to be past its idle or absolute limit is closed here."""
+    A session found to be past its daily sign-out time is closed here."""
     if not token or len(token) > 200:
         return None
     now = time.time() if now is None else now

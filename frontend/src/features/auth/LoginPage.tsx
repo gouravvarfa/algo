@@ -8,7 +8,7 @@ interface Refusal { message: string; device?: string; last_active?: string; canT
 
 const REASONS: Record<string, string> = {
   idle: 'You were signed out because the page was idle for 30 minutes.',
-  expired: 'Your session reached its 12-hour limit. Sign in again.',
+  expired: 'Everyone is signed out at 4:00 pm every day. Sign in again.',
   forced: 'An admin signed you out.',
   replaced: 'You were signed out because this account was signed in on another device.',
   disabled: 'This account was disabled.',

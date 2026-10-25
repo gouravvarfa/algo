@@ -265,7 +265,7 @@ def clear_announcement(actor=Depends(require("users.manage")), c=Depends(db)):
 def security_policy(_=Depends(require("users.read"))):
     from app.security import sessions
     nets = [str(n) for n in allowed_networks()]
-    return {"ip_allow_list": nets, "ip_allow_list_on": bool(nets), "idle_timeout_min": sessions.IDLE_TIMEOUT // 60,
+    return {"ip_allow_list": nets, "ip_allow_list_on": bool(nets), "idle_timeout_min": None, "daily_signout": "16:00 IST",
             "absolute_timeout_h": sessions.ABSOLUTE_LIFETIME // 3600, "lockout": "5 failed attempts lock a username and an address for 15 minutes",
             "mfa": "password + authenticator code on every sign-in", "one_device": True}
 
