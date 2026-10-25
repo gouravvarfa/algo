@@ -1,5 +1,6 @@
 import { createChart, type IChartApi, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { PAGE_FRIENDLY_CHART } from '../../lib/chartScroll'
 import { cssVar, useTheme } from '../../lib/theme'
 import { n0, num, sign } from '../../lib/format'
 
@@ -21,7 +22,7 @@ function EquityChart({ metrics }: { metrics: BtMetrics }) {
   const { dark } = useTheme()
   useEffect(() => {
     if (!host.current) return
-    const ch: IChartApi = createChart(host.current, { autoSize: true, height: 280, layout: { background: { color: 'transparent' }, textColor: cssVar('--text-secondary') }, grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(128,128,128,.15)' } } })
+    const ch: IChartApi = createChart(host.current, { ...PAGE_FRIENDLY_CHART, autoSize: true, height: 280, layout: { background: { color: 'transparent' }, textColor: cssVar('--text-secondary') }, grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(128,128,128,.15)' } } })
     const by: Record<string, BtMetrics['equity'][number]> = {}
     metrics.equity.forEach((p) => { by[p.date] = p })
     const pts = Object.values(by)

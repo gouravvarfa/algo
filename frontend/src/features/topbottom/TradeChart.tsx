@@ -1,5 +1,6 @@
 import { createChart, type IChartApi, type IPriceLine, type ISeriesApi, type SeriesMarker, type Time, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useRef, useState } from 'react'
+import { PAGE_FRIENDLY_CHART } from '../../lib/chartScroll'
 import { cssVar } from '../../lib/theme'
 import { money, n2, num } from '../../lib/format'
 import type { Snapshot } from '../../lib/types'
@@ -29,6 +30,7 @@ export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Ki
     if (!host.current) return
     const c = { bg: cssVar('--bg-surface'), text: cssVar('--text-secondary'), grid: cssVar('--border'), up: cssVar('--success'), down: cssVar('--danger') }
     const ch = createChart(host.current, {
+      ...PAGE_FRIENDLY_CHART,
       autoSize: true,
       layout: { background: { color: c.bg }, textColor: c.text, fontFamily: cssVar('--font-sans'), fontSize: 11 },
       grid: { vertLines: { color: c.grid }, horzLines: { color: c.grid } },

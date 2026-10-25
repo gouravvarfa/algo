@@ -1,50 +1,67 @@
 /* ============================================================================================================================
    SMOOTH SCROLLING. Loaded last, so it wins over the glass / fog / aurora rules above.
-   Why scrolling stuttered: every card had `backdrop-filter: blur(...)`, so the browser re-blurred what is behind each card on every
-   scroll frame, and the aurora animated `filter: hue-rotate(...)` on two huge blurred layers, which re-paints them on every frame.
-   What stays: the look (translucent cards over the moving fog and aurora). What goes: the per-frame work.
-   - cards: a slightly more solid translucent fill instead of a live blur (the background is already soft, so it looks the same)
-   - the blur stays only on the fixed top bar (one small strip)
-   - the aurora / fog move with transform only (cheap, done by the GPU) and are promoted to their own layer once
+   What made scrolling slow or stop (all found by measuring, all fixed here):
+   1. tables / the option chain trapped the wheel (overscroll-behavior: contain): the page stopped while the pointer was over them
+   2. `background-attachment: fixed` on <body>: the browser repainted the whole screen on every scroll step
+   3. four full-screen background layers with a LIVE blur (fog + aurora) that also move: a big blur re-done on every frame
+   4. a live blur behind the top bar and behind every card (backdrop-filter): content scrolling under it was re-blurred every frame
+   5. (in the chart code) the charts used the mouse wheel to zoom, so the page did not scroll over a chart
+   The look stays: translucent cards, a soft light fog and the slow aurora; they are now plain soft gradients that the GPU only moves.
    TO UNDO: remove the import of this file in src/main.tsx.
    ============================================================================================================================ */
 
-/* 1. no live blur behind cards, panels, KPI tiles, the hero, the sidebar or the simulator's bottom bar */
-.card, .stats, .tbkpis .stat, .kpi, .tile, .tbhero, .tbhero.up, .tbhero.down, .sidebar, .actbar, .drawer, .navbackdrop, .symtabs {
+/* 1. scrolling inside a box hands over to the page at its end (default browser behaviour) */
+.scroll, .chainbox { overscroll-behavior: auto; -webkit-overflow-scrolling: touch; }
+.drawer, .sidebar { overscroll-behavior: contain; }
+
+/* 2. the page background scrolls normally (the moving fog/aurora layers above it are fixed and do not repaint) */
+body { background-attachment: scroll !important; }
+
+/* 3. background layers: soft gradients without a live blur; only transform is animated */
+body::before, body::after, html::before, html::after { filter: none !important; will-change: transform; backface-visibility: hidden; contain: strict; }
+body::before { background:
+    radial-gradient(closest-side at 22% 28%, var(--fog-a), transparent),
+    radial-gradient(closest-side at 74% 22%, var(--fog-b), transparent),
+    radial-gradient(closest-side at 58% 78%, var(--fog-c), transparent) !important; }
+body::after { background:
+    radial-gradient(closest-side at 80% 70%, var(--fog-d), transparent),
+    radial-gradient(closest-side at 15% 80%, var(--fog-a), transparent) !important; }
+html::before { background: radial-gradient(closest-side, var(--au-1), var(--au-3) 45%, transparent) !important; border-radius: 0 !important;
+  animation: auA 24s ease-in-out infinite alternate !important; }
+html::after { background: radial-gradient(closest-side, var(--au-4), var(--au-1) 50%, transparent) !important; border-radius: 0 !important;
+  animation: auB 30s ease-in-out infinite alternate !important; }
+html[data-motion="off"]::before, html[data-motion="off"]::after, html[data-motion="off"] body::before, html[data-motion="off"] body::after { animation: none !important; }
+
+/* 4. no live blur anywhere content scrolls under it: cards, hero, sidebar, top bar, bottom bar */
+.card, .stats, .tbkpis .stat, .kpi, .tile, .tbhero, .tbhero.up, .tbhero.down, .sidebar, .actbar, .drawer, .navbackdrop, .symtabs, .topbar, .timebar {
   -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
 }
 :root:not([data-theme="dark"]) .card, :root:not([data-theme="dark"]) .stats, :root:not([data-theme="dark"]) .tbkpis .stat,
 :root:not([data-theme="dark"]) .kpi, :root:not([data-theme="dark"]) .tile {
-  background: linear-gradient(145deg, rgba(255, 255, 255, .80), rgba(255, 255, 255, .62)) !important;
+  background: linear-gradient(145deg, rgba(255, 255, 255, .84), rgba(255, 255, 255, .68)) !important;
 }
 :root:not([data-theme="dark"]) .tbhero, :root:not([data-theme="dark"]) .tbhero.up, :root:not([data-theme="dark"]) .tbhero.down {
-  background: linear-gradient(135deg, rgba(255, 255, 255, .86), rgba(226, 231, 242, .70)) !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(228, 233, 243, .76)) !important;
 }
-:root:not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, rgba(247, 249, 252, .92), rgba(240, 243, 248, .88)) !important; }
-:root:not([data-theme="dark"]) .actbar { background: rgba(245, 248, 252, .96) !important; }
+:root:not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, rgba(247, 249, 252, .94), rgba(240, 243, 248, .9)) !important; }
+:root:not([data-theme="dark"]) .topbar { background: rgba(240, 243, 247, .94) !important; }
+:root:not([data-theme="dark"]) .actbar { background: rgba(245, 248, 252, .97) !important; }
 :root[data-theme="dark"] .card, :root[data-theme="dark"] .stats, :root[data-theme="dark"] .tbkpis .stat, :root[data-theme="dark"] .kpi, :root[data-theme="dark"] .tile {
-  background: linear-gradient(160deg, rgba(30, 36, 45, .92), rgba(22, 27, 34, .94)) !important;
+  background: linear-gradient(160deg, rgba(30, 36, 45, .94), rgba(22, 27, 34, .96)) !important;
 }
 :root[data-theme="dark"] .sidebar { background: linear-gradient(180deg, #181d25 0%, #12161c 100%) !important; }
-:root[data-theme="dark"] .actbar { background: rgba(16, 20, 26, .97) !important; }
+:root[data-theme="dark"] .topbar { background: rgba(15, 19, 25, .96) !important; }
+:root[data-theme="dark"] .actbar, :root[data-theme="dark"] .timebar { background: rgba(16, 20, 26, .97) !important; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) .card { background: linear-gradient(160deg, rgba(30, 36, 45, .92), rgba(22, 27, 34, .94)) !important; }
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .card { background: linear-gradient(160deg, rgba(30, 36, 45, .94), rgba(22, 27, 34, .96)) !important; }
   :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, #181d25 0%, #12161c 100%) !important; }
+  :root:not([data-theme="light"]):not([data-theme="dark"]) .topbar { background: rgba(15, 19, 25, .96) !important; }
 }
-/* the top bar keeps a light blur: one small strip is cheap */
-.topbar { -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
 
-/* 2. the moving background: transform only, its own GPU layer, never re-painted while scrolling */
-html::before, html::after, body::before, body::after { will-change: transform; transform: translateZ(0); backface-visibility: hidden; }
-html::before { animation-name: auA !important; animation-duration: 22s !important; animation-iteration-count: infinite !important; animation-direction: alternate !important; animation-timing-function: ease-in-out !important; }
-html::after { animation-name: auB !important; animation-duration: 28s !important; animation-iteration-count: infinite !important; animation-direction: alternate !important; animation-timing-function: ease-in-out !important; }
-
-/* 3. scrolling containers: momentum on touch, no scroll chaining jank, and isolate their painting */
-.scroll, .chainbox, .drawer, .sidebar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+/* the option chain and wide tables paint inside their own box */
 .chainbox, .scroll { contain: paint; }
-/* the page itself scrolls natively (smooth CSS scrolling only for in-page jumps, never for wheel/touch) */
 html { scroll-behavior: auto; }
 
-/* 4. hover lifts move with transform only; no shadow animation while the pointer passes over many cards */
+/* hover lifts: transform only */
 .shell:not(.console) .card, .shell:not(.console) .tbkpis .stat, .shell:not(.console) .tbhero { transition: transform .2s ease !important; }
 @media (hover: none) { .shell:not(.console) .tbkpis .stat:hover, .shell:not(.console) .card:hover { transform: none; } }

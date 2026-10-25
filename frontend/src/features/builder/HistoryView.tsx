@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { get } from '../../lib/api'
+import { PAGE_FRIENDLY_CHART } from '../../lib/chartScroll'
 import { cssVar, useTheme } from '../../lib/theme'
 import { n0 } from '../../lib/format'
 import type { BtMetrics } from './ResultView'
@@ -25,7 +26,7 @@ function CompareChart({ runs }: { runs: Run[] }) {
   const { dark } = useTheme()
   useEffect(() => {
     if (!host.current) return
-    const ch: IChartApi = createChart(host.current, { autoSize: true, height: 280, layout: { background: { color: 'transparent' }, textColor: cssVar('--text-secondary') }, grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(128,128,128,.15)' } } })
+    const ch: IChartApi = createChart(host.current, { ...PAGE_FRIENDLY_CHART, autoSize: true, height: 280, layout: { background: { color: 'transparent' }, textColor: cssVar('--text-secondary') }, grid: { vertLines: { visible: false }, horzLines: { color: 'rgba(128,128,128,.15)' } } })
     runs.forEach((r, i) => {
       if (!r.metrics.trades) return
       const by: Record<string, number> = {}
