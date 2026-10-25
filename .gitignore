@@ -6,3 +6,8 @@ data/
 __pycache__/
 .provider_call_metrics.json
 *.log
+
+# made on the server by the deploy script
+frontend/dist.old/
+frontend/dist.new/
+.npm/
