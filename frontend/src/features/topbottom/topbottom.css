@@ -98,3 +98,11 @@ tr.replay td { opacity: .55; }
 .symtabs { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-surface); width: fit-content; }
 .symtabs button { border: 0; background: none; padding: 5px 14px; border-radius: 7px; font-weight: 600; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; transition: background-color .15s, color .15s; }
 .symtabs button.on { background: var(--accent); color: #fff; }
+
+/* chart selected (clicked): the wheel belongs to the chart; a clear ring and a hint say so */
+.chartbox .chartcanvas { border-radius: 8px; transition: box-shadow .15s ease; }
+.chartbox.focused .chartcanvas { box-shadow: 0 0 0 2px var(--accent); }
+.charthint { position: absolute; right: 70px; bottom: 34px; z-index: 3; font-size: 11px; padding: 3px 9px; border-radius: 999px; pointer-events: none;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent); color: var(--text-muted); border: 1px solid var(--border); opacity: .9; }
+.chartbox.focused .charthint { color: var(--accent); border-color: var(--accent); }
+@media (hover: none) { .chartbox:not(.focused) .charthint { display: none; } }

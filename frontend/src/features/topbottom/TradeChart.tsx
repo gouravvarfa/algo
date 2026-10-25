@@ -1,6 +1,6 @@
 import { createChart, type IChartApi, type IPriceLine, type ISeriesApi, type SeriesMarker, type Time, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useRef, useState } from 'react'
-import { PAGE_FRIENDLY_CHART } from '../../lib/chartScroll'
+import { PAGE_FRIENDLY_CHART, attachChartFocus } from '../../lib/chartScroll'
 import { cssVar } from '../../lib/theme'
 import { money, n2, num } from '../../lib/format'
 import type { Snapshot } from '../../lib/types'
@@ -18,6 +18,7 @@ export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Ki
   const [themeTick, setThemeTick] = useState(0)
   const [ohlc, setOhlc] = useState('')
   const fitted = useRef(false)
+  const [focused, setFocused] = useState(false)
 
   useEffect(() => {
     const on = () => setThemeTick((t) => t + 1)
@@ -51,7 +52,8 @@ export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Ki
     chart.current = ch
     levels.current = []
     fitted.current = false
-    return () => { ch.remove(); chart.current = null }
+    const detach = attachChartFocus(host.current, ch, setFocused)
+    return () => { detach(); setFocused(false); ch.remove(); chart.current = null }
   }, [themeTick])
 
   // data, markers, levels
@@ -98,9 +100,10 @@ export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Ki
   }, [fitSignal]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="chartbox">
+    <div className={'chartbox' + (focused ? ' focused' : '')}>
       <div ref={host} className="chartcanvas" />
       {ohlc && <div className="ohlc num">{ohlc}</div>}
+      <div className="charthint" aria-live="polite">{focused ? 'Chart selected: the wheel zooms and moves the chart · click outside or Esc to scroll the page' : 'Click the chart to zoom with the wheel · Ctrl + wheel zooms any time'}</div>
     </div>
   )
 }
