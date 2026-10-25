@@ -7,6 +7,10 @@ Reads need `system.read`; anything that CHANGES something needs `system.manage` 
 """
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
+import math
+import re
 import time
 
 from fastapi import APIRouter, Depends, Request
@@ -16,8 +20,10 @@ from pydantic import BaseModel, Field
 from app.auth_api import db, require
 from app.db import audit
 from app.ops import circuit, context, flags, health, incidents, selftests, stats
+from app.providers import angelone_client
 from app.security import sessions
 from app.security.users import AuthError
+from app.services import angelone_credential_store as credential_store
 
 router = APIRouter()
 
@@ -245,3 +251,80 @@ def dev_live_logs(lines: int = 300, level: str = "", _=Depends(require("system.r
     if level:
         out = [ln for ln in out if level.upper() in ln]
     return {"available": True, "size_kb": round(size / 1024), "lines": out}
+
+
+# ---- Angel One connection: the developer types the broker details into the console (no server login, no .env) -------------------------------
+BROKER_COOLDOWN_S = 8.0                      # Angel One limits login attempts: never two tries within a few seconds
+_broker_lock = asyncio.Lock()
+_broker_last_try = 0.0
+
+
+def _broker_state() -> dict:
+    """What the console shows. The key, PIN and TOTP secret never leave the server: only a masked client code, the source and the dates."""
+    e = context.engine
+    return {**credential_store.status(), "feed": e.feed.status() if e is not None else None}
+
+
+@router.get("/api/dev/broker")
+def dev_broker(_=Depends(require("system.read"))):
+    return _broker_state()
+
+
+class BrokerBody(BaseModel):
+    # lengths are checked in the endpoint, so a person gets a sentence in plain words and not a bare "422"
+    api_key: str = Field(max_length=200)
+    client_code: str = Field(max_length=64)
+    pin: str = Field(max_length=32)
+    totp_secret: str = Field(max_length=200)      # the long base32 key shown with the QR code, not a 6-digit code
+
+
+@router.put("/api/dev/broker")
+async def dev_broker_connect(body: BrokerBody, actor=Depends(require("system.manage")), c=Depends(db)):
+    """Log in to Angel One with these details FIRST; only a successful login is saved (encrypted), handed to the running app and the live feed
+    is reconnected with it. A wrong detail leaves the current connection untouched."""
+    global _broker_last_try
+    api_key, code, pin = body.api_key.strip(), body.client_code.strip().upper(), body.pin.strip()
+    secret = re.sub(r"\s+", "", body.totp_secret).upper()
+    if len(api_key) < 4 or len(code) < 3 or not pin or len(pin) > 12 or " " in code:
+        raise AuthError(400, "BAD_DETAILS", "Check the API key, the client code and the PIN: one of them is empty or too short.")
+    if not re.fullmatch(r"[A-Z2-7]{16,64}=*", secret):
+        raise AuthError(400, "BAD_TOTP_SECRET", "The TOTP secret is the long key Angel One shows next to the QR code (letters A-Z and digits 2-7), not the 6-digit code.")
+    if _broker_lock.locked():
+        raise AuthError(409, "BUSY", "Another connect is in progress. Wait for it to finish.")
+    async with _broker_lock:
+        wait = BROKER_COOLDOWN_S - (time.monotonic() - _broker_last_try)
+        if wait > 0:
+            raise AuthError(429, "TOO_FAST", f"Angel One limits login attempts: wait {math.ceil(wait)} seconds and try again.")
+        _broker_last_try = time.monotonic()
+        masked = credential_store.mask_client_code(code)
+        try:
+            session = await angelone_client.login(api_key, code, pin, secret)
+        except angelone_client.AngelOneApiError as exc:
+            _audit(c, actor, "dev.broker.connect_failed", target_type="broker", target_id=masked, detail={"kind": exc.kind})
+            if exc.kind == "auth":
+                raise AuthError(400, "BROKER_REJECTED", f"Angel One refused these details: {str(exc)[:160]}. Nothing was saved.")
+            raise AuthError(502, "BROKER_UNREACHABLE", f"Could not reach Angel One: {str(exc)[:160]}. Nothing was saved.")
+        now = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).isoformat(timespec="seconds")
+        credential_store.save_credentials(credential_store.AngelOneCredentials(
+            api_key=api_key, client_code=code, pin=pin, totp_secret=secret, connected_at=now, updated_by=actor["username"]))
+        e = context.engine
+        if e is not None:
+            e.provider.adopt_session(session)            # the login above is reused: ONE Angel One login for the whole change
+            await e.feed.restart()
+        _audit(c, actor, "dev.broker.connect", target_type="broker", target_id=masked, detail={"client_code": masked})
+        incidents.record("feed", f"Angel One details changed by {actor['username']} (client {masked}): feed reconnected", severity="info", auto_action="reconnected")
+    return _broker_state()
+
+
+@router.delete("/api/dev/broker")
+async def dev_broker_disconnect(actor=Depends(require("system.manage")), c=Depends(db)):
+    """Remove the details saved from the console. If the server still has ANGELONE_* in its environment those are used again."""
+    before = credential_store.status()
+    credential_store.clear_credentials()
+    e = context.engine
+    if e is not None:
+        e.provider.reset_session()
+        await e.feed.restart()
+    _audit(c, actor, "dev.broker.disconnect", target_type="broker", target_id=before["client_code"])
+    incidents.record("feed", f"Angel One details removed by {actor['username']}", severity="warning", auto_action="live feed stopped" if not credential_store.is_configured() else "fell back to the server environment")
+    return _broker_state()

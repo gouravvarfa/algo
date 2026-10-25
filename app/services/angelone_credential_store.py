@@ -1,21 +1,27 @@
 """
-Local credential store for Angel One, so the user can connect from the
-frontend instead of hand-editing .env. Falls back to .env values
-(settings.angelone_*) if no saved file exists, so either path still works.
+Credential store for Angel One, so a developer can connect from the Developer console instead of editing .env on the server.
+Saved details win over the .env values (settings.angelone_*); with no saved file the .env values are used, so either path still works.
 
-Local-dev-only storage: plaintext JSON on disk (gitignored) — appropriate
-for a single-user local app, not a multi-tenant deployment.
+The file (angelone_credentials.json, gitignored) holds ONE encrypted blob (Fernet, the same key as the authenticator secrets: APP_ENC_KEY,
+see app/security/crypto.py). A file written by an older version, with the four values in plain text, is still read, and is replaced by an
+encrypted one the next time the details are saved. The PIN and the TOTP secret are never sent to a browser: status() returns only a masked
+client code and the dates.
 """
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 
-from pydantic import BaseModel
+from cryptography.fernet import InvalidToken
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
+from app.security import crypto
 
 CREDENTIAL_PATH = Path("angelone_credentials.json")
+log = logging.getLogger("app.credentials")
 
 
 class AngelOneCredentials(BaseModel):
@@ -26,11 +32,26 @@ class AngelOneCredentials(BaseModel):
     # Set only on a real, verified successful login — never backdated,
     # never set just because credentials were saved.
     connected_at: str | None = None
+    updated_by: str | None = None          # the developer who saved them (username), for the status line
+
+
+def _read_saved() -> AngelOneCredentials | None:
+    if not CREDENTIAL_PATH.exists():
+        return None
+    try:
+        raw = json.loads(CREDENTIAL_PATH.read_text())
+        if "enc" in raw:
+            raw = json.loads(crypto.decrypt(raw["enc"]))
+        return AngelOneCredentials.model_validate(raw)
+    except (ValueError, InvalidToken, ValidationError, OSError) as exc:
+        log.warning("angelone_credentials.json cannot be read (%s: wrong APP_ENC_KEY, or a damaged file): ignoring it", type(exc).__name__)
+        return None
 
 
 def get_credentials() -> AngelOneCredentials | None:
-    if CREDENTIAL_PATH.exists():
-        return AngelOneCredentials.model_validate(json.loads(CREDENTIAL_PATH.read_text()))
+    saved = _read_saved()
+    if saved is not None:
+        return saved
     if settings.angelone_configured:
         return AngelOneCredentials(
             api_key=settings.angelone_api_key,
@@ -42,7 +63,13 @@ def get_credentials() -> AngelOneCredentials | None:
 
 
 def save_credentials(credentials: AngelOneCredentials) -> None:
-    CREDENTIAL_PATH.write_text(json.dumps(credentials.model_dump(), indent=2))
+    tmp = CREDENTIAL_PATH.with_name(CREDENTIAL_PATH.name + ".tmp")
+    tmp.write_text(json.dumps({"enc": crypto.encrypt(json.dumps(credentials.model_dump()))}))
+    try:
+        os.chmod(tmp, 0o600)                  # owner-only where the OS supports it (no effect on Windows)
+    except OSError:
+        pass
+    tmp.replace(CREDENTIAL_PATH)              # never a half-written file
 
 
 def clear_credentials() -> None:
@@ -52,3 +79,28 @@ def clear_credentials() -> None:
 
 def is_configured() -> bool:
     return get_credentials() is not None
+
+
+def _file_is_encrypted() -> bool:
+    try:
+        return "enc" in json.loads(CREDENTIAL_PATH.read_text())
+    except (OSError, ValueError):
+        return False
+
+
+def mask_client_code(code: str) -> str:
+    return code if len(code) <= 3 else code[0] + "•" * (len(code) - 3) + code[-2:]
+
+
+def status() -> dict:
+    """What the Developer console may show: where the details come from and a masked client code. Never the key, the PIN or the secret."""
+    saved = _read_saved()
+    creds = saved or get_credentials()
+    return {
+        "configured": creds is not None,
+        "source": "saved" if saved else "env" if creds else "none",
+        "client_code": mask_client_code(creds.client_code) if creds else None,
+        "connected_at": creds.connected_at if creds else None,
+        "updated_by": creds.updated_by if creds else None,
+        "encrypted": _file_is_encrypted(),
+    }

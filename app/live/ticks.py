@@ -135,6 +135,16 @@ class TickFeed:
         if self._task:
             self._task.cancel()
 
+    async def restart(self) -> None:
+        """Drop the WebSocket and connect again NOW with whatever session the provider gives next (the Developer console calls this after the
+        Angel One details changed). Subscriptions are kept and re-sent on connect; the reconnect back-off starts from 1 s again."""
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self.connected, self._ws, self.last_error = False, None, None
+        self.start()
+
     def age(self, token: str) -> float | None:
         t = self.latest.get(str(token))
         return None if t is None else max(0.0, time.time() - t.recv_at)

@@ -58,6 +58,11 @@ class AngelOneProvider:
         """Forces the next request to re-authenticate — call after credentials change."""
         self._session = None
 
+    def adopt_session(self, session: AngelOneSession) -> None:
+        """Use a session that was just opened by the Developer console's "Connect" (it already proved the details work), so saving new
+        credentials costs ONE Angel One login, not two."""
+        self._session = session
+
     async def get_session(self) -> AngelOneSession:
         """Public accessor for the SAME session every REST call already
         uses — added 2026-09-25 for backend/live/market_data_service.py's

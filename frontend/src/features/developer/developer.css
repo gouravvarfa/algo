@@ -19,3 +19,8 @@ tr.resolved td { opacity: .5; }
 .logbox { margin: 0; height: calc(100vh - 260px); min-height: 320px; overflow: auto; padding: 12px 14px; font: 11.5px/1.5 var(--font-mono); background: #0b1220; color: #cfe0ff; border-radius: var(--r-lg); white-space: pre-wrap; overflow-wrap: anywhere; }
 .rules { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; color: var(--text-secondary); }
 label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.broker-status { display: flex; flex-wrap: wrap; gap: 14px 28px; align-items: center; }
+.broker-facts { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 0; }
+.broker-facts dt { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.broker-facts dd { margin: 2px 0 0; font-size: 13px; }
