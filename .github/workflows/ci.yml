@@ -1,0 +1,68 @@
+# CI: every push and every pull request runs the whole test suite on a clean machine.
+# No secrets, no Angel One, no network to any broker: the tests use fakes and a throw-away database.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests (Python)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"        # the same Python as the server (Ubuntu 24.04)
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: pytest
+        run: python -m pytest tests -q -p no:cacheprovider
+
+  frontend:
+    name: Frontend (type-check, tests, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: type-check
+        run: npx tsc --noEmit
+      - name: unit tests
+        run: npx vitest run
+      - name: production build
+        run: npm run build
+      - name: keep the build for the deploy job
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  secrets-check:
+    name: No secrets in the repo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: fail if a credential, key or database is tracked
+        run: |
+          bad=$(git ls-files | grep -Ei '(^|/)(\.env|angelone_credentials\.json|enc\.key)$|\.pem$|\.ppk$|^data/' || true)
+          if [ -n "$bad" ]; then echo "These files must never be committed:"; echo "$bad"; exit 1; fi
+          echo "clean"

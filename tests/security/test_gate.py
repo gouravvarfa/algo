@@ -18,7 +18,8 @@ def legacy_env(monkeypatch):
 # ---- open (local use) ----
 def test_with_no_login_configured_everything_is_open_as_before(client):
     assert client.get("/api/auth/mode").json() == {"mode": "open"}
-    assert client.get("/top-bottom").status_code == 200
+    r = client.get("/top-bottom", follow_redirects=False)                  # the page lives in the React app: with no login it is a plain redirect (needs no build)
+    assert r.status_code == 307 and r.headers["location"] == "/app/top-bottom"
     assert client.get("/api/journal").status_code == 200
 
 
@@ -30,7 +31,7 @@ def test_the_old_login_still_works_until_the_first_platform_user_exists(db, new_
     assert c.get("/api/journal").status_code == 401 and c.get("/api/journal").json() == {"detail": "login required"}
     assert c.post("/login", data={"username": "old", "password": "wrong"}, follow_redirects=False).headers["location"] == "/login?e=1"
     r = c.post("/login", data={"username": "old", "password": LEGACY_PASSWORD}, follow_redirects=False)
-    assert r.status_code == 303 and c.get("/top-bottom").status_code == 200
+    assert r.status_code == 303 and c.get("/top-bottom", follow_redirects=False).status_code == 307             # signed in: straight to the React app
 
     make_user(db)                                                         # the first platform user switches the whole app over
     assert c.get("/api/auth/mode").json() == {"mode": "platform"}
@@ -63,7 +64,7 @@ def test_the_old_sign_in_addresses_stay_public_and_lead_to_the_react_pages(db, c
 def test_after_login_the_pages_open_and_me_returns_the_csrf_token(db, client):
     acct = make_user(db)
     login(client, acct)
-    assert client.get("/top-bottom").status_code == 200
+    assert client.get("/top-bottom", follow_redirects=False).status_code == 307                       # signed in: through to the React app
     me = client.get("/api/auth/me").json()
     assert me["csrf_token"] == client.cookies.get("algo_csrf") and me["permissions"] == ["session.self"] and me["user"]["owner"] is False
 

@@ -1,0 +1,72 @@
+# CD: after CI passes on main, deploy to the EC2 server over SSH, check it is healthy, and go back to the previous version if it is not.
+#
+# It stays OFF until you add the repository secrets below (Settings > Secrets and variables > Actions) and set the variable DEPLOY_ENABLED=true.
+# Without them this workflow does nothing and the job is skipped (it never fails a push).
+#
+#   secrets:   DEPLOY_HOST      the server, e.g. 52.66.143.58
+#              DEPLOY_USER      the login user on the server (a limited 'deploy' user, see deploy/DEPLOY.md)
+#              DEPLOY_SSH_KEY   a PRIVATE key that only does this (not your personal .pem)
+#              DEPLOY_KNOWN_HOSTS   output of:  ssh-keyscan -t ed25519 52.66.143.58
+#   variable:  DEPLOY_ENABLED   true
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:                # a manual "Run workflow" button (deploys whatever main is now)
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false         # never stop a deploy half way
+
+jobs:
+  deploy:
+    name: Deploy to the server
+    if: >
+      vars.DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production           # add required reviewers on this environment in GitHub if you want a human click before each deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: build the frontend here (the server has only 2 GB of RAM)
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: ssh setup
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: upload the built frontend
+        run: |
+          tar -C frontend -czf /tmp/dist.tgz dist
+          scp -i ~/.ssh/deploy_key -o IdentitiesOnly=yes /tmp/dist.tgz "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/algo-dist.tgz"
+
+      - name: deploy (pull, install, restart, health check, roll back on failure)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "sudo /usr/local/sbin/algo-deploy ${{ github.event.workflow_run.head_sha || github.sha }}"
+
+      - name: public check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://${{ secrets.DEPLOY_HOST }}/healthz" || true)
+            [ "$code" = "200" ] && echo "healthy" && exit 0
+            sleep 5
+          done
+          echo "the server did not answer /healthz with 200"; exit 1
