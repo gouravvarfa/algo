@@ -39,6 +39,26 @@ def test_tracked_counts_calls_errors_and_keeps_the_return_value():
     assert rows["t.bad"]["errors_total"] == 3 and rows["t.bad"]["status"] == "FAULTY" and "ValueError: boom" in rows["t.bad"]["last_error_msg"]
 
 
+def test_angel_one_refusals_make_the_board_degraded_not_down_but_our_own_faults_stay_down():
+    @stats.tracked("angelone.candles")
+    def broker():
+        raise RuntimeError("Angel One returned a non-JSON response (HTTP 403).")
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            broker()
+    assert health.functions_tile()["status"] == "DEGRADED"
+
+    @stats.tracked("t.ours")
+    def ours():
+        raise ValueError("boom")
+
+    for _ in range(3):
+        with pytest.raises(ValueError):
+            ours()
+    assert health.functions_tile()["status"] == "DOWN"
+
+
 def test_tracked_works_on_async_functions():
     @stats.tracked("t.async")
     async def f():

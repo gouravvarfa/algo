@@ -158,6 +158,10 @@ def functions_tile() -> dict:
     rows = stats.snapshot()
     bad = [r for r in rows if r["status"] == "FAULTY"]
     deg = [r for r in rows if r["status"] == "DEGRADED"]
+    # Angel One refusing requests (403 / rate limit) is the broker's side: the engine keeps running on the stored candles, so it is DEGRADED, not DOWN
+    if bad and all(r["name"].startswith("angelone.") for r in bad):
+        return _tile("functions", "Tracked functions", DEGRADED, "Angel One is refusing requests (" + ", ".join(r["name"] for r in bad[:4]) + "); the engine uses the stored candles meanwhile",
+                     faulty=len(bad), degraded=len(deg), total=len(rows))
     if bad:
         return _tile("functions", "Tracked functions", DOWN, "FAULTY: " + ", ".join(r["name"] for r in bad[:4]), faulty=len(bad), degraded=len(deg), total=len(rows))
     if deg:
