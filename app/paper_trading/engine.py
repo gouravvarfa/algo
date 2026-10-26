@@ -61,7 +61,9 @@ TIMEFRAMES: dict[str, tuple[str, int | None, int]] = {
 }
 LIVE_MINUTES_DAYS = 12          # calendar days of 1-minute candles used for the live intraday rules
 LIVE_MINUTES_REFRESH_SECONDS = 30
-CANDLE_CALL_GAP = 0.7                 # seconds between any two Angel One candle requests
+CANDLE_CALL_GAP = 1.0                 # seconds between any two Angel One candle requests
+CANDLE_BACKOFF_FIRST = 5               # after a 403 / rate-limit refusal, ask Angel One nothing for this long (seconds) ...
+CANDLE_BACKOFF_MAX = 60                # ... doubling on each further refusal up to this; the stored candles are used meanwhile
 LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
 DAILY_RAW_CACHE_WITH_FEED = 120
 CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
@@ -295,7 +297,14 @@ class PaperEngine:
         if rc and (now - rc[0]).total_seconds() < ttl:
             raw = rc[1]
         else:
-            raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
+            try:
+                raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
+            except Exception as exc:       # Angel One refused (403 / rate limit): the stored copy keeps the instrument evaluating
+                stored = candle_store.get(inst.token, interval, from_dt) if from_dt else None
+                if stored is None or stored.empty:
+                    raise
+                log.warning("%s candles for %s unavailable (%s); using the stored copy", interval, inst.trading_symbol, str(exc)[:60])
+                raw = stored
             self._raw_cache[inst.id] = (now, raw)
         raw = raw[raw.index >= from_dt]
         if raw.empty:
@@ -461,29 +470,50 @@ class PaperEngine:
 
     async def _candles(self, *args, **kwargs):
         """Every Angel One candle request goes through here: at most one at a time and at least CANDLE_CALL_GAP seconds apart,
-        so the startup burst (daily + 15m + 1m + index) cannot trip the rate limit."""
+        so the startup burst (daily + 15m + 1m + index) cannot trip the rate limit.
+        Requests for the same contract and interval share one call: a recent fetch covering MORE days serves a shorter request (cut to
+        that request's own window), so the BankNifty strategies of several users cost one call instead of one each.
+        After a 403 / rate-limit refusal nothing is asked for a short, growing pause; callers fall back to the stored candles."""
         import time as _t
         if not hasattr(self, "_rest_lock"):
             self._rest_lock, self._rest_last = asyncio.Lock(), 0.0
-        key = (args, tuple(sorted(kwargs.items())))
+            self._backoff_until, self._backoff = 0.0, 0.0
+        exch_seg, token, interval = args[:3]
+        days = args[3] if len(args) > 3 else kwargs.get("days_back", 5)
+        key = (exch_seg, token, interval, bool(kwargs.get("include_partial", False)))
         if not hasattr(self, "_shared_candles"):
             self._shared_candles = {}
         async with self._rest_lock:
             hit = self._shared_candles.get(key)
-            if hit and _t.monotonic() - hit[0] < CANDLE_SHARE_SECONDS:
-                return hit[1].copy()                      # another user's instrument just asked for exactly this
+            if hit and _t.monotonic() - hit[0] < CANDLE_SHARE_SECONDS and hit[1] >= days:
+                df = hit[2]
+                if hit[1] > days and len(df):             # a longer fetch: keep only what this request would have got
+                    cut = pd.Timestamp(now_ist() - dt.timedelta(days=days))
+                    cut = cut.tz_convert(df.index.tz) if df.index.tz is not None else cut.tz_localize(None)
+                    df = df[df.index >= cut]
+                return df.copy()
+            if _t.monotonic() < self._backoff_until:
+                raise RuntimeError(f"Angel One refused recently (HTTP 403 / rate limit); pausing requests for {self._backoff_until - _t.monotonic():.0f} s")
             wait = CANDLE_CALL_GAP - (_t.monotonic() - self._rest_last)
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
                 out = await self.provider.get_intraday_ohlc(*args, **kwargs)
-                self._shared_candles[key] = (_t.monotonic(), out.copy())
-                if len(self._shared_candles) > 200:
-                    for k in sorted(self._shared_candles, key=lambda k: self._shared_candles[k][0])[:100]:
-                        self._shared_candles.pop(k, None)
-                return out
+            except Exception as exc:
+                msg = str(exc).lower()
+                if "403" in msg or "too many" in msg or "rate" in msg:
+                    self._backoff = min(CANDLE_BACKOFF_MAX, self._backoff * 2 or CANDLE_BACKOFF_FIRST)
+                    self._backoff_until = _t.monotonic() + self._backoff
+                    log.warning("Angel One refused a candle request (%s); pausing candle requests for %.0f s", str(exc)[:60], self._backoff)
+                raise
             finally:
                 self._rest_last = _t.monotonic()
+            self._backoff = 0.0
+            self._shared_candles[key] = (_t.monotonic(), days, out.copy())
+            if len(self._shared_candles) > 200:
+                for k in sorted(self._shared_candles, key=lambda k: self._shared_candles[k][0])[:100]:
+                    self._shared_candles.pop(k, None)
+            return out
 
     # ---- multi-contract chain (Oct -> Nov -> Dec ...) --------------------------
     async def _known_contracts(self, inst: Instrument) -> list[ContractRef]:

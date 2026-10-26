@@ -180,6 +180,51 @@ def test_identical_candle_requests_from_different_users_share_one_angel_call(eng
     assert len(calls) == 2 and d["close"].iloc[0] == 1.0
 
 
+def test_a_shorter_request_is_served_from_a_longer_recent_fetch_cut_to_its_own_window(eng, monkeypatch):
+    import asyncio
+    import pandas as pd
+    monkeypatch.setattr(engine_module, "CANDLE_CALL_GAP", 0)
+    monkeypatch.setattr(engine_module, "CANDLE_SHARE_SECONDS", 15)
+    calls = []
+    now = engine_module.now_ist()
+    idx = pd.DatetimeIndex([now - pd.Timedelta(days=40), now - pd.Timedelta(days=5), now - pd.Timedelta(days=1)])
+
+    class Provider:
+        async def get_intraday_ohlc(self, *a, **k):
+            calls.append(a)
+            return pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=idx)
+
+    eng.provider = Provider()
+
+    async def go():
+        long = await eng._candles("NFO", "61466", "ONE_DAY", 60, include_partial=True)    # one BankNifty strategy, a longer history
+        short = await eng._candles("NFO", "61466", "ONE_DAY", 10, include_partial=True)   # another user's, a shorter one
+        return long, short
+    long, short = asyncio.run(go())
+    assert len(calls) == 1 and len(long) == 3 and list(short["close"]) == [2.0, 3.0]
+
+
+def test_after_a_403_angel_one_is_left_alone_for_a_while(eng, monkeypatch):
+    import asyncio
+    import pytest
+    monkeypatch.setattr(engine_module, "CANDLE_CALL_GAP", 0)
+    calls = []
+
+    class Provider:
+        async def get_intraday_ohlc(self, *a, **k):
+            calls.append(a)
+            raise RuntimeError("Angel One returned a non-JSON response (HTTP 403).")
+
+    eng.provider = Provider()
+
+    async def go():
+        for tok in ("1", "2", "3"):
+            with pytest.raises(Exception):
+                await eng._candles("NFO", tok, "ONE_MINUTE", 12, include_partial=True)
+    asyncio.run(go())
+    assert len(calls) == 1 and eng._backoff == engine_module.CANDLE_BACKOFF_FIRST
+
+
 def test_only_an_admin_assigns_other_symbols_and_only_to_that_account(db, new_client, eng, monkeypatch):
     admin, user, other = make_user(db, "adminx", "admin"), make_user(db, "anil"), make_user(db, "bina")
     ca, cu, co = _login(new_client, admin), _login(new_client, user), _login(new_client, other)
