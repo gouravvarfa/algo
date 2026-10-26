@@ -1,5 +1,7 @@
 .env
 angelone_credentials.json
+upstox_credentials.json
+*.json.tmp
 .venv/
 .cache/
 data/

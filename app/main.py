@@ -26,7 +26,7 @@ from app.options import api as options_api
 from app.options import collector as option_collector
 from app import auth, auth_api
 from app import admin_extra, admin_view, option_journal, user_data
-from app.ops import api as ops_api, context as ops_context, selftests as ops_selftests, stats as ops_stats
+from app.ops import api as ops_api, context as ops_context, selftests as ops_selftests, stats as ops_stats, upstox_api
 from app.security import authz, mode as login_mode
 from app.security.users import AuthError
 from app.services import angelone_credential_store
@@ -89,6 +89,7 @@ async def request_metrics(request, call_next):
 app.include_router(options_api.router)
 app.include_router(auth_api.router)
 app.include_router(ops_api.router)
+app.include_router(upstox_api.router)
 app.include_router(user_data.router)
 app.include_router(admin_view.router)
 app.include_router(admin_extra.router)

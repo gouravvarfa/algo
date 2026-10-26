@@ -23,6 +23,7 @@ const IsolationPage = lazy(() => import('../features/developer/IsolationPage'))
 const ErrorsPage = lazy(() => import('../features/developer/ErrorsPage'))
 const FlagsPage = lazy(() => import('../features/developer/FlagsPage'))
 const BrokerPage = lazy(() => import('../features/developer/BrokerPage'))
+const UpstoxPage = lazy(() => import('../features/developer/UpstoxPage'))
 const AnnouncementsPage = lazy(() => import('../features/admin/AnnouncementsPage'))
 const AdminOverview = lazy(() => import('../features/admin/OverviewPage'))
 const SessionsPage = lazy(() => import('../features/developer/MorePages').then((m) => ({ default: m.SessionsPage })))
@@ -84,6 +85,7 @@ export function App() {
         <Route path="errors" element={<ErrorsPage />} />
         <Route path="flags" element={<FlagsPage />} />
         <Route path="broker" element={<Guard need="system.manage"><BrokerPage /></Guard>} />
+        <Route path="upstox" element={<Guard need="system.manage"><UpstoxPage /></Guard>} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="logins" element={<LoginAttemptsPage />} />
         <Route path="roles" element={<RolesPage />} />
