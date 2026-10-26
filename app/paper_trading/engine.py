@@ -734,6 +734,11 @@ class PaperEngine:
                 f.write(json.dumps(e) + "\n")
                 log.info("JOURNAL %s %s %s", e["event"], e["symbol"], e.get("reason") or e.get("gap_state") or e.get("entry_price"))
         JOURNAL_SEEN.write_text(json.dumps(seen))
+        try:                                            # the orders a real account would send (written only, never sent)
+            from app.paper_trading import dryrun
+            dryrun.record(events, snap)
+        except Exception:
+            log.exception("dry-run order record failed")
 
     def journal(self, limit: int = 300, owner=ALL) -> list[dict]:
         if not JOURNAL_PATH.exists():

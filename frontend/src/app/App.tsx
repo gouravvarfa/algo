@@ -11,6 +11,7 @@ import { Shell } from './Shell'
 const TopBottomPage = lazy(() => import('../features/topbottom/TopBottomPage'))
 const SimulatorPage = lazy(() => import('../features/simulator/SimulatorPage'))
 const OptionsJournalPage = lazy(() => import('../features/journal/OptionsJournalPage'))
+const DryRunPage = lazy(() => import('../features/dryrun/DryRunPage'))
 const BuilderPage = lazy(() => import('../features/builder/BuilderPage'))
 const OptionChainPage = lazy(() => import('../features/options/OptionChainPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
@@ -62,6 +63,7 @@ export function App() {
         <Route path="/backtesting" element={<Guard><BuilderPage view="backtest" /></Guard>} />
         <Route path="/history" element={<Guard><BuilderPage view="history" /></Guard>} />
         <Route path="/options-journal" element={<Guard><OptionsJournalPage /></Guard>} />
+        <Route path="/dry-run" element={<Guard><DryRunPage /></Guard>} />
         <Route path="/options" element={<Guard><OptionChainPage /></Guard>} />
         <Route path="/settings" element={<Guard><SettingsPage /></Guard>} />
         <Route path="/account" element={<Guard><AccountPage /></Guard>} />

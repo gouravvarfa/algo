@@ -9,6 +9,7 @@ import './admin.css'
 const TopBottomPage = lazy(() => import('../topbottom/TopBottomPage'))
 const OptionsJournalPage = lazy(() => import('../journal/OptionsJournalPage'))
 const SimulatorPage = lazy(() => import('../simulator/SimulatorPage'))
+const DryRunPage = lazy(() => import('../dryrun/DryRunPage'))
 
 /** "View as user": the user's own pages, mounted with a read-only data source for that user. The admin never gets the user's session or secrets. */
 export default function ViewAsPage() {
@@ -26,12 +27,13 @@ export default function ViewAsPage() {
           <Link to={`/admin/users/${id}/view/top-bottom`} className={'seglink' + (page === 'top-bottom' ? ' on' : '')}>Top Bottom</Link>
           <Link to={`/admin/users/${id}/view/simulator`} className={'seglink' + (page === 'simulator' ? ' on' : '')}>Options Simulator</Link>
           <Link to={`/admin/users/${id}/view/options-journal`} className={'seglink' + (page === 'options-journal' ? ' on' : '')}>Options Journal</Link>
+          <Link to={`/admin/users/${id}/view/dry-run`} className={'seglink' + (page === 'dry-run' ? ' on' : '')}>Dry Run</Link>
         </span>
         <Link className="btn sm" to="/admin/users">Back to users</Link>
       </div>
       <DataSourceProvider source={source}>
         <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 320 }} /></div>}>
-          {page === 'simulator' ? <SimulatorPage /> : page === 'options-journal' ? <OptionsJournalPage userId={id} /> : <TopBottomPage />}
+          {page === 'simulator' ? <SimulatorPage /> : page === 'options-journal' ? <OptionsJournalPage userId={id} /> : page === 'dry-run' ? <DryRunPage userId={id} /> : <TopBottomPage />}
         </Suspense>
       </DataSourceProvider>
     </>

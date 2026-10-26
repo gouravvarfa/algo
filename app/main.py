@@ -198,6 +198,12 @@ async def journal_api(request: Request, limit: int = 300):
     return engine.journal(max(1, min(limit, 5000)), owner=_owner(request)) if engine else []
 
 
+@app.get("/api/dry-run")
+async def dry_run_api(request: Request, limit: int = 300):
+    from app.paper_trading import dryrun
+    return dryrun.read(_owner(request), max(1, min(limit, 5000)))
+
+
 @app.get("/api/index/{name}")
 async def index_quote(name: str):
     name = name.upper()
