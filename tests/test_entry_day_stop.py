@@ -89,6 +89,37 @@ def test_waiting_state_needs_a_newly_confirmed_system_point():
     assert len(res.trades) == 1                                                                  # the consumed Top does not re-enter
 
 
+REENTRY = dt.date(2026, 3, 1)       # the same-day re-entry rule switched on for these (synthetic March) days
+
+
+def run_re(minute_list):
+    return run_intraday("BANKNIFTY", *daily_history(), minute_list, entry_day_stop_pct=0.01, same_day_reentry_from=REENTRY)
+
+
+def test_same_day_reentry_after_an_entry_day_stop_when_the_same_point_is_crossed_again():
+    res = run_re(breakout_day([(9, 17, 108.0), (9, 18, 111.0), (9, 19, 112.0)]))               # stopped at 09:17, the same Top 110 crossed again at 09:18
+    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT, "END_OF_BACKTEST"]
+    again = res.trades[1]
+    assert again.direction == "BUY" and again.entry_date == T(6, 9, 18) and again.entry_price == 111.0 and again.entry_day_sl == round(111.0 * 0.99, 2)
+
+
+def test_same_day_reentry_never_reverses_and_needs_a_real_crossing():
+    res = run_re(breakout_day([(9, 17, 108.0), (9, 18, 100.0), (9, 19, 85.0)]))                  # falls through the Bottom 90: no SELL, and no BUY without a new cross
+    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT]
+
+
+def test_the_next_day_the_old_rule_applies_again():
+    d1 = breakout_day([(9, 17, 108.0)])
+    d2 = mins(7, [(9, 15, 109.0), (9, 16, 111.0), (9, 17, 112.0)])                               # the consumed Top crossed on the NEXT day: still no entry
+    assert [t.exit_reason for t in run_re(d1 + d2).trades] == [ENTRY_DAY_STOP_EXIT]
+
+
+def test_reentry_is_off_before_its_start_day():
+    res = run_intraday("BANKNIFTY", *daily_history(), breakout_day([(9, 17, 108.0), (9, 18, 111.0), (9, 19, 112.0)]),
+                       entry_day_stop_pct=0.01, same_day_reentry_from=dt.date(2026, 10, 27))
+    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT]                          # history before the start day is unchanged
+
+
 def test_rule_is_off_by_default():
     res = run_intraday("X", *daily_history(), breakout_day([(9, 17, 111.0)]))
     assert res.trades[-1].entry_day_sl is None and res.trades[-1].active_stop == 90.0
