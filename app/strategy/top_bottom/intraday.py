@@ -65,7 +65,7 @@ BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
 ENTRY_DAY_STOP_EXIT = "ENTRY_DAY_STOP_EXIT"
 ENTRY_DAY_STOP_PCT = 0.01   # the live engine passes this: entry-day stop = entry price -/+ 1%
 CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
-SAME_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a stopped-out entry may be re-taken the SAME day (earlier days keep their recorded result)
+NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
 STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
 FIRST_15_START, FIRST_15_END = dt.time(9, 15), dt.time(9, 30)
 
@@ -113,7 +113,7 @@ def run_intraday(
     struct_cap_distance: float | None = None,
     roll_in: str | None = None,
     breakeven_pct: float | None = None,       # None = the index rule (2%); stocks pass 3%
-    same_day_reentry_from: dt.date | None = SAME_DAY_REENTRY_FROM,
+    next_day_reentry_from: dt.date | None = NEXT_DAY_REENTRY_FROM,
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
@@ -123,8 +123,9 @@ def run_intraday(
     exactly entry -/+ this fraction (BUY below, SELL above), replacing the structural stop for that day only. If it is hit the
     position closes (ENTRY_DAY_STOP_EXIT) and the strategy stays FLAT, like after a breakeven exit: no reverse, and a new entry
     needs a System Point confirmed after the exit. From the next day the ordinary structural / trailing stop applies again.
-    same_day_reentry_from (a date; None = OFF): from that day on, after an ENTRY_DAY_STOP_EXIT the SAME side may be entered again on the
-    SAME day when its System Point (even the very same one) is crossed again; no reverse. From the next day the rule above applies.
+    next_day_reentry_from (a date; None = OFF): on days from that date on, after an ENTRY_DAY_STOP_EXIT on the previous trading day, the SAME
+    side may be entered again when its System Point (the very same, already used one) is crossed again; the stop-out day itself stays flat, there is
+    no reverse, and only that one next trading day gets this; after it the rule above applies again.
 
     roll_in ("BUY" / "SELL", optional): the position of the PREVIOUS contract is being rolled into this one. On the very first minute of the first
     day in `minutes` (if still flat) a fresh entry in that direction is taken at that minute's open, with this contract's OWN System Points:
@@ -154,8 +155,9 @@ def run_intraday(
     # After a 2%-breakeven exit the strategy stays FLAT until a System Point confirmed AFTER that
     # exit (confirmed_index > block_after) is crossed; every point existing at the exit is consumed.
     block_after: int | None = initial.block_after if initial else None
-    reentry_day: dt.date | None = None      # the day of an ENTRY_DAY_STOP_EXIT: its side may be entered again that day only
-    reentry_side: str | None = None
+    stopped_day: dt.date | None = None      # the day of an ENTRY_DAY_STOP_EXIT; its side may be entered again on the NEXT trading day only
+    stopped_side: str | None = None
+    lift_day: dt.date | None = None         # that next trading day
 
     def new_trade(direction, level, fill, anchor, ts, day_i, gap_state=None) -> Trade:
         t = Trade(
@@ -180,6 +182,8 @@ def run_intraday(
 
     for day in sorted(by_day):
         day_min = sorted(by_day[day], key=lambda m: m.ts)
+        if stopped_day is not None and day > stopped_day and lift_day is None:
+            lift_day = day                         # the first trading day after an entry-day stop-out
         i = sum(1 for d in daily_day if d < day)  # daily candles completed before this day
         while sw_ptr < len(swings) and swings[sw_ptr].confirmed_index <= i - 1:
             sw = swings[sw_ptr]
@@ -407,8 +411,8 @@ def run_intraday(
                             # wait for a System Point confirmed after this exit
                             close_trade(open_t, c.ts, fill, stop, ENTRY_DAY_STOP_EXIT if open_t.entry_date.date() == day else CAPPED_STOP_EXIT,
                                         ambiguous=open_t.entry_date == c.ts or stopouts > 0)
-                            if same_day_reentry_from is not None and day >= same_day_reentry_from and open_t.entry_date.date() == day:
-                                reentry_day, reentry_side = day, open_t.direction
+                            if open_t.entry_date.date() == day:
+                                stopped_day, stopped_side, lift_day = day, open_t.direction, None
                             open_t = None
                             block_after = i - 1
                             if buy:
@@ -439,8 +443,9 @@ def run_intraday(
                     if (buy and not used_high) or (not buy and not used_low):
                         breakeven(c)  # only the unused favourable extreme can still count
                     break
-                # flat: genuine system-point crossings only (the side of today's entry-day stop-out may be taken again today, same point included)
-                again_buy, again_sell = reentry_day == day and reentry_side == "BUY", reentry_day == day and reentry_side == "SELL"
+                # flat: genuine system-point crossings only (the side of yesterday's entry-day stop-out may be taken again today, same point included)
+                lifted = next_day_reentry_from is not None and day >= next_day_reentry_from and lift_day == day
+                again_buy, again_sell = lifted and stopped_side == "BUY", lifted and stopped_side == "SELL"
                 if mode == "entry" and not gap_resolved:
                     cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and mode_side != "BUY" and c.high > top and not used_high
                     cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and mode_side != "SELL" and c.low < bot and not used_low

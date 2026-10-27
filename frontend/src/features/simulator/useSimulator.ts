@@ -3,7 +3,7 @@ import { get, post, put } from '../../lib/api'
 import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { useToast } from '../../lib/toast'
-import { PRESET_RULES, planPreset, slPrice, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
+import { PRESET_RULES, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
 const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY']
 const ls = {
@@ -62,7 +62,6 @@ export function useSimulator(ds: DataSource) {
   const [wiSp, setWiSp] = useState(0)
 
   const [mult, setMultState] = useState(() => Math.max(1, Math.min(100, parseInt(ls.get('sim.mult') ?? '1', 10) || 1)))
-  const [autoSl, setAutoSlState] = useState<number | null>(() => { const v = ls.get('sim.autosl'); return v === null ? 15 : v === '' ? null : Number(v) })
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
 
@@ -195,34 +194,15 @@ export function useSimulator(ds: DataSource) {
   }, [idx, sym, live, chain?.underlying]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- valuation (marks, stop-losses, margin)
-  const openKey = useMemo(() => JSON.stringify(positions.map((p) => [p.id, p.closed ? 1 : 0, p.lots, p.sl ?? 0])), [positions])
+  const openKey = useMemo(() => JSON.stringify(positions.map((p) => [p.id, p.closed ? 1 : 0, p.lots])), [positions])
   const valTok = useRef(0)
   useEffect(() => {
     if (!chain || idx < 0) return
     const tok = ++valTok.current
     const alive = () => tok === valTok.current
     ;(async () => {
-      let pos = positions
-      if (!live && pos.some((p) => !p.closed && p.sl)) {       // did a stop get touched between the entry and the moment being viewed?
-        const open = pos.filter((p) => !p.closed && p.sl)
-        try {
-          const r = await post<{ hits: Record<string, { price: number; date: string; time: string | null; how: string; source: string }> }>('/api/options/sim/sl_check', {
-            symbol: sym, date, time: useIntra ? tm : null,
-            positions: open.map((p) => ({ id: String(p.id), side: p.side, opt: p.opt, strike: p.strike, expiry: p.expiry, entry_date: p.entry_date, entry_time: p.entry_time || null, sl: p.sl })),
-          })
-          if (!alive()) return
-          const done: string[] = []
-          const next = pos.map((p) => {
-            const h = r.hits[String(p.id)]
-            if (p.closed || !h) return p
-            const qty = p.lots * mult * p.lot_size, s = p.side === 'BUY' ? 1 : -1
-            done.push(`${p.side[0]} ${n0(p.strike)}${p.opt} @ ₹${num(h.price)} ${dmy(h.date)}${h.time ? ' ' + h.time : ''}`)
-            return { ...p, closed: true, exit: h.price, exit_date: h.date, exit_time: h.time, realized: +((h.price - p.entry) * qty * s).toFixed(2), exit_reason: `${h.how} (${h.source})` }
-          })
-          if (done.length) { toast('Stop-loss hit: ' + done.join(' · ')); if (!readOnly) { setPositions(next); return } pos = next }
-        } catch { /* the valuation below still runs */ }
-      }
-      const open = pos.filter((p) => !p.closed)
+      // The simulator never closes a leg by itself: only the person's own Exit does. (Stop-losses belong to the Strategy Builder.)
+      const open = positions.filter((p) => !p.closed)
       if (!open.length) { setMark(null); setValued({}); setMargin(null); marginKey.current = ''; return }
       let m: Mark | null = null
       const vals: Record<string, Valued> = {}
@@ -232,18 +212,6 @@ export function useSimulator(ds: DataSource) {
           : await post<Mark>(useIntra ? '/api/options/intraday/mark' : '/api/options/sim/mark', { ...body, date, ...(useIntra ? { time: tm } : {}) })
         if (!alive()) return
         open.forEach((p, i) => { vals[String(p.id)] = m!.positions[i] })
-        if (live && !readOnly) {                                   // paper stop-loss on the live tick: SELL exits at/above its stop, BUY at/below
-          let hit = 0
-          const next = pos.map((p) => {
-            const v = vals[String(p.id)]
-            if (!p.closed && p.sl && v?.ltp != null && (p.side === 'SELL' ? v.ltp >= p.sl : v.ltp <= p.sl)) {
-              hit++
-              return { ...p, closed: true, exit: v.ltp, exit_date: chain.date, exit_time: (chain.time ?? '').slice(0, 5), realized: v.pnl, exit_reason: 'SL hit (live)' }
-            }
-            return p
-          })
-          if (hit) { toast(`${hit} leg(s) hit the stop-loss on the live price`); setPositions(next); return }
-        }
       } catch (e) {
         if (!alive()) return
         open.forEach((p) => { vals[String(p.id)] = { ltp: null, pnl: null, note: 'valuation failed: ' + (e as Error).message } })
@@ -309,15 +277,13 @@ export function useSimulator(ds: DataSource) {
   const setMode = (m: '1m' | 'eod') => { setModeState(m); setPlaying(false) }
   const pickExpiry = (e: string) => { setCurExp(e); setExpPinned(true) }
   const setMult = (v: number) => { const m = Math.max(1, Math.min(100, Math.round(v) || 1)); setMultState(m); ls.set('sim.mult', String(m)) }
-  const setAutoSl = (v: number | null) => { const n = v === null ? null : Math.max(1, v); setAutoSlState(n); ls.set('sim.autosl', n === null ? '' : String(n)); toast(n ? `New legs get a ${n}% stop-loss` : 'New legs get no stop-loss') }
 
-  const makeLeg = (c: Chain, side: Side, opt: Opt, k: number, slOverride?: number | null): SimPos | string => {
+  const makeLeg = (c: Chain, side: Side, opt: Opt, k: number): SimPos | string => {
     const l = c.rows.find((r) => r.strike === k)?.[opt]
     if (!l || !(l.ltp != null && l.ltp > 0)) return 'No valid price for that contract on this date'
     if (!c.lot_size) return 'Lot size unknown for this expiry/date, so no position can be valued'
     const intra = c.mode === 'intraday' || c.mode === 'live'
-    const slp = slOverride ?? (autoSl && autoSl > 0 ? autoSl : null)
-    return { id: Date.now() + Math.random(), side, opt, strike: k, expiry: c.expiry, lots: 1, lot_size: c.lot_size, entry: l.ltp, entry_date: c.date, sl_pct: slp, sl: slp ? slPrice(side, l.ltp, slp) : null,
+    return { id: Date.now() + Math.random(), side, opt, strike: k, expiry: c.expiry, lots: 1, lot_size: c.lot_size, entry: l.ltp, entry_date: c.date, sl_pct: null, sl: null,
       entry_time: intra ? (c.time ?? '').slice(0, 5) : null, live: c.mode === 'live' || undefined, untraded_entry: intra ? false : !l.volume, stale_entry: intra && (l.age_min ?? 0) > 5 ? l.age_min : null }
   }
   const addPos = (side: Side, opt: Opt, k: number) => {
@@ -345,13 +311,13 @@ export function useSimulator(ds: DataSource) {
       if (c.expiry !== E) { toast(`${name}: expiry ${dmy(E)} not listed on ${dmy(dates[di])}`); return }
       const { plan, missing } = planPreset(c, name)
       if (missing.length) { toast(`${name}: no real price for ${missing.join(', ')}; nothing added`); return }
-      const legs = plan.map(([s, o, k]) => makeLeg(c, s, o, k, rule.sl))
+      const legs = plan.map(([s, o, k]) => makeLeg(c, s, o, k))
       const bad = legs.find((l) => typeof l === 'string')
       if (bad) { toast(String(bad)); return }
       setModeState(useEod ? 'eod' : '1m'); setCurExp(E); setExpPinned(true)
       await goTo(di, 'END')
       setPositions((p) => [...p, ...(legs as SimPos[])])
-      toast(`${name}: placed on ${dmy(dates[di])} close (T−${rule.entryDaysBefore}) for expiry ${dmy(E)}: ${plan.map(([s, o, k]) => s[0] + ' ' + n0(k) + o).join(', ')} · SL ${rule.sl}% each. Press Next day › to hold to expiry.`)
+      toast(`${name}: placed on ${dmy(dates[di])} close (T−${rule.entryDaysBefore}) for expiry ${dmy(E)}: ${plan.map(([s, o, k]) => s[0] + ' ' + n0(k) + o).join(', ')} · no automatic exit, close the legs yourself. Press Next day › to hold to expiry.`)
       return
     }
     const { plan, missing } = planPreset(c, name)
@@ -383,7 +349,7 @@ export function useSimulator(ds: DataSource) {
   return {
     readOnly, sym, setSym, dates, eodSet, intraSet, idx, date, tm, mins, mode, setMode, useIntra, initError, goIndex, goMinute, goTo,
     chain, chainError, loading, curExp, pickExpiry, live, setLive, prevSpot,
-    positions, valued, mark, margin, mult, setMult, autoSl, setAutoSl, addPos, placePreset, changeLots, removePos, exitPos, exitAll, clearAll, exportCsv,
+    positions, valued, mark, margin, mult, setMult, addPos, placePreset, changeLots, removePos, exitPos, exitAll, clearAll, exportCsv,
     wi, wiDate, setWiDate, wiIv, setWiIv, wiSp, setWiSp, minOpenExpiry,
     playing, setPlaying, speed, setSpeed,
   }

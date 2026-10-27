@@ -6,7 +6,7 @@ const rupee = (v: number | null | undefined) => (v == null ? '–' : <span class
 
 interface Props {
   chain: Chain | null; positions: SimPos[]; valued: Record<string, Valued>; readOnly: boolean; live: boolean; date: string; useIntra: boolean; tm: string | null; mult: number
-  autoSl: number | null; setAutoSl: (v: number | null) => void; setMult: (v: number) => void
+  setMult: (v: number) => void
   onPreset: (name: string) => void; onLots: (id: SimPos['id'], d: number) => void; onExit: (id: SimPos['id']) => void; onRemove: (id: SimPos['id']) => void
   onExitAll: () => void; onClear: () => void; onExport: () => void
 }
@@ -30,8 +30,6 @@ export function PositionsPanel(p: Props) {
             <select value="" onChange={(e) => { if (e.target.value) p.onPreset(e.target.value) }}>
               <option value="">— add strategy —</option>{Object.keys(SIM_PRESETS).map((k) => <option key={k}>{k}</option>)}
             </select></label>
-          <label className="inline" title="Stop-loss put on every leg you add (SELL: entry +x%, BUY: entry −x%). Empty = no stop.">Auto SL %
-            <input type="number" min={1} max={500} value={p.autoSl ?? ''} style={{ width: 62 }} onChange={(e) => p.setAutoSl(e.target.value === '' ? null : Number(e.target.value))} /></label>
           <label className="inline" title="Multiplies the lots of every open leg (simulation only)">Lot multiplier
             <input type="number" min={1} max={100} value={p.mult} style={{ width: 62 }} onChange={(e) => p.setMult(Number(e.target.value))} /></label>
           <button className="btn sm" onClick={p.onExitAll}>Exit all</button><button className="btn sm" onClick={p.onClear}>Clear</button><button className="btn sm" onClick={p.onExport} title="Download the simulated positions as CSV">Export CSV</button>
@@ -49,7 +47,7 @@ export function PositionsPanel(p: Props) {
               if (x.stale_entry) warn.push(`entry price was a trade ${x.stale_entry} min old`)
               if (x.untraded_entry) warn.push('entered on an untraded close')
               if (!x.closed && v?.note && v.note !== 'settled at expiry') warn.push(v.note)
-              const note = x.closed ? `${x.exit_reason ? x.exit_reason + ' · ' : 'exited '}${dmy(x.exit_date!)}${x.exit_time ? ' ' + x.exit_time : ''}` : x.sl ? `SL ₹${num(x.sl)} (${x.sl_pct}%)` : ''
+              const note = x.closed ? `${x.exit_reason ? x.exit_reason + ' · ' : 'exited '}${dmy(x.exit_date!)}${x.exit_time ? ' ' + x.exit_time : ''}` : ''
               const info = [`exp ${dmy(x.expiry)}`, `in ${dmy(x.entry_date)}${x.entry_time ? ' ' + x.entry_time : ''}`, note, warn.length ? '⚠ ' + warn.join(' · ') : ''].filter(Boolean).join(' · ')
               return (
                 <tr key={String(x.id)} className={x.closed ? 'closed' : ''} title={info}>

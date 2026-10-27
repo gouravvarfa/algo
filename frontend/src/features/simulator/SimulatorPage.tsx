@@ -69,7 +69,7 @@ export default function SimulatorPage() {
           title={`Option chain · ${s.sym}${c ? ' · ' + dmy(c.expiry) : ''}`} asof={asof} atmKey={isLive ? 'live' : `${s.date}|${s.tm}|${c?.expiry}`} />
         <div className="rcol">
           <PositionsPanel chain={c} positions={s.positions} valued={s.valued} readOnly={s.readOnly} live={s.live} date={s.date} useIntra={s.useIntra} tm={s.tm} mult={s.mult}
-            autoSl={s.autoSl} setAutoSl={s.setAutoSl} setMult={s.setMult} onPreset={(n) => void s.placePreset(n)} onLots={s.changeLots} onExit={s.exitPos} onRemove={s.removePos}
+            setMult={s.setMult} onPreset={(n) => void s.placePreset(n)} onLots={s.changeLots} onExit={s.exitPos} onRemove={s.removePos}
             onExitAll={s.exitAll} onClear={s.clearAll} onExport={s.exportCsv} />
           <RiskPanel s={s} />
         </div>
