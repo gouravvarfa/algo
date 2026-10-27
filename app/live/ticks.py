@@ -109,6 +109,8 @@ class TickFeed:
         self.reconnects = 0
         self.last_error: str | None = None
         self.updated = asyncio.Event()           # set on every accepted tick; consumers clear it
+        self.listeners: list[Callable[[Tick], None]] = []   # called with every accepted tick (the dry-run shadow account); a failing listener never stops the feed
+        self._listener_errors = 0
         self._ws = None
         self._task: asyncio.Task | None = None
         self._stop = False
@@ -187,6 +189,13 @@ class TickFeed:
                             if t is not None:
                                 self.latest[t.token] = t
                                 self.builder.add(t)
+                                for fn in self.listeners:
+                                    try:
+                                        fn(t)
+                                    except Exception:
+                                        self._listener_errors += 1
+                                        if self._listener_errors <= 3:
+                                            log.exception("tick listener failed")
                                 self.updated.set()
                         elif isinstance(msg, str) and msg != "pong":
                             try:

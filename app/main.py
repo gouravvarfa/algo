@@ -204,6 +204,13 @@ async def dry_run_api(request: Request, limit: int = 300):
     return dryrun.read(_owner(request), max(1, min(limit, 5000)))
 
 
+@app.get("/api/shadow")
+async def shadow_api(request: Request):
+    if engine is None:
+        return {"enabled": False, "accounts": []}
+    return engine.shadow_view(_owner(request))
+
+
 @app.get("/api/index/{name}")
 async def index_quote(name: str):
     name = name.upper()

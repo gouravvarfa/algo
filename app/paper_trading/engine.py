@@ -31,6 +31,8 @@ from app.ops.stats import tracked
 from app.live import chain_eval
 from app.live.chain_eval import ContractRef
 from app.live.contracts import cutoff as contract_cutoff
+from app.paper_trading import dryrun
+from app.paper_trading.shadow import Shadow
 from app.live.ticks import TickFeed, merge_minutes
 from app.providers import angelone_scrip_master as scrip_master
 from app.providers.angelone_provider import AngelOneProvider
@@ -170,6 +172,8 @@ class PaperEngine:
         self._bars15: dict[str, tuple[dt.datetime, dict]] = {}  # instrument id -> (fetched at, date -> [Bar15])
         self._minutes: dict[str, tuple[dt.datetime, list]] = {}  # instrument id -> (fetched at, 1-minute candles)
         self.feed = TickFeed(provider.get_session, provider.reset_session)
+        self.shadow = Shadow()                           # the simulated "real account" (BankNifty only); it never sends anything to a broker
+        self.feed.listeners.append(self.shadow.on_tick)
         self._raw_cache: dict[str, tuple[dt.datetime, pd.DataFrame]] = {}
         self._prev_close: dict[str, tuple] = {}
         self._live_good: dict[str, tuple[dt.datetime, list, str]] = {}  # instrument id -> (evaluated at, trades, note) of the last SUCCESSFUL intraday run
@@ -526,7 +530,7 @@ class PaperEngine:
         try:
             for c in await scrip_master.get_future_contracts(inst.symbol):
                 if c.underlying == inst.symbol:
-                    mine[c.trading_symbol] = {"trading_symbol": c.trading_symbol, "token": c.token, "exch_seg": c.exch_seg, "expiry": c.expiry, "lot_size": c.lot_size}
+                    mine[c.trading_symbol] = {"trading_symbol": c.trading_symbol, "token": c.token, "exch_seg": c.exch_seg, "expiry": c.expiry, "lot_size": c.lot_size, "tick_size": c.tick_size}
         except Exception:
             log.warning("could not refresh the futures contract list for %s; using the remembered one", inst.symbol)
         known[inst.symbol] = sorted(mine.values(), key=lambda c: c["expiry"])
@@ -710,7 +714,8 @@ class PaperEngine:
             key = f"{r['entry_date']}|{r['direction']}"
             old = mine.get(key)
             base = {"at": now, "backfill": first_run, "owner": getattr(inst, "owner", None), "instrument_id": inst.id, "symbol": inst.symbol, "trading_symbol": inst.trading_symbol,
-                    "direction": r["direction"], "entry_date": r["entry_date"], "entry_price": r["entry_price"], "quantity": inst.quantity}
+                    "direction": r["direction"], "entry_date": r["entry_date"], "entry_price": r["entry_price"], "quantity": inst.quantity,
+                    "contract": r.get("contract")}      # the trade's OWN contract (a roll exit closes the old one)
             if old is None:
                 events.append({**base, "event": "ENTRY", "initial_sl": r["initial_sl"], "active_stop": r["active_stop"]})
                 if r["status"] != "OPEN":
@@ -734,11 +739,26 @@ class PaperEngine:
                 f.write(json.dumps(e) + "\n")
                 log.info("JOURNAL %s %s %s", e["event"], e["symbol"], e.get("reason") or e.get("gap_state") or e.get("entry_price"))
         JOURNAL_SEEN.write_text(json.dumps(seen))
-        try:                                            # the orders a real account would send (written only, never sent)
-            from app.paper_trading import dryrun
-            dryrun.record(events, snap)
+        self._shadow_call(dryrun.record, events, snap)                  # the orders a real account would send (written only, never sent)
+        self._shadow_step("handle", events, snap, now_ist())            # the simulated account follows the signals with its own fills
+
+    @staticmethod
+    def _shadow_call(fn, *args) -> None:
+        """The dry run and the shadow account are observers: whatever goes wrong in them must never touch the paper engine."""
+        try:
+            fn(*args)
         except Exception:
-            log.exception("dry-run order record failed")
+            log.exception("dry-run / shadow step failed")
+
+    def _shadow_step(self, name: str, *args) -> None:
+        sh = getattr(self, "shadow", None)
+        if sh is not None:
+            self._shadow_call(getattr(sh, name), *args)
+
+    def shadow_view(self, owner=ALL) -> dict:
+        exits = [{"instrument_id": e.get("instrument_id"), "at": e.get("at", ""), "pnl": e.get("pnl_amount") or 0.0}
+                 for e in self.journal(5000, owner=owner) if e.get("event") == "EXIT" and not e.get("backfill")]
+        return self.shadow.view(None if owner is ALL else owner, exits, everyone=owner is ALL)
 
     def journal(self, limit: int = 300, owner=ALL) -> list[dict]:
         if not JOURNAL_PATH.exists():
@@ -770,6 +790,7 @@ class PaperEngine:
             if self.faults.pop(inst.id, None) is not None:
                 ops_incidents.record("engine", f"{inst.symbol} recovered", severity="info", user_id=owner, auto_action="fault cleared")
             self._journal(inst, self.snapshots[inst.id])
+            self._shadow_step("sync", inst.id, owner, inst.symbol, self.snapshots[inst.id], now_ist())
         except Exception as exc:  # one bad instrument (or user) must never stop the others: isolate it, record it, go on
             log.exception("refresh failed for %s", inst.symbol)
             msg = str(exc) or exc.__class__.__name__
@@ -786,6 +807,7 @@ class PaperEngine:
                 await asyncio.sleep(0.4)  # stay under Angel One's candle-API rate limit
             if not ops_flags.engine_paused():
                 self.last_tick = now_ist()
+            self._shadow_step("poll", now_ist())                # timers of the simulated account run even while the engine is paused (a resting stop order does not stop)
 
     async def _loop(self) -> None:
         while True:

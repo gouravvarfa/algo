@@ -152,6 +152,18 @@ class FutureContract:
     expiry: str  # ISO date "2026-09-29"
     is_index: bool  # True for FUTIDX (NIFTY/BANKNIFTY/...), False for FUTSTK
     lot_size: int  # real exchange lot size, straight from Angel One's own scrip master — never guessed
+    tick_size: float = 0.0  # price step in rupees from the master's tick_size column (paise there); 0.0 = the master did not say
+
+
+def _tick_rupees(raw) -> float:
+    """The master gives tick_size in paise ("5.000000" = Rs 0.05). Anything missing or unreadable is 0.0, never a guess."""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0:
+        return 0.0
+    return round(v / 100.0, 4) if v >= 1 else round(v, 4)
 
 
 async def search_futures(query: str, limit: int = 25) -> list[FutureContract]:
@@ -188,6 +200,7 @@ async def search_futures(query: str, limit: int = 25) -> list[FutureContract]:
             expiry=_parse_expiry(row.get("expiry", "")).date().isoformat(),
             is_index=row.get("instrumenttype") == "FUTIDX",
             lot_size=int(float(row.get("lotsize") or 0)),
+            tick_size=_tick_rupees(row.get("tick_size")),
         )
         for row in matches[:limit]
     ]

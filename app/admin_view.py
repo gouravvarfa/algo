@@ -127,6 +127,13 @@ def view_dry_run(user_id: str, limit: int = 300, actor=Depends(require("users.vi
     return dryrun.read(user_id, max(1, min(limit, 5000)))
 
 
+@router.get("/api/admin/users/{user_id}/shadow")
+def view_shadow(user_id: str, actor=Depends(require("users.view_as")), c=Depends(db)):
+    t = _target(c, actor, user_id)
+    _note_view(c, actor, t)
+    return _engine().shadow_view(user_id)
+
+
 @router.get("/api/admin/users/{user_id}/sim-positions")
 def view_sim_positions(user_id: str, symbol: str = "NIFTY", actor=Depends(require("users.view_as")), c=Depends(db)):
     t = _target(c, actor, user_id)
