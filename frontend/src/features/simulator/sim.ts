@@ -83,6 +83,7 @@ export interface Margin {
   hedge_benefit: number | null
   note: string | null
   unlisted: string[]
+  source?: string | null         // e.g. "Upstox margin calculator (today's margin)" or "Angel One margin calculator (today's margin)"
 }
 
 export const SIM_PRESETS: Record<string, [Side, Opt, number][]> = {

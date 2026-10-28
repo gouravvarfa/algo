@@ -41,12 +41,12 @@ engine: PaperEngine | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global engine
-    # DATA_SOURCE=upstox runs the live engine (Top Bottom, prices, candles) on Upstox data instead of Angel One. The option chain, the margin calculator
-    # and the nightly option download are built on Angel One and stay off in that mode.
+    # DATA_SOURCE=upstox runs the live engine (Top Bottom, prices, candles), the option chain and the margin calculator on Upstox data instead of Angel One.
+    # Only the nightly 1-minute option download (for the simulator's history) is still Angel One only and stays off in that mode.
     upstox_mode = os.environ.get("DATA_SOURCE", "angelone").strip().lower() == "upstox"
     provider = UpstoxProvider() if upstox_mode else AngelOneProvider()
     engine = PaperEngine(provider)
-    options_api.provider = None if upstox_mode else provider
+    options_api.provider = provider      # the option chain and the margin calculator use whichever data source is active (app/options/api.py)
     options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
     ops_context.engine = engine          # the developer panel reads the engine's health from here
     engine.start()

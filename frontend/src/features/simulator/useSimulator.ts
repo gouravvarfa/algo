@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { get, post, put } from '../../lib/api'
+import { useBrokerName } from '../../lib/broker'
 import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { useToast } from '../../lib/toast'
@@ -141,6 +142,7 @@ export function useSimulator(ds: DataSource) {
   useEffect(() => { savedOnce.current = false }, [sym])
 
   // ---------- LIVE preference (kept per user on the server)
+  const broker = useBrokerName()
   useEffect(() => {
     if (readOnly) return
     get<{ settings: Record<string, unknown> }>('/api/me/settings').then((r) => setLiveState(r.settings['sim.live'] === true)).catch(() => { /* default off */ })
@@ -148,8 +150,8 @@ export function useSimulator(ds: DataSource) {
   const setLive = useCallback((on: boolean) => {
     setLiveState(on); setPlaying(false); setExpPinned(false)
     if (!readOnly) put('/api/me/settings/sim.live', { value: on }).catch(() => undefined)
-    if (on) toast('LIVE: chain from Angel One ticks, updates every second. Paper only.')
-  }, [readOnly, toast])
+    if (on) toast(`LIVE: chain from ${broker} live prices, updates every second or two. Paper only.`)
+  }, [readOnly, toast, broker])
 
   // ---------- chain
   const loadTok = useRef(0)

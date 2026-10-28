@@ -7,13 +7,25 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.options import bhavcopy, chain as oc, master
+from app.options import bhavcopy, chain as oc, master, upstox_options as upx
 from app.providers.angelone_client import get_margin
 from app.ops import flags as ops_flags
 from app.ops.stats import tracked
 
 router = APIRouter(prefix="/api/options")
 provider = None  # set by app.main lifespan
+
+
+def _upstox() -> bool:
+    """True when the data source is Upstox (DATA_SOURCE=upstox): option contracts, the chain and the margin then come from Upstox instead of Angel One."""
+    return getattr(provider, "name", "") == "Upstox"
+
+
+async def _info(symbol: str):
+    """The option contracts of one index from the active data source (the same UnderlyingInfo either way)."""
+    if _upstox():
+        return await upx.load_underlying(provider, symbol)
+    return await asyncio.to_thread(master.load_underlying, symbol)
 
 
 _CACHE: dict = {}
@@ -51,9 +63,11 @@ def _leg(leg: oc.Leg | None) -> dict | None:
 @router.get("/expiries")
 async def expiries(symbol: str = "BANKNIFTY"):
     try:
-        info = await asyncio.to_thread(master.load_underlying, symbol)
+        info = await _info(symbol)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except Exception as exc:                  # Upstox: not logged in / unreachable (the message says what to do)
+        raise HTTPException(502, f"expiries unavailable: {exc}")
     return {"symbol": info.name, "expiries": [e.strftime("%d%b%Y").upper() for e in master.expiries(info)]}
 
 
@@ -63,11 +77,14 @@ async def chain(symbol: str = "BANKNIFTY", expiry: str = "nearest", strikes: int
     if provider is None:
         raise HTTPException(503, "broker provider not ready")
     try:
-        info = await asyncio.to_thread(master.load_underlying, symbol)
+        info = await _info(symbol)
         exp = master.pick_expiry(info, expiry)
-        session = await provider.get_session()
-        ch = await oc.fetch_chain(session, info, exp, max(1, min(strikes, 30)), min_oi=min_oi, min_volume=min_volume,
-                                  max_spread_pct=max_spread_pct)
+        if _upstox():
+            ch = await upx.fetch_chain(provider, info, exp, max(1, min(strikes, 30)), min_oi=min_oi, min_volume=min_volume, max_spread_pct=max_spread_pct)
+        else:
+            session = await provider.get_session()
+            ch = await oc.fetch_chain(session, info, exp, max(1, min(strikes, 30)), min_oi=min_oi, min_volume=min_volume,
+                                      max_spread_pct=max_spread_pct)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except Exception as exc:  # broker/network failure: report, never fabricate
@@ -260,9 +277,12 @@ async def sim_margin(req: MarginReq):
         out["note"] = "broker provider not ready"
         return out
     try:
-        info = await asyncio.to_thread(master.load_underlying, sym)
+        info = await _info(sym)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    except Exception as exc:
+        out["note"] = f"margin calculator unavailable: {str(exc)[:120]}"
+        return out
     book = {(c.expiry.isoformat(), round(c.strike, 2), c.option_type): c for c in info.contracts}
     basket = []
     for p in legs:
@@ -273,7 +293,17 @@ async def sim_margin(req: MarginReq):
         basket.append({"exchange": "NFO", "qty": p.lots * p.lot_size, "price": 0, "productType": "CARRYFORWARD",
                        "token": c.token, "tradeType": p.side, "orderType": "MARKET"})
     if out["unlisted"]:
-        out["note"] = "Angel One's margin calculator only knows contracts that are still listed; expired legs cannot be margined, so no margin is shown"
+        broker = "Upstox" if _upstox() else "Angel One"
+        out["note"] = f"{broker}'s margin calculator only knows contracts that are still listed; expired legs cannot be margined, so no margin is shown"
+        return out
+    if _upstox():
+        try:
+            m = await upx.margin(provider, [{"instrument_key": b["token"], "quantity": b["qty"], "side": b["tradeType"]} for b in basket])
+        except Exception as exc:  # broker/network failure: report, never fabricate
+            out["note"] = f"margin calculator unavailable: {str(exc)[:120]}"
+            return out
+        out.update(margin=m["total"], span=m["span"], exposure=m["exposure"], hedge_benefit=m["hedge_benefit"], source="Upstox margin calculator (today's margin)",
+                   raw_components=m["components"])
         return out
     try:
         session = await provider.get_session()
@@ -792,8 +822,8 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
         raise HTTPException(503, "the live option chain is switched off by a developer")
     feed = _live_ready()
     sym = symbol.upper()
-    from app.paper_trading.engine import INDEX_TOKENS, now_ist
-    ex_i, tok_i = INDEX_TOKENS[sym]
+    from app.paper_trading.engine import now_ist
+    ex_i, tok_i = live_engine.index_tokens[sym]            # the index's token in the ACTIVE data source (Angel One: 99926009, Upstox: NSE_INDEX|Nifty Bank)
     feed.subscribe(ex_i, tok_i)
     try:
         q = await live_engine.index_quote(sym)
@@ -802,7 +832,12 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
     spot = q["price"]
     if not spot:
         raise HTTPException(502, "no index price yet")
-    info = await asyncio.to_thread(master.load_underlying, sym)
+    try:
+        info = await _info(sym)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"option contracts unavailable: {exc}")
     now = now_ist()
     exps = [e.isoformat() for e in master.expiries(info)][:6]
     if not exps:
@@ -869,7 +904,12 @@ async def live_mark(req: LiveMarkReq):
     """Value open legs at their latest live tick (legs are subscribed on first sight). No tick yet = no price, never a guess."""
     feed = _live_ready()
     sym = req.symbol.upper()
-    info = await asyncio.to_thread(master.load_underlying, sym)
+    try:
+        info = await _info(sym)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"option contracts unavailable: {exc}")
     book = {(c.expiry.isoformat(), round(c.strike, 2), c.option_type): c for c in info.contracts}
     q = await live_engine.index_quote(sym)
     out, pay = [], []

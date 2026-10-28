@@ -19,7 +19,7 @@ export function RiskPanel({ s }: { s: Sim }) {
   const wi = s.wi
   const mgText = !m ? (open.length ? 'loading…' : 'no open legs')
     : m.margin == null ? (m.note ?? '') + (m.unlisted.length ? ` (${m.unlisted.join(', ')})` : '')
-      : m.has_sell ? `Angel One · today${m.hedge_benefit ? ` · hedge benefit ₹${num(m.hedge_benefit)}` : ''} · premium recv ₹${num(m.premium_received)}` : 'premium paid'
+      : m.has_sell ? `${(m.source ?? 'Angel One').replace(/ margin calculator.*/, '')} · today${m.hedge_benefit ? ` · hedge benefit ₹${num(m.hedge_benefit)}` : ''} · premium recv ₹${num(m.premium_received)}` : 'premium paid'
   const rr = p && p.max_profit != null && p.max_loss != null && p.max_loss < 0 && p.max_profit > 0 ? `1 : ${(p.max_profit / -p.max_loss).toFixed(2)}` : p ? 'n/a (unlimited side)' : '–'
   return (
     <div className="card">
@@ -35,7 +35,7 @@ export function RiskPanel({ s }: { s: Sim }) {
         <div><span className="ic2 pos">↑</span><div><div className="k">Max profit</div><b>{!p ? '–' : p.max_profit == null ? <span className="pos">Unlimited</span> : rupee(p.max_profit)}</b></div></div>
         <div><span className="ic2 neg">↓</span><div><div className="k">Max loss</div><b>{!p ? '–' : p.max_loss == null ? <span className="neg">Unlimited</span> : rupee(p.max_loss)}</b></div></div>
         <div><span className="ic2 pur">◎</span><div><div className="k">Breakeven</div><b>{!p ? '–' : p.breakevens.length ? p.breakevens.map(n0).join(' / ') : 'none'}</b></div></div>
-        <div title="Money blocked by the open legs. BUY legs: premium paid. With SELL legs: Angel One's margin calculator (SPAN + exposure, hedge benefit included), today's margin, listed contracts only.">
+        <div title="Money blocked by the open legs. BUY legs: premium paid. With SELL legs: the broker's margin calculator (SPAN + exposure, hedge benefit included), today's margin, listed contracts only.">
           <span className="ic2 acc">₹</span><div style={{ minWidth: 0 }}><div className="k">Capital / margin</div><b>{!m ? '–' : m.margin != null ? `₹${num(m.margin)}` : <span className="sub">n/a</span>}</b><div className="mg-s" title={mgText}>{mgText}</div></div>
         </div>
       </div>

@@ -2,12 +2,14 @@ import { useQuery } from '@tanstack/react-query'
 import { Fragment } from 'react'
 import { Link } from 'react-router-dom'
 import { get } from '../../lib/api'
+import { useBrokerName } from '../../lib/broker'
 import { useSession } from '../../lib/session'
 import { useTheme } from '../../lib/theme'
 
 interface Bhav { symbols: { symbol: string; days: number; rows: number; expiries: number; from: string; to: string }[]; days: { date: string; status: string }[] }
 
 export default function SettingsPage() {
+  const broker = useBrokerName()
   const { dark, set } = useTheme()
   const { mode, me } = useSession()
   const data = useQuery({ queryKey: ['settings', 'bhavcopy'], queryFn: () => get<Bhav>('/api/options/bhavcopy/summary') })
@@ -51,7 +53,7 @@ export default function SettingsPage() {
         <div className="card-head"><h2>Safety</h2></div>
         <dl className="kv">
           <dt>Broker orders</dt><dd>Disabled. Simulator, Strategy Builder and Backtesting never place orders.</dd>
-          <dt>Data</dt><dd>Real NSE / Angel One data only. Missing data is flagged, never filled.</dd>
+          <dt>Data</dt><dd>Real NSE / {broker} data only. Missing data is flagged, never filled.</dd>
         </dl>
       </div>
     </div>

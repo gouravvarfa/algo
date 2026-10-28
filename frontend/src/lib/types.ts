@@ -91,6 +91,7 @@ export interface Overview {
   feed: { connected: boolean; last_tick_age_s: number | null; reconnects: number; subscribed: number; error: string | null }
   market_open: boolean
   last_tick: string | null
+  data_source?: string            // "Angel One" or "Upstox": where the market data comes from
   items: OverviewItem[]
   totals: Record<string, number | null>
   viewing?: { id: string; username: string; name: string; role: Role }

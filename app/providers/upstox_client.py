@@ -116,6 +116,36 @@ async def get_ltp(token: str, keys: list[str]) -> dict[str, float]:
     return out
 
 
+OPTION_CONTRACT_URL = BASE_URL + "/option/contract"
+OPTION_CHAIN_URL = BASE_URL + "/option/chain"
+MARGIN_URL = BASE_URL + "/charges/margin"
+
+
+async def get_option_contracts(token: str, underlying_key: str) -> list[dict]:
+    """Every live option contract of one index: instrument_key, expiry, strike_price, instrument_type (CE / PE), lot_size, tick_size ..."""
+    return (await _get(OPTION_CONTRACT_URL, token, {"instrument_key": underlying_key})).get("data") or []
+
+
+async def get_option_chain(token: str, underlying_key: str, expiry_date: str) -> list[dict]:
+    """The whole chain of one expiry in one call: per strike the call and the put with market_data (ltp, volume, oi, bid / ask) and option_greeks."""
+    return (await _get(OPTION_CHAIN_URL, token, {"instrument_key": underlying_key, "expiry_date": expiry_date})).get("data") or []
+
+
+async def get_margin(token: str, instruments: list[dict]) -> dict:
+    """Upstox's margin CALCULATOR for a basket (it never places an order): {'margins': [...per leg], 'required_margin', 'final_margin' (after the hedge benefit)}."""
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(MARGIN_URL, json={"instruments": instruments}, headers={"Accept": "application/json", "Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        raise UpstoxApiError(f"Could not reach Upstox: {exc}", "network") from exc
+    body = _json(r)
+    if r.status_code in (401, 403):
+        raise UpstoxApiError(_message(body, "The Upstox login has ended"), "auth")
+    if not r.is_success or not isinstance(body, dict) or body.get("status") != "success":
+        raise UpstoxApiError(_message(body, "Upstox did not answer as expected"), "data")
+    return body.get("data") or {}
+
+
 async def get_candles(token: str, key: str, unit: str, interval: str, to_date: str, from_date: str) -> list[list]:
     """Finished candles between two dates (newest first): [ISO time, open, high, low, close, volume, open interest]."""
     body = await _get(f"{V3_URL}/historical-candle/{_key_in_path(key)}/{unit}/{interval}/{to_date}/{from_date}", token)

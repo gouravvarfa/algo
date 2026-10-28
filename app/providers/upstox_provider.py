@@ -106,6 +106,10 @@ class UpstoxProvider:
                 raise UpstoxNotConnected("Upstox ended the login. Open the Upstox page in the Developer console and press Connect with Upstox again.") from exc
             raise
 
+    async def call(self, make_call):
+        """The public way to run any Upstox call with the saved login (option chain, margin): `await provider.call(lambda token: upstox_client.x(token, ...))`."""
+        return await self._call(make_call)
+
     # ---- what the live feed and the broker-shaped bits expect ------------------------------------------------------------------------------
     async def get_session(self) -> UpstoxSession:
         return UpstoxSession(self.access_token())

@@ -179,7 +179,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
           <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
           <TradeChart snap={s} kind={kind} fitSignal={fit} />
           {s.engine_note && <p className={`note ${s.engine_warning ? 'neg' : ''}`} style={s.engine_warning ? { fontWeight: 650 } : undefined}>{s.engine_warning ? '⚠ ' : '✔ '}{s.engine_note}</p>}
-          <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle (Angel One) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>
+          <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle ({ov.data_source ?? 'Angel One'}) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>
         </div>
 
         <div className="side">

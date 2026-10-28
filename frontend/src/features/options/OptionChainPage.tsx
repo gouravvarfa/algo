@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Fragment, useState } from 'react'
 import { ApiError, get, post } from '../../lib/api'
+import { useBrokerName } from '../../lib/broker'
 import { n0, num } from '../../lib/format'
 import './options.css'
 
@@ -26,8 +27,9 @@ function Cell({ leg, k, itm }: { leg: Leg | null; k: (typeof COLS)[number]; itm:
   return <td className={(leg.liquid ? '' : 'bad ') + (itm ? 'itm' : '')} title={leg.liquid ? undefined : leg.flags.join(', ')}>{text}{star}</td>
 }
 
-/** Live option chain straight from Angel One (read-only), and the NSE Bhavcopy end-of-day data that the Simulator and Builder use. */
+/** Live option chain straight from the broker the server runs on (Angel One or Upstox, read-only), and the NSE Bhavcopy end-of-day data that the Simulator and Builder use. */
 export default function OptionChainPage() {
+  const broker = useBrokerName()
   const [sym, setSym] = useState('BANKNIFTY')
   const [exp, setExp] = useState('nearest')
   const [n, setN] = useState(10)
@@ -43,7 +45,7 @@ export default function OptionChainPage() {
     <div className="page">
       <div className="row" style={{ alignItems: 'center' }}><h1>Option chain</h1><span className="chip">Read-only · real data</span><span className="chip muted">No broker orders</span></div>
       <div className="card">
-        <div className="card-head"><h2>Live option chain (Angel One)</h2></div>
+        <div className="card-head"><h2>Live option chain ({broker})</h2></div>
         <div className="row" style={{ alignItems: 'center' }}>
           <select value={sym} onChange={(e) => { setSym(e.target.value); setExp('nearest') }}><option>BANKNIFTY</option><option>NIFTY</option></select>
           <select value={exp} onChange={(e) => setExp(e.target.value)}><option value="nearest">nearest</option>{exps.data?.expiries.map((e) => <option key={e}>{e}</option>)}</select>

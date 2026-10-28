@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useBrokerName } from '../../lib/broker'
 import { useDataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { ChainPanel } from './ChainPanel'
@@ -11,6 +12,7 @@ import './simulator.css'
 
 export default function SimulatorPage() {
   const ds = useDataSource()
+  const broker = useBrokerName()
   const s = useSimulator(ds)
   const [strikeView, setStrikeView] = useState<'near' | 'all'>('near')
   const [onlyTraded, setOnlyTraded] = useState(false)
@@ -48,7 +50,7 @@ export default function SimulatorPage() {
               <button className="ib" disabled={s.idx >= s.dates.length - 1 || s.live} onClick={() => s.goIndex(s.idx + 1)} title="Next trading day">›</button>
             </span></label>
           <label className="field">Lot<span className="lotv">{c?.lot_size ?? '–'}</span></label>
-          <button className={'livebtn' + (s.live ? ' on' : '')} onClick={() => s.setLive(!s.live)} title="Live chain from Angel One WebSocket ticks (paper only, no orders). Updates every second."><i />LIVE</button>
+          <button className={'livebtn' + (s.live ? ' on' : '')} onClick={() => s.setLive(!s.live)} title={`Live chain from ${broker} live prices (paper only, no orders). Updates every second or two.`}><i />LIVE</button>
           <span className={'eod' + (isLive ? ' livechip' : '')}>{dataBadge}</span>
         </div>
       </div>
