@@ -105,6 +105,8 @@ def engine_tile() -> dict:
 
 def collector_tile() -> dict:
     from app.options import collector
+    if getattr(getattr(context.engine, "provider", None), "name", "") == "Upstox":      # the nightly 1-minute option download is Angel One only: off here on purpose
+        return _tile("collector", "Option collector (daily download)", NA, "off: the data source is Upstox (this nightly download only exists for Angel One)")
     st = collector.status()
     today = dt.datetime.now().date().isoformat()
     last = st.get("last_run_date")

@@ -167,3 +167,12 @@ def test_instruments_saved_for_angel_one_are_left_alone_not_used_and_not_lost(tm
     e._save()
     assert sorted(i["id"] for i in json.loads(path.read_text())) == ["new", "old"]      # and it is still in the file for the day Angel One is the source again
     assert sorted(em.PaperEngine(FakeUpstox()).instruments) == ["new"]
+
+
+def test_the_health_board_does_not_call_the_switched_off_option_download_a_problem_on_upstox(engine, monkeypatch):
+    from app.ops import context, health
+    monkeypatch.setattr(context, "engine", engine)
+    t = health.collector_tile()
+    assert t["status"] == health.NA and "Upstox" in t["reason"]
+    monkeypatch.setattr(context, "engine", None)                      # no engine / Angel One: the old checks apply (they never answer N/A)
+    assert health.collector_tile()["status"] != health.NA
