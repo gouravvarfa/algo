@@ -156,9 +156,11 @@ def _iso(d: dt.datetime | None) -> str | None:
 
 
 class PaperEngine:
-    def __init__(self, provider: AngelOneProvider) -> None:
+    def __init__(self, provider) -> None:       # AngelOneProvider or UpstoxProvider: the same methods, the data source is chosen in app/main.py
         self.provider = provider
+        self.index_tokens = getattr(provider, "index_tokens", INDEX_TOKENS)      # index name -> (exchange, token) in THIS data source
         self.instruments: dict[str, Instrument] = {}
+        self._foreign: list[dict] = []           # saved instruments of ANOTHER data source (Angel One tokens while running on Upstox): kept in the file, never used here
         self.snapshots: dict[str, dict] = {}
         self.errors: dict[str, str] = {}
         self.faults: dict[str, dict] = {}        # instrument id -> {message, since}: an instrument whose evaluation keeps failing (isolated; the others go on)
@@ -167,7 +169,8 @@ class PaperEngine:
         self._task: asyncio.Task | None = None
         self._bars15: dict[str, tuple[dt.datetime, dict]] = {}  # instrument id -> (fetched at, date -> [Bar15])
         self._minutes: dict[str, tuple[dt.datetime, list]] = {}  # instrument id -> (fetched at, 1-minute candles)
-        self.feed = TickFeed(provider.get_session, provider.reset_session)
+        make_feed = getattr(provider, "make_feed", None)
+        self.feed = make_feed() if make_feed else TickFeed(provider.get_session, provider.reset_session)
         self._raw_cache: dict[str, tuple[dt.datetime, pd.DataFrame]] = {}
         self._prev_close: dict[str, tuple] = {}
         self._live_good: dict[str, tuple[dt.datetime, list, str]] = {}  # instrument id -> (evaluated at, trades, note) of the last SUCCESSFUL intraday run
@@ -180,7 +183,11 @@ class PaperEngine:
         if STATE_PATH.exists():
             seen: dict[tuple, str] = {}
             dropped = 0
+            accepts = getattr(self.provider, "accepts_token", None)
             for raw in json.loads(STATE_PATH.read_text()):
+                if accepts and not accepts(str(raw.get("token", ""))):
+                    self._foreign.append(raw)
+                    continue
                 inst = Instrument.model_validate(raw)
                 key = (inst.owner, inst.symbol, inst.instrument_type, inst.timeframe)
                 if key in seen:                  # the same strategy added twice for one person (two opens of the page at once): keep the first
@@ -194,7 +201,7 @@ class PaperEngine:
 
     def _save(self) -> None:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps([i.model_dump() for i in self.instruments.values()], indent=2))
+        STATE_PATH.write_text(json.dumps([i.model_dump() for i in self.instruments.values()] + self._foreign, indent=2))
 
     # ---- watchlist -------------------------------------------------------
     async def add(self, symbol: str, instrument_type: str, timeframe: str, size: int, lookback_days: int | None, owner: str | None = None) -> Instrument:
@@ -218,7 +225,7 @@ class PaperEngine:
             fields = dict(quantity=size, token=match.token, trading_symbol=match.trading_symbol, exch_seg=match.exch_seg)
         elif instrument_type == "FUTURE":
             today = now.date().isoformat()
-            contracts = [c for c in await scrip_master.get_future_contracts(symbol) if c.underlying == symbol and c.expiry >= today]
+            contracts = [c for c in await self._future_contracts(symbol) if c.underlying == symbol and c.expiry >= today]
             if not contracts:
                 raise PaperError(f"{symbol}: no live futures contract found")
             c = min(contracts, key=lambda x: x.expiry)
@@ -485,6 +492,11 @@ class PaperEngine:
             finally:
                 self._rest_last = _t.monotonic()
 
+    async def _future_contracts(self, symbol: str):
+        """Live futures contracts of one underlying from the active data source (Angel One: its scrip master; Upstox: its instrument list)."""
+        own = getattr(self.provider, "future_contracts", None)
+        return await (own(symbol) if own else scrip_master.get_future_contracts(symbol))
+
     # ---- multi-contract chain (Oct -> Nov -> Dec ...) --------------------------
     async def _known_contracts(self, inst: Instrument) -> list[ContractRef]:
         """Live contracts from Angel One's master plus the ones remembered from earlier runs (an expired contract is no longer in the master)."""
@@ -494,7 +506,7 @@ class PaperEngine:
             known = {}
         mine = {c["trading_symbol"]: c for c in known.get(inst.symbol, [])}
         try:
-            for c in await scrip_master.get_future_contracts(inst.symbol):
+            for c in await self._future_contracts(inst.symbol):
                 if c.underlying == inst.symbol:
                     mine[c.trading_symbol] = {"trading_symbol": c.trading_symbol, "token": c.token, "exch_seg": c.exch_seg, "expiry": c.expiry, "lot_size": c.lot_size}
         except Exception:
@@ -771,7 +783,7 @@ class PaperEngine:
     def start(self) -> None:
         for inst in self.instruments.values():
             self.feed.subscribe(inst.exch_seg, inst.token)
-        for ex, tok in INDEX_TOKENS.values():        # index prices for the day-change display
+        for ex, tok in self.index_tokens.values():   # index prices for the day-change display
             self.feed.subscribe(ex, tok)
         self.feed.start()
         self._task = asyncio.create_task(self._loop())
@@ -783,7 +795,7 @@ class PaperEngine:
 
     async def index_quote(self, name: str) -> dict:
         """Index price with today's change in points and % versus the previous trading day's close (real Angel One data)."""
-        ex, tok = INDEX_TOKENS[name]
+        ex, tok = self.index_tokens[name]
         now = now_ist()
         cached = self._prev_close.get(name)
         if cached is None or (now - cached[0]).total_seconds() > 600:
@@ -799,7 +811,8 @@ class PaperEngine:
         change = None if price is None or prev_close is None else round(price - prev_close, 2)
         return {"symbol": name, "price": price, "prev_close": prev_close, "change": change,
                 "pct": None if change is None or not prev_close else round(change / prev_close * 100, 2),
-                "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
+                "live": live, "age_s": self.feed.age(tok),
+                "source": (getattr(self.feed, "source", "") + " live price" if getattr(self.feed, "source", "") else "WebSocket tick") if live else "REST daily candle"}
 
     # ---- views -----------------------------------------------------------
     def overview(self, owner=ALL) -> dict:

@@ -10,6 +10,7 @@ except ImportError:
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 
 from app.paper_trading.engine import DEFAULT_LOOKBACK_DAYS, TIMEFRAMES, PaperEngine, PaperError
 from app.providers.angelone_provider import AngelOneProvider
+from app.providers.upstox_provider import UpstoxProvider
 from app.options import api as options_api
 from app.options import collector as option_collector
 from app import auth, auth_api
@@ -39,9 +41,12 @@ engine: PaperEngine | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global engine
-    provider = AngelOneProvider()
+    # DATA_SOURCE=upstox runs the live engine (Top Bottom, prices, candles) on Upstox data instead of Angel One. The option chain, the margin calculator
+    # and the nightly option download are built on Angel One and stay off in that mode.
+    upstox_mode = os.environ.get("DATA_SOURCE", "angelone").strip().lower() == "upstox"
+    provider = UpstoxProvider() if upstox_mode else AngelOneProvider()
     engine = PaperEngine(provider)
-    options_api.provider = provider
+    options_api.provider = None if upstox_mode else provider
     options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
     ops_context.engine = engine          # the developer panel reads the engine's health from here
     engine.start()
@@ -55,7 +60,8 @@ async def lifespan(_: FastAPI):
     except Exception as e:                # the journal must never stop the app from starting
         logging.getLogger(__name__).warning("options journal backfill failed: %s", e)
     asyncio.create_task(options_api.warm())
-    asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
+    if not upstox_mode:
+        asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
     asyncio.create_task(_selftest_loop())                  # known-answer checks every 10 minutes (developer panel)
     yield
     await engine.stop()
@@ -254,6 +260,7 @@ async def index():
 async def overview(request: Request):
     data = engine.overview(owner=_owner(request))
     data["angelone_configured"] = angelone_credential_store.is_configured()
+    data["data_source"] = getattr(engine.provider, "name", "Angel One")
     data["timeframes"] = list(TIMEFRAMES)
     data["default_lookback_days"] = DEFAULT_LOOKBACK_DAYS
     return data

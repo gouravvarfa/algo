@@ -60,10 +60,10 @@ async def exchange_code(code: str, api_key: str, api_secret: str, redirect_uri: 
     return body
 
 
-async def _get(url: str, token: str) -> dict:
+async def _get(url: str, token: str, params: dict | None = None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(url, headers={"Accept": "application/json", "Authorization": f"Bearer {token}"})
+            r = await client.get(url, params=params, headers={"Accept": "application/json", "Authorization": f"Bearer {token}"})
     except httpx.HTTPError as exc:
         raise UpstoxApiError(f"Could not reach Upstox: {exc}", "network") from exc
     body = _json(r)
@@ -80,3 +80,49 @@ async def get_profile(token: str) -> dict:
 
 async def get_trades_today(token: str) -> list[dict]:
     return (await _get(TRADES_TODAY_URL, token)).get("data") or []
+
+
+# ---- market data (read only) --------------------------------------------------------------------------------------------------------------
+V3_URL = "https://api.upstox.com/v3"
+QUOTES_URL = BASE_URL + "/market-quote/quotes"
+
+
+def _key_in_path(key: str) -> str:
+    return urllib.parse.quote(key, safe="")        # "NSE_INDEX|Nifty Bank" -> "NSE_INDEX%7CNifty%20Bank"
+
+
+async def get_quotes(token: str, keys: list[str]) -> dict[str, dict]:
+    """{instrument_key: quote}. Upstox answers with 'NSE_INDEX:Nifty Bank' style keys; each quote carries the real key in 'instrument_token'."""
+    body = await _get(QUOTES_URL, token, {"instrument_key": ",".join(keys)})
+    out: dict[str, dict] = {}
+    for k, v in (body.get("data") or {}).items():
+        if isinstance(v, dict):
+            out[v.get("instrument_token") or k.replace(":", "|", 1)] = v
+    return out
+
+
+LTP_URL = BASE_URL + "/market-quote/ltp"
+LTP_KEYS_PER_CALL = 400
+
+
+async def get_ltp(token: str, keys: list[str]) -> dict[str, float]:
+    """{instrument_key: last traded price} for any number of keys (asked for in groups). Light: the live feed polls this every second or two."""
+    out: dict[str, float] = {}
+    for i in range(0, len(keys), LTP_KEYS_PER_CALL):
+        body = await _get(LTP_URL, token, {"instrument_key": ",".join(keys[i:i + LTP_KEYS_PER_CALL])})
+        for k, v in (body.get("data") or {}).items():
+            if isinstance(v, dict) and isinstance(v.get("last_price"), (int, float)):
+                out[v.get("instrument_token") or k.replace(":", "|", 1)] = float(v["last_price"])
+    return out
+
+
+async def get_candles(token: str, key: str, unit: str, interval: str, to_date: str, from_date: str) -> list[list]:
+    """Finished candles between two dates (newest first): [ISO time, open, high, low, close, volume, open interest]."""
+    body = await _get(f"{V3_URL}/historical-candle/{_key_in_path(key)}/{unit}/{interval}/{to_date}/{from_date}", token)
+    return (body.get("data") or {}).get("candles") or []
+
+
+async def get_intraday_candles(token: str, key: str, unit: str, interval: str) -> list[list]:
+    """Today's candles, the forming one included (newest first)."""
+    body = await _get(f"{V3_URL}/historical-candle/intraday/{_key_in_path(key)}/{unit}/{interval}", token)
+    return (body.get("data") or {}).get("candles") or []
