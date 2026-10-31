@@ -22,6 +22,7 @@ const HealthPage = lazy(() => import('../features/developer/HealthPage'))
 const FunctionsPage = lazy(() => import('../features/developer/FunctionsPage'))
 const IsolationPage = lazy(() => import('../features/developer/IsolationPage'))
 const ErrorsPage = lazy(() => import('../features/developer/ErrorsPage'))
+const StreamPage = lazy(() => import('../features/developer/StreamPage'))
 const FlagsPage = lazy(() => import('../features/developer/FlagsPage'))
 const AnnouncementsPage = lazy(() => import('../features/admin/AnnouncementsPage'))
 const AdminOverview = lazy(() => import('../features/admin/OverviewPage'))
@@ -83,6 +84,7 @@ export function App() {
         <Route path="functions" element={<FunctionsPage />} />
         <Route path="isolation" element={<IsolationPage />} />
         <Route path="errors" element={<ErrorsPage />} />
+        <Route path="stream" element={<StreamPage />} />
         <Route path="flags" element={<FlagsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="logins" element={<LoginAttemptsPage />} />

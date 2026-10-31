@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.live import stream as live_stream
+from app.ops import flags as ops_flags
 from app.paper_trading.engine import DEFAULT_LOOKBACK_DAYS, TIMEFRAMES, PaperEngine, PaperError
 from app.providers.angelone_provider import AngelOneProvider
 from app.options import api as options_api
@@ -26,16 +28,20 @@ from app.services import angelone_credential_store
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
 engine: PaperEngine | None = None
+hub: live_stream.StreamHub | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global engine
+    global engine, hub
     provider = AngelOneProvider()
     engine = PaperEngine(provider)
     options_api.provider = provider
     options_api.live_engine = engine     # live option chain shares the engine's single WebSocket feed
     ops_context.engine = engine          # the developer panel reads the engine's health from here
+    hub = live_stream.StreamHub(engine.feed)       # pushes the live ticks to browsers; it only listens, the paper engine is untouched
+    engine.feed.listeners.append(hub.on_tick)
+    ops_context.stream_hub = hub
     engine.start()
     try:                                  # legs saved before the options journal existed go into it once (idempotent)
         from app.db import platform_db
@@ -202,6 +208,32 @@ async def journal_api(request: Request, limit: int = 300):
 async def dry_run_api(request: Request, limit: int = 300):
     from app.paper_trading import dryrun
     return dryrun.read(_owner(request), max(1, min(limit, 5000)))
+
+
+def _still_signed_in(request: Request) -> bool:
+    """The same login check every request goes through, asked again while a live stream is open (so the daily 16:00 sign-out cuts it off)."""
+    current = login_mode.current()
+    if current == "open":
+        return True
+    if current == "platform":
+        return auth_api.gate(request) is None
+    return bool(auth.valid_session(request.cookies.get(auth.COOKIE)))
+
+
+@app.get("/api/stream")
+async def stream_api(request: Request, tokens: str = ""):
+    """Live ticks pushed to the browser (SSE). `tokens` = EXCHANGE:TOKEN list, e.g. NFO:61466,NSE:99926009. The login applies like on every /api route."""
+    if hub is None or not ops_flags.get("feature.stream"):
+        raise HTTPException(503, "the live stream is switched off")
+    try:
+        specs = live_stream.parse_specs(tokens)
+        user = (getattr(request.state, "user", None) or {}).get("id")
+        client = hub.open(user, specs, request.headers.get("user-agent", ""))
+    except live_stream.StreamError as exc:
+        raise HTTPException(400, str(exc))
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(hub.events(client, lambda: _still_signed_in(request)), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
 @app.get("/api/shadow")

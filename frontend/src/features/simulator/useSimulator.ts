@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { get, post, put } from '../../lib/api'
 import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
+import { fresh, useLiveTicks } from '../../lib/stream'
 import { useToast } from '../../lib/toast'
 import { PRESET_RULES, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
@@ -41,7 +42,8 @@ export function useSimulator(ds: DataSource) {
   const [initError, setInitError] = useState('')
   const minCache = useRef(new Map<string, string[]>())
 
-  const [chain, setChain] = useState<Chain | null>(null)
+  const [chainState, setChain] = useState<Chain | null>(null)
+  const chain = chainState
   const [chainError, setChainError] = useState('')
   const [loading, setLoading] = useState(false)
   const [curExp, setCurExp] = useState<string | null>(null)
@@ -172,6 +174,13 @@ export function useSimulator(ds: DataSource) {
   loadRef.current = loadChain
   useEffect(() => { void loadChain(false) }, [idx, tm, mode, live, curExp && expPinned ? curExp : '', expPinned, sym, useIntra]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // LIVE: every price of the chain is pushed by the server (SSE); the chain itself (IV, greeks, OI, the strikes around the money) is still fetched,
+  // every second until the stream is up and every 5 s while it is, so nothing on screen is older than its tick
+  const optionSpecs = useMemo(() => (live && chain?.mode === 'live'
+    ? [...chain.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `NFO:${t}`), `NSE:${sym === 'BANKNIFTY' ? '99926009' : '99926000'}`]
+    : []), [live, chain?.mode, chain?.expiry, chain?.rows.length, sym]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { ticks, status: streamStatus } = useLiveTicks(optionSpecs, optionSpecs.length > 0)
+  const streamLive = streamStatus === 'live'
   useEffect(() => {
     if (!live) return
     let busy = false
@@ -179,9 +188,9 @@ export function useSimulator(ds: DataSource) {
       if (document.hidden || busy) return
       busy = true
       try { await loadRef.current(true) } finally { busy = false }
-    }, 1000)
+    }, streamLive ? 5000 : 1000)
     return () => window.clearInterval(id)
-  }, [live])
+  }, [live, streamLive])
 
   useEffect(() => {          // previous close, for the "vs prev. close" line
     setPrevSpot(null)
@@ -286,7 +295,9 @@ export function useSimulator(ds: DataSource) {
     return { id: Date.now() + Math.random(), side, opt, strike: k, expiry: c.expiry, lots: 1, lot_size: c.lot_size, entry: l.ltp, entry_date: c.date, sl_pct: null, sl: null,
       entry_time: intra ? (c.time ?? '').slice(0, 5) : null, live: c.mode === 'live' || undefined, untraded_entry: intra ? false : !l.volume, stale_entry: intra && (l.age_min ?? 0) > 5 ? l.age_min : null }
   }
+  const shownChainRef = useRef<Chain | null>(null)       // the chain exactly as the screen shows it (live ticks applied): a simulated entry takes the price the person sees
   const addPos = (side: Side, opt: Opt, k: number) => {
+    const chain = shownChainRef.current ?? chainState
     if (readOnly || !chain) return
     const leg = makeLeg(chain, side, opt, k)
     if (typeof leg === 'string') { toast(leg); return }
@@ -296,9 +307,10 @@ export function useSimulator(ds: DataSource) {
     else toast(`Simulated ${side} ${n0(k)} ${opt} @ ₹${num(l.ltp)} (${chain.mode === 'live' ? 'live ' + chain.time : dmy(chain.date) + (chain.mode === 'intraday' ? ' ' + chain.time : ' close')})`)
   }
   const placePreset = async (name: string) => {
-    if (readOnly || !chain) return
+    if (readOnly || !chainState) return
     const rule = PRESET_RULES[name]
-    let c = chain
+    const chain = chainState
+    let c = shownChainRef.current ?? chainState
     if (rule) {
       // pick an expiry whose settlement day is in the loaded data, then go to its entry day (T-N trading days) at the close
       const inData = (e: string) => dates.includes(e) && dates.indexOf(e) - rule.entryDaysBefore >= 0
@@ -346,10 +358,41 @@ export function useSimulator(ds: DataSource) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `simulation_${date}.csv`; a.click()
   }
 
+  // what the screen shows: the chain and the positions' marks with each price replaced by its latest pushed tick (LIVE only; a stale tick is ignored)
+  const indexTick = ticks[sym === 'BANKNIFTY' ? '99926009' : '99926000']
+  const shownChain = useMemo(() => {
+    if (!chain || chain.mode !== 'live' || !streamLive) return chain
+    const apply = (l: typeof chain.rows[number]['CE']) => {
+      const t = l?.token ? ticks[l.token] : undefined
+      return l && fresh(t) ? { ...l, ltp: t.ltp, src: 'live', age_s: 0 } : l
+    }
+    return { ...chain, underlying: fresh(indexTick) ? indexTick.ltp : chain.underlying, rows: chain.rows.map((r) => ({ ...r, CE: apply(r.CE), PE: apply(r.PE) })) }
+  }, [chain, ticks, streamLive]) // eslint-disable-line react-hooks/exhaustive-deps
+  shownChainRef.current = shownChain
+  const shownValued = useMemo(() => {
+    if (!chain || chain.mode !== 'live' || !streamLive) return valued
+    const out: Record<string, Valued> = { ...valued }
+    for (const p of positions) {
+      if (p.closed) continue
+      const leg = p.expiry === chain.expiry ? chain.rows.find((r) => r.strike === p.strike)?.[p.opt] : null
+      const t = leg?.token ? ticks[leg.token] : undefined
+      if (!leg || !fresh(t)) continue
+      out[String(p.id)] = { ltp: t.ltp, pnl: +((t.ltp - p.entry) * p.lots * mult * p.lot_size * (p.side === 'BUY' ? 1 : -1)).toFixed(2), note: out[String(p.id)]?.note ?? '' }
+    }
+    return out
+  }, [valued, positions, chain, ticks, streamLive, mult]) // eslint-disable-line react-hooks/exhaustive-deps
+  const shownMark = useMemo(() => {
+    if (!mark || shownValued === valued) return mark
+    const open = positions.filter((p) => !p.closed)
+    const pnls = open.map((p) => shownValued[String(p.id)]?.pnl)
+    return open.length && pnls.every((x): x is number => typeof x === 'number') ? { ...mark, total: +pnls.reduce((a, b) => a + b, 0).toFixed(2) } : mark
+  }, [mark, shownValued, valued, positions])
+
   return {
+    streamStatus,
     readOnly, sym, setSym, dates, eodSet, intraSet, idx, date, tm, mins, mode, setMode, useIntra, initError, goIndex, goMinute, goTo,
-    chain, chainError, loading, curExp, pickExpiry, live, setLive, prevSpot,
-    positions, valued, mark, margin, mult, setMult, addPos, placePreset, changeLots, removePos, exitPos, exitAll, clearAll, exportCsv,
+    chain: shownChain, chainError, loading, curExp, pickExpiry, live, setLive, prevSpot,
+    positions, valued: shownValued, mark: shownMark, margin, mult, setMult, addPos, placePreset, changeLots, removePos, exitPos, exitAll, clearAll, exportCsv,
     wi, wiDate, setWiDate, wiIv, setWiIv, wiSp, setWiSp, minOpenExpiry,
     playing, setPlaying, speed, setSpeed,
   }

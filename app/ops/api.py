@@ -38,6 +38,12 @@ def dev_functions(_=Depends(require("system.read"))):
     return {"functions": stats.snapshot(), "requests": stats.request_summary()}
 
 
+@router.get("/api/dev/stream")
+def dev_stream(_=Depends(require("system.read"))):
+    hub = context.stream_hub
+    return {"enabled": bool(flags.get("feature.stream")), "available": hub is not None, **(hub.stats() if hub is not None else {})}
+
+
 @router.get("/api/dev/errors")
 def dev_errors(limit: int = 100, _=Depends(require("system.read"))):
     return {"groups": incidents.grouped(), "recent": incidents.recent(limit)}

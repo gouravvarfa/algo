@@ -43,7 +43,7 @@ async def warm() -> None:
 def _leg(leg: oc.Leg | None) -> dict | None:
     if leg is None:
         return None
-    return {"symbol": leg.contract.symbol, "ltp": leg.ltp, "bid": leg.bid, "ask": leg.ask, "volume": leg.volume, "oi": leg.oi,
+    return {"symbol": leg.contract.symbol, "token": leg.contract.token, "ltp": leg.ltp, "bid": leg.bid, "ask": leg.ask, "volume": leg.volume, "oi": leg.oi,
             "iv": leg.iv, "delta": leg.delta, "gamma": leg.gamma, "theta": leg.theta, "vega": leg.vega,
             "greeks_source": leg.greeks_source, "flags": leg.flags, "liquid": oc.liquid(leg)}
 
@@ -841,7 +841,7 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
             else:
                 ltp, src, age_s, ts = None, None, None, None
             iv = bs.implied_vol(ltp, spot, k, t, RATE, 0.0, o == "CE") if ltp else None
-            rec[o] = {"ltp": ltp, "src": src, "age_s": age_s, "ts": ts, "age_min": 0, "volume": None, "oi": oi.get((k, o)), "chg_oi": None,
+            rec[o] = {"token": c.token, "ltp": ltp, "src": src, "age_s": age_s, "ts": ts, "age_min": 0, "volume": None, "oi": oi.get((k, o)), "chg_oi": None,
                       "iv": round(iv, 1) if iv else None,
                       "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
         out.append({"strike": k, **rec})

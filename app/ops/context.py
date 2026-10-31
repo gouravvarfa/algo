@@ -5,3 +5,4 @@ import time
 
 started_at = time.time()
 engine = None            # PaperEngine
+stream_hub = None        # app.live.stream.StreamHub: the live tick push to browsers (developer panel reads its numbers)

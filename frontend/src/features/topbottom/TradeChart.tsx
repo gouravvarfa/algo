@@ -9,7 +9,7 @@ type Kind = 'line' | 'candle'
 
 /** The live chart: close line (or candles), BUY/SELL arrows, roll marker, the latest TOP and BOTTOM, and two dashed horizontal lines for the
  * OPEN position only: entry (green) and stop-loss (red, with the rupee loss if it is hit). The chart is rebuilt when the theme changes. */
-export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Kind; fitSignal: number }) {
+export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot; kind: Kind; fitSignal: number; liveLtp?: number }) {
   const host = useRef<HTMLDivElement>(null)
   const chart = useRef<IChartApi | null>(null)
   const line = useRef<ISeriesApi<'Line'> | null>(null)
@@ -94,6 +94,15 @@ export function TradeChart({ snap, kind, fitSignal }: { snap: Snapshot; kind: Ki
       fitted.current = true
     }
   }, [snap, kind, themeTick])
+
+  // a price pushed by the stream moves the forming (last) candle between snapshots: its close follows the price, its high / low stretch to include it
+  useEffect(() => {
+    const ls = line.current, cs = candle.current, last = snap.candles[snap.candles.length - 1]
+    if (liveLtp == null || !ls || !cs || !last) return
+    const t = last.time as UTCTimestamp
+    ls.update({ time: t, value: liveLtp })
+    cs.update({ time: t, open: last.open, high: Math.max(last.high, liveLtp), low: Math.min(last.low, liveLtp), close: liveLtp })
+  }, [liveLtp, snap.candles]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (fitSignal && chart.current) chart.current.timeScale().setVisibleLogicalRange({ from: Math.max(0, snap.candles.length - 45), to: snap.candles.length + 6 })

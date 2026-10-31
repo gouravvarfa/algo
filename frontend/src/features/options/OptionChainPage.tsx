@@ -1,10 +1,11 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { ApiError, get, post } from '../../lib/api'
 import { n0, num } from '../../lib/format'
+import { fresh, useLiveTicks } from '../../lib/stream'
 import './options.css'
 
-interface Leg { ltp: number | null; bid: number | null; ask: number | null; volume: number | null; oi: number | null; iv: number | null; delta: number | null; greeks_source: string; flags: string[]; liquid: boolean }
+interface Leg { token?: string | null; ltp: number | null; bid: number | null; ask: number | null; volume: number | null; oi: number | null; iv: number | null; delta: number | null; greeks_source: string; flags: string[]; liquid: boolean }
 interface Row { strike: number; CE: Leg | null; PE: Leg | null }
 interface Chain {
   spot: number; atm: number; vix: number | null; pcr: number | null; expiry: string; lot_size: number; market_open: boolean; fetched_at: string
@@ -17,8 +18,20 @@ interface EodRow { strike: number; CE: { close: number; settle: number; oi: numb
 const COLS = ['oi', 'volume', 'iv', 'delta', 'bid', 'ask', 'ltp'] as const
 const DECIMALS: Record<string, number> = { oi: 0, volume: 0, iv: 1, delta: 2 }
 
-function Cell({ leg, k, itm }: { leg: Leg | null; k: (typeof COLS)[number]; itm: boolean }) {
+/** A price that flashes green when it rose and red when it fell since its previous value. */
+function Flash({ v }: { v: number | null }) {
+  const prev = useRef(v)
+  const [f, setF] = useState<{ dir: 'up' | 'dn'; n: number } | null>(null)
+  useEffect(() => {
+    if (prev.current != null && v != null && v !== prev.current) setF((x) => ({ dir: v > prev.current! ? 'up' : 'dn', n: (x?.n ?? 0) + 1 }))
+    prev.current = v
+  }, [v])
+  return <span key={f?.n ?? 0} className={'lv' + (f ? ` fl-${f.dir}` : '')}>{v == null ? '–' : num(v, 2)}</span>
+}
+
+function Cell({ leg, k, itm, live }: { leg: Leg | null; k: (typeof COLS)[number]; itm: boolean; live?: number }) {
   if (!leg) return <td className="bad">–</td>
+  if (k === 'ltp') return <td className={(leg.liquid ? '' : 'bad ') + (itm ? 'itm' : '')} title={leg.liquid ? undefined : leg.flags.join(', ')}><Flash v={live ?? leg.ltp} /></td>
   const v = leg[k]
   const d = DECIMALS[k] ?? 2
   const text = v == null ? '–' : d === 0 ? n0(v) : num(v, d)
@@ -39,6 +52,12 @@ export default function OptionChainPage() {
     enabled: false, refetchInterval: auto ? 15_000 : false, retry: false,
   })
   const c = chain.data
+  // live prices pushed by the server (SSE): the LTP column of every strike and the spot follow the tick; bid / ask / volume / OI / IV stay from the fetch
+  const specs = c ? [...c.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `NFO:${t}`), `NSE:${sym === 'BANKNIFTY' ? '99926009' : '99926000'}`] : []
+  const { ticks, status } = useLiveTicks(specs, !!c && c.market_open)
+  const px = (leg: Leg | null) => { const t = leg?.token ? ticks[leg.token] : undefined; return fresh(t) ? t.ltp : undefined }
+  const spotTick = ticks[sym === 'BANKNIFTY' ? '99926009' : '99926000']
+  const spot = c ? (fresh(spotTick) ? spotTick.ltp : c.spot) : 0
   return (
     <div className="page">
       <div className="row" style={{ alignItems: 'center' }}><h1>Option chain</h1><span className="chip">Read-only · real data</span><span className="chip muted">No broker orders</span></div>
@@ -55,7 +74,7 @@ export default function OptionChainPage() {
         {c && (
           <>
             <div className="row" style={{ marginTop: 10, gap: 6 }}>
-              {([['Spot', num(c.spot)], ['ATM', n0(c.atm)], ['VIX', num(c.vix)], ['PCR', num(c.pcr)], ['Expiry', c.expiry], ['Lot', String(c.lot_size)], ['Market', c.market_open ? 'OPEN' : 'CLOSED'], ['Fetched', c.fetched_at.slice(11, 19)]] as [string, string][])
+              {([['Spot', num(spot)], ['ATM', n0(c.atm)], ['VIX', num(c.vix)], ['PCR', num(c.pcr)], ['Expiry', c.expiry], ['Lot', String(c.lot_size)], ['Market', c.market_open ? 'OPEN' : 'CLOSED'], ['LTP', status === 'live' ? 'live (pushed)' : 'as fetched'], ['Fetched', c.fetched_at.slice(11, 19)]] as [string, string][])
                 .map(([k, v]) => <span key={k} className="chip">{k}: <b>{v}</b></span>)}
             </div>
             <ul className="msgs">
@@ -72,9 +91,9 @@ export default function OptionChainPage() {
                 <tbody>
                   {c.rows.map((r) => (
                     <tr key={r.strike} className={r.strike === c.atm ? 'atm' : ''}>
-                      {COLS.map((k) => <Cell key={`c${k}`} leg={r.CE} k={k} itm={r.strike < c.spot} />)}
+                      {COLS.map((k) => <Cell key={`c${k}`} leg={r.CE} k={k} itm={r.strike < spot} live={px(r.CE)} />)}
                       <td className="k">{n0(r.strike)}</td>
-                      {[...COLS].reverse().map((k) => <Cell key={`p${k}`} leg={r.PE} k={k} itm={r.strike > c.spot} />)}
+                      {[...COLS].reverse().map((k) => <Cell key={`p${k}`} leg={r.PE} k={k} itm={r.strike > spot} live={px(r.PE)} />)}
                     </tr>
                   ))}
                 </tbody>

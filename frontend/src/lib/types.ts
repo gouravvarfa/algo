@@ -52,7 +52,7 @@ export interface Marker {
 }
 
 export interface Snapshot {
-  instrument: { id: string; symbol: string; trading_symbol: string; timeframe: string; quantity: number; lots?: number; expiry: string }
+  instrument: { id: string; symbol: string; trading_symbol: string; timeframe: string; quantity: number; lots?: number; expiry: string; token?: string; exch_seg?: string }
   ltp: number
   last_confirmed_bar: string
   updated_at: string

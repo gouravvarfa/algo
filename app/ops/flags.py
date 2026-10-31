@@ -6,6 +6,7 @@ Known switches (all default to the safe, normal value):
   engines.paused      true  -> NO strategy engine evaluates (global kill switch; screens keep showing the last stored state, labelled)
   engine.paused       true  -> that one user's engine stops (scope user:<id>)
   feature.live_chain  false -> the live option chain endpoint answers "switched off"
+  feature.stream      false -> the live tick push to browsers (/api/stream, SSE) answers "switched off"; the screens go back to polling
   feature.margin      false -> the margin calculator is not called
   feature.collector   false -> the daily option download does not run
   strategy.enabled    false -> that user's Top-Bottom strategy is switched off (scope user:<id>): no new signals, entries or exits are evaluated
@@ -18,7 +19,7 @@ import time
 
 from app.db import platform_db
 
-DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.margin": True, "feature.collector": True, "strategy.enabled": True, "strategy.locked": False}
+DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.stream": True, "feature.margin": True, "feature.collector": True, "strategy.enabled": True, "strategy.locked": False}
 _CACHE_SECONDS = 2.0
 _cache: dict | None = None
 _cache_at = 0.0

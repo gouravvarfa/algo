@@ -22,6 +22,7 @@ const ITEMS: Record<ConsoleKind, Item[]> = {
     { to: '/dev/functions', label: 'Functions', icon: 'func' },
     { to: '/dev/isolation', label: 'Fault isolation', icon: 'shield' },
     { to: '/dev/errors', label: 'Errors', icon: 'bug' },
+    { to: '/dev/stream', label: 'Live stream', icon: 'chain' },
     { to: '/dev/flags', label: 'Switches', icon: 'flag' },
     { to: '/dev/sessions', label: 'Sessions', icon: 'user' },
     { to: '/dev/logins', label: 'Login attempts', icon: 'audit' },

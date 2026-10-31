@@ -7,3 +7,9 @@ table.oc td.k { font-weight: 700; background: var(--bg-hover); border-left: 1px 
 table.oc td.itm { background: color-mix(in srgb, var(--warning) 9%, var(--bg-surface)); }
 table.oc td.bad { background: var(--danger-soft); color: var(--danger); }
 table.oc tr.atm td { background: var(--accent-soft); }
+
+/* a price that just moved: a short green / red flash (the same look as the simulator's live chain) */
+.lv { display: inline-block; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
+.fl-up { animation: flup .9s ease-out; } .fl-dn { animation: fldn .9s ease-out; }
+@keyframes flup { 0% { background: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success); } 100% { background: transparent; } }
+@keyframes fldn { 0% { background: color-mix(in srgb, var(--danger) 40%, transparent); color: var(--danger); } 100% { background: transparent; } }

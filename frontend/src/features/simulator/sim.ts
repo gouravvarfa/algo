@@ -5,6 +5,7 @@ export type Side = 'BUY' | 'SELL'
 export type Opt = 'CE' | 'PE'
 
 export interface Leg {
+  token?: string | null      // the contract's exchange token (live chain only): lets the screen follow its pushed price
   ltp: number | null
   oi: number | null
   chg_oi: number | null

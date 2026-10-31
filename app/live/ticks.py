@@ -154,6 +154,16 @@ class TickFeed:
                 "subscribed": sum(len(v) for v in self.subs.values()), "error": self.last_error}
 
     # ---- internals
+    def _notify(self, t: Tick) -> None:
+        """Hand an accepted tick to every listener (the shadow account, the browser push). One failing listener never stops the others or the feed."""
+        for fn in self.listeners:
+            try:
+                fn(t)
+            except Exception:
+                self._listener_errors += 1
+                if self._listener_errors <= 3:
+                    log.exception("tick listener failed")
+
     def _sub_message(self, subs: dict[int, set[str]]) -> str:
         return json.dumps({"correlationID": "algo-app", "action": 1,
                            "params": {"mode": 1, "tokenList": [{"exchangeType": et, "tokens": sorted(toks)} for et, toks in subs.items() if toks]}})
@@ -189,13 +199,7 @@ class TickFeed:
                             if t is not None:
                                 self.latest[t.token] = t
                                 self.builder.add(t)
-                                for fn in self.listeners:
-                                    try:
-                                        fn(t)
-                                    except Exception:
-                                        self._listener_errors += 1
-                                        if self._listener_errors <= 3:
-                                            log.exception("tick listener failed")
+                                self._notify(t)
                                 self.updated.set()
                         elif isinstance(msg, str) and msg != "pong":
                             try:

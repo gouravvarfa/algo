@@ -5,7 +5,8 @@ import { ApiError, get, post } from '../../lib/api'
 import { useToast } from '../../lib/toast'
 import { useDataSource } from '../../lib/datasource'
 import { dt, money, n2, num, sign, words } from '../../lib/format'
-import type { IndexQuote, JournalEvent, Overview, Snapshot, Trade } from '../../lib/types'
+import { fresh, streamSpec, useLiveTicks } from '../../lib/stream'
+import type { IndexQuote, JournalEvent, Overview, Position, Snapshot, Trade } from '../../lib/types'
 import { TradeChart } from './TradeChart'
 import './topbottom.css'
 
@@ -69,6 +70,14 @@ export default function TopBottomPage() {
 }
 
 /** Where the price sits between the stop and the entry: how much room is left before the stop is hit. */
+const INDEX_STREAM: Record<string, { spec: string; token: string }> = { BANKNIFTY: { spec: 'NSE:99926009', token: '99926009' }, NIFTY: { spec: 'NSE:99926000', token: '99926000' } }
+const r2 = (x: number) => Math.round(x * 100) / 100
+/** The open position valued at a live price pushed by the stream (same arithmetic as the server: points x quantity). The entry, stop and direction are the engine's. */
+function livePosition(p: Position, ltp: number, qty: number): Position {
+  const pts = p.direction === 'BUY' ? ltp - p.entry_price : p.entry_price - ltp
+  return { ...p, pnl_points: r2(pts), pnl_amount: r2(pts * qty), pnl_pct: r2((pts / p.entry_price) * 100) }
+}
+
 function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: number; ltp: number }) {
   const room = dir === 'BUY' ? ltp - stop : stop - ltp
   const lo = Math.min(entry, stop, ltp), hi = Math.max(entry, stop, ltp), w = hi - lo || 1
@@ -115,7 +124,16 @@ function StrategyOffBanner() {
 }
 
 function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
-  const p = s.position, st = s.stats, inst = s.instrument
+  const st = s.stats, inst = s.instrument
+  // live prices pushed by the server (SSE): the futures contract being traded and its index; the engine's own numbers (entry, stop, signals) are unchanged
+  const ix = INDEX_STREAM[inst.symbol]
+  const { ticks } = useLiveTicks([streamSpec(inst.exch_seg, inst.token), ix?.spec], !!ov.market_open)
+  const futTick = inst.token ? ticks[inst.token] : undefined
+  const liveLtp = fresh(futTick) ? futTick.ltp : undefined
+  const ltp = liveLtp ?? s.ltp
+  const p = s.position && liveLtp != null ? livePosition(s.position, liveLtp, inst.quantity) : s.position
+  const ixTick = ix ? ticks[ix.token] : undefined
+  const ixLive = fresh(ixTick) ? ixTick.ltp : undefined
   const be = (s as { rules?: { breakeven_pct?: number } }).rules?.breakeven_pct ?? 2
   const closed = useMemo(() => s.trades.filter((t) => t.status !== 'OPEN'), [s.trades])
   const wins = closed.filter((t) => (t.pnl_amount ?? 0) > 0)
@@ -123,7 +141,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
   const net = closed.reduce((a, t) => a + (t.pnl_amount ?? 0), 0)
   const rows = showAll ? s.trades : s.trades.slice(0, 8)
   const f = s.feed
-  const live = ov.market_open ? (f?.live ? `LIVE · ticks (${f.age_s != null ? f.age_s.toFixed(1) : '–'} s)` : 'LIVE · polling (tick feed down)') : 'Market closed · last close'
+  const live = ov.market_open ? (liveLtp != null ? 'LIVE · pushed ticks' : f?.live ? `LIVE · ticks (${f.age_s != null ? f.age_s.toFixed(1) : '–'} s)` : 'LIVE · polling (tick feed down)') : 'Market closed · last close'
   const up = (idx?.change ?? 0) >= 0
   const lastRoll = s.rolls?.length ? s.rolls[s.rolls.length - 1] : null
 
@@ -147,11 +165,11 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
             <b className={`num ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</b>
             {p && <span className={`trend ${sign(p.pnl_amount)}`}>{p.pnl_amount >= 0 ? '+' : ''}{num(p.pnl_points)} pts · {p.pnl_pct}%</span>}
           </div>
-          {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={s.ltp} /> : <p className="sub">{s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
+          {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={ltp} /> : <p className="sub">{s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
         </div>
         <div className="hero-side">
-          <div className="hero-q"><span className="k">{inst.symbol} fut</span><b className="num">{num(s.ltp)}</b></div>
-          {idx?.price != null && inst.symbol === 'BANKNIFTY' && <div className="hero-q" title={`previous close ${num(idx.prev_close)} · source: ${idx.source}`}><span className="k">BankNifty index</span><b className="num">{num(idx.price)}</b>{idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '+' : '−'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}</div>}
+          <div className="hero-q"><span className="k">{inst.symbol} fut</span><b className="num">{num(ltp)}</b></div>
+          {idx?.price != null && inst.symbol === 'BANKNIFTY' && <div className="hero-q" title={`previous close ${num(idx.prev_close)} · source: ${idx.source}`}><span className="k">BankNifty index</span><b className="num">{num(ixLive ?? idx.price)}</b>{idx.change != null && <span className={`num ${up ? 'pos' : 'neg'}`}>{up ? '+' : '−'}{num(Math.abs(idx.change))} ({up ? '+' : '−'}{Math.abs(idx.pct ?? 0).toFixed(2)}%)</span>}</div>}
           <div className="hero-q"><span className="k">Updated</span><span className="num">{updated ? new Date(updated).toLocaleTimeString() : '–'}</span></div>
           {!readOnly && <StrategySwitch />}
           {!readOnly && <button className="btn sm" onClick={onRefresh} disabled={refreshing}>{refreshing ? 'Refreshing…' : 'Refresh'}</button>}
@@ -177,7 +195,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
             <button className="btn sm" onClick={onFit}>Fit</button>
           </div>
           <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
-          <TradeChart snap={s} kind={kind} fitSignal={fit} />
+          <TradeChart snap={s} kind={kind} fitSignal={fit} liveLtp={liveLtp} />
           {s.engine_note && <p className={`note ${s.engine_warning ? 'neg' : ''}`} style={s.engine_warning ? { fontWeight: 650 } : undefined}>{s.engine_warning ? '⚠ ' : '✔ '}{s.engine_note}</p>}
           <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle (Angel One) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>
         </div>
