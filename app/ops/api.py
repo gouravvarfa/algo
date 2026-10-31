@@ -41,7 +41,9 @@ def dev_functions(_=Depends(require("system.read"))):
 @router.get("/api/dev/stream")
 def dev_stream(_=Depends(require("system.read"))):
     hub = context.stream_hub
-    return {"enabled": bool(flags.get("feature.stream")), "available": hub is not None, **(hub.stats() if hub is not None else {})}
+    eng = context.engine
+    return {"enabled": bool(flags.get("feature.stream")), "available": hub is not None, **(hub.stats() if hub is not None else {}),
+            "engine": eng.sweep_stats() if eng is not None and hasattr(eng, "sweep_stats") else None}
 
 
 @router.get("/api/dev/errors")

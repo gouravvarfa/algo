@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import time
+from collections import deque
 import datetime as dt
 import json
 import logging
@@ -87,6 +89,9 @@ def struct_cap_for(symbol: str) -> float:
 
 
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
+SWEEP_MIN_SLEEP = 0.25                  # between two sweeps of the engine while ticks flow (seconds)
+FAULT_RETRY_SECONDS = 5.0                # an instrument whose evaluation is failing is looked at again after this long, not on every sweep
+SWEEP_DUTY = 2.0                        # ... and at least this many times the sweep's own duration, so the engine never takes more than about a third of a core
 LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
 LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
 GAP_15M_REFRESH_SECONDS = 600  # 15m bars for the daily gap protocol are re-fetched at most this often
@@ -179,6 +184,8 @@ class PaperEngine:
         self._live_good: dict[str, tuple[dt.datetime, list, str]] = {}  # instrument id -> (evaluated at, trades, note) of the last SUCCESSFUL intraday run
         self._cooldown_until: dict = {}
         self._chain_cache: dict = {}
+        self._sweeps: deque = deque(maxlen=300)             # (time, sweep milliseconds): how long one pass over all instruments takes
+        self.last_sweep_s = 0.0
         self._load()
 
     # ---- persistence -----------------------------------------------------
@@ -800,14 +807,40 @@ class PaperEngine:
                 ops_incidents.record("engine", f"{inst.symbol} evaluation failed: {type(exc).__name__}: {msg[:200]}", user_id=owner,
                                      auto_action="instrument isolated; other instruments keep running")
 
+    def _ordered(self) -> list[Instrument]:
+        """The instruments in the order a sweep visits them: those holding an open position first (their stop is what matters most), the rest as before."""
+        insts = list(self.instruments.values())
+        return sorted(insts, key=lambda i: 0 if (self.snapshots.get(i.id) or {}).get("position") else 1)
+
+    @staticmethod
+    def sweep_sleep(sweep_seconds: float) -> float:
+        """Pause after a sweep: short, but never less than SWEEP_DUTY x the sweep itself (a slow server is not made slower by a busy loop)."""
+        return max(SWEEP_MIN_SLEEP, SWEEP_DUTY * sweep_seconds)
+
+    def sweep_stats(self) -> dict:
+        ms = sorted(x[1] for x in self._sweeps)
+        if not ms:
+            return {"sweeps": 0}
+        span = self._sweeps[-1][0] - self._sweeps[0][0]
+        return {"sweeps": len(ms), "last_ms": round(self._sweeps[-1][1], 1), "avg_ms": round(sum(ms) / len(ms), 1), "p95_ms": round(ms[min(len(ms) - 1, int(len(ms) * 0.95))], 1),
+                "cycle_s": round(span / (len(ms) - 1), 2) if len(ms) > 1 and span > 0 else None}
+
     async def refresh_all(self) -> None:
         async with self._lock:
-            for inst in list(self.instruments.values()):
+            t0 = time.perf_counter()
+            tried = self.__dict__.setdefault("_fault_tried", {})
+            for inst in self._ordered():
+                if inst.id in self.faults and time.monotonic() - tried.get(inst.id, 0.0) < FAULT_RETRY_SECONDS:
+                    continue                                   # failing (Angel One refusing, say): no hammering and no log flood on a fast loop
                 await self.refresh_one(inst)
-                await asyncio.sleep(0.4)  # stay under Angel One's candle-API rate limit
+                if inst.id in self.faults:
+                    tried[inst.id] = time.monotonic()
+                await asyncio.sleep(0)       # let the web server answer between instruments; Angel One's candle limit is kept by _candles itself (gap, share, back-off)
             if not ops_flags.engine_paused():
                 self.last_tick = now_ist()
             self._shadow_step("poll", now_ist())                # timers of the simulated account run even while the engine is paused (a resting stop order does not stop)
+            self.last_sweep_s = time.perf_counter() - t0
+            self._sweeps.append((time.time(), self.last_sweep_s * 1000))
 
     async def _loop(self) -> None:
         while True:
@@ -821,7 +854,7 @@ class PaperEngine:
                 except asyncio.TimeoutError:
                     pass
                 self.feed.updated.clear()
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(self.sweep_sleep(self.last_sweep_s))
             else:
                 await asyncio.sleep(20 if market_open() else 300)
 

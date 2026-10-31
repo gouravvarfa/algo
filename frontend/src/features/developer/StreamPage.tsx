@@ -8,6 +8,7 @@ import './developer.css'
 interface Stat {
   enabled: boolean; available: boolean; clients?: number; tokens_watched?: number; connects?: number; disconnects?: number; errors?: number
   msgs_per_s?: number; bytes_per_s?: number; lag_ms_avg?: number | null; lag_ms_p95?: number | null; lag_samples?: number; feed_connected?: boolean
+  engine?: { sweeps: number; last_ms?: number; avg_ms?: number; p95_ms?: number; cycle_s?: number | null } | null
   list?: { id: number; user: string; tokens: number; age_s: number; msgs: number; bytes: number; ua: string }[]
 }
 const n = (x: number | null | undefined, d = 0) => (x == null ? '–' : x.toLocaleString('en-IN', { maximumFractionDigits: d }))
@@ -37,6 +38,8 @@ export default function StreamPage() {
         <div className="kpi"><span className="k">Server delay, average</span><b className="num">{s?.lag_ms_avg == null ? '–' : `${n(s.lag_ms_avg, 1)} ms`}</b></div>
         <div className="kpi"><span className="k">Server delay, p95</span><b className="num">{s?.lag_ms_p95 == null ? '–' : `${n(s.lag_ms_p95, 1)} ms`}</b></div>
         <div className="kpi"><span className="k">Connects / drops</span><b className="num">{n(s?.connects)} / {n(s?.disconnects)}</b></div>
+        <div className="kpi"><span className="k">Engine: one pass, avg</span><b className="num">{s?.engine?.avg_ms == null ? '–' : `${n(s.engine.avg_ms, 0)} ms`}</b></div>
+        <div className="kpi"><span className="k">Engine: pass every</span><b className="num">{s?.engine?.cycle_s == null ? '–' : `${n(s.engine.cycle_s, 2)} s`}</b></div>
         <div className="kpi"><span className="k">Errors</span><b className={'num ' + ((s?.errors ?? 0) > 0 ? 'neg' : '')}>{n(s?.errors)}</b></div>
       </div>
       <p className="sub">Server delay = from the moment a tick reached the server to the moment its message was written (the last 60 s). The network time to the browser is on top of it. The tick feed from Angel One is {s?.feed_connected ? 'connected' : 'NOT connected'}.</p>

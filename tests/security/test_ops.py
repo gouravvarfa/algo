@@ -346,6 +346,8 @@ def test_a_fault_clears_when_the_instrument_recovers(db, monkeypatch, tmp_path):
     asyncio.run(e.refresh_all())
     assert "x" in e.faults
     state["fail"] = False
+    from app.paper_trading import engine as engine_module
+    e._fault_tried["x"] -= engine_module.FAULT_RETRY_SECONDS + 1      # a failing instrument is looked at again only after its short pause (no hammering on a fast loop)
     asyncio.run(e.refresh_all())
     assert e.faults == {} and e.snapshots["x"] == {"ok": 1}
 
