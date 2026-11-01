@@ -50,7 +50,7 @@ export default function TopBottomPage() {
     queryKey: ['tb', ds.key, 'snap', found?.instrument.id],
     enabled: !!found,
     queryFn: () => ds.instrument(found!.instrument.id),
-    refetchInterval: (q) => (ov.data?.market_open ? (q.state.data?.feed?.live ? 2000 : 15_000) : 60_000),
+    refetchInterval: (q) => (!q.state.data ? 3000 : ov.data?.market_open ? (q.state.data.feed?.live ? 2000 : 15_000) : 60_000),   // nothing on screen yet: ask again soon
     placeholderData: (prev) => prev,
   })
   const idx = useQuery({ queryKey: ['index', 'BANKNIFTY'], queryFn: () => get<IndexQuote>('/api/index/BANKNIFTY'), refetchInterval: 2000, retry: false })

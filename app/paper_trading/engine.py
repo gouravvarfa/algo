@@ -51,6 +51,8 @@ STATE_PATH = Path("data/watchlist.json")
 # rewrite it, so its intraday window is pinned here instead of sliding with the REST window.
 FIRST_CONTRACT_MINUTES_FROM = dt.date(2026, 10, 12)
 CONTRACTS_PATH = Path("data/paper_trading/contracts.json")      # every futures contract seen per symbol (expired ones disappear from Angel One's master)
+SNAPSHOT_DIR = Path("data/paper_trading/snapshots")              # the last good screen of each instrument: a restart shows it at once instead of nothing
+SNAPSHOT_SAVE_SECONDS = 60
 JOURNAL_PATH = Path("data/paper_trading/journal.jsonl")         # append-only log of live events
 JOURNAL_SEEN = Path("data/paper_trading/journal_seen.json")     # last known state per live trade (no duplicates after restart)
 
@@ -201,9 +203,32 @@ class PaperEngine:
                     continue
                 seen[key] = inst.id
                 self.instruments[inst.id] = inst
+                self._restore_snapshot(inst.id)
             if dropped:
                 log.warning("removed %d duplicate instrument(s) from the watchlist", dropped)
                 self._save()
+
+    def _restore_snapshot(self, instrument_id: str) -> None:
+        try:
+            snap = json.loads((SNAPSHOT_DIR / f"{instrument_id}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        snap["restored"] = True                     # shown until the first fresh evaluation replaces it
+        self.snapshots[instrument_id] = snap
+
+    def _store_snapshot(self, instrument_id: str) -> None:
+        """At most once a minute per instrument. Failing to store must never touch the engine."""
+        saved = self.__dict__.setdefault("_snap_saved", {})
+        if time.monotonic() - saved.get(instrument_id, -SNAPSHOT_SAVE_SECONDS) < SNAPSHOT_SAVE_SECONDS:
+            return
+        saved[instrument_id] = time.monotonic()
+        try:
+            SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = SNAPSHOT_DIR / f"{instrument_id}.tmp"
+            tmp.write_text(json.dumps(self.snapshots[instrument_id], default=str), encoding="utf-8")
+            tmp.replace(SNAPSHOT_DIR / f"{instrument_id}.json")
+        except (OSError, TypeError, ValueError):
+            log.warning("could not store the snapshot of %s", instrument_id)
 
     def _save(self) -> None:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -303,25 +328,14 @@ class PaperEngine:
                 f"Running longer than Angel One serves {inst.timeframe} history ({max_days} days) — remove and re-add this instrument."
             )
 
-        rc = self._raw_cache.get(inst.id)
-        ttl = DAILY_RAW_CACHE_WITH_FEED if self.feed.healthy(inst.token) else 15
-        if rc and (now - rc[0]).total_seconds() < ttl:
-            raw = rc[1]
-        else:
-            try:
-                raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
-            except Exception as exc:       # Angel One refused (403 / rate limit): the stored copy keeps the instrument evaluating
-                stored = candle_store.get(inst.token, interval, from_dt) if from_dt else None
-                if stored is None or stored.empty:
-                    raise
-                log.warning("%s candles for %s unavailable (%s); using the stored copy", interval, inst.trading_symbol, str(exc)[:60])
-                raw = stored
-            self._raw_cache[inst.id] = (now, raw)
-        raw = raw[raw.index >= from_dt]
-        if raw.empty:
+        raw = await self._own_candles(inst, interval, from_dt, days_back, now)
+        # A futures instrument is evaluated across its contract chain (Oct -> Nov -> ...): the candles of its OWN first contract are not needed once that
+        # contract has expired and Angel One no longer serves it, so an empty answer for it must not stop the chain.
+        chain_capable = minutes is None and inst.instrument_type == "FUTURE"
+        if raw.empty and not chain_capable:
             raise PaperError("No candle data returned by Angel One")
-        confirmed = drop_incomplete_trailing_daily_bar(raw, now) if minutes is None else drop_incomplete_trailing_bars(raw, minutes, now)
-        if len(confirmed) < 5:
+        confirmed = raw if raw.empty else (drop_incomplete_trailing_daily_bar(raw, now) if minutes is None else drop_incomplete_trailing_bars(raw, minutes, now))
+        if len(confirmed) < 5 and not chain_capable:
             raise PaperError("Not enough confirmed candles yet")
 
         dates = [t.to_pydatetime() for t in confirmed.index]
@@ -335,6 +349,8 @@ class PaperEngine:
                 chain = await self._chain(inst, now, from_dt)
             except Exception:
                 log.exception("contract chain evaluation failed for %s; using the single-contract result", inst.symbol)
+        if chain is None and len(confirmed) < 5:
+            raise PaperError("No candle data returned by Angel One" if raw.empty else "Not enough confirmed candles yet")
         active, rolls, roll_marks, prev_line = inst, [], [], None
         if chain is not None:
             signals, trades = [], chain.trades
@@ -676,6 +692,30 @@ class PaperEngine:
                 self._cooldown_until[inst.id] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
             return reuse(f"intraday data fetch failed ({str(exc)[:60]})")
 
+    async def _own_candles(self, inst: Instrument, interval: str, from_dt: dt.datetime, days_back: int, now: dt.datetime) -> pd.DataFrame:
+        """The candles of the instrument's own contract since `from_dt`: Angel One, else the stored copy. The result MAY BE EMPTY (a contract that has expired
+        is no longer served); the caller decides whether that matters. An Angel One error with nothing stored is raised as it is."""
+        rc = self._raw_cache.get(inst.id)
+        ttl = DAILY_RAW_CACHE_WITH_FEED if self.feed.healthy(inst.token) else 15
+        if rc and (now - rc[0]).total_seconds() < ttl:
+            return rc[1][rc[1].index >= from_dt]
+        raw, err = None, None
+        try:
+            raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
+        except Exception as exc:                  # Angel One refused (403 / rate limit)
+            err = exc
+        if raw is None or raw.empty:
+            stored = candle_store.get(inst.token, interval, from_dt) if from_dt else None
+            if stored is not None and not stored.empty:
+                log.warning("%s candles for %s unavailable (%s); using the stored copy", interval, inst.trading_symbol, str(err)[:60] if err else "empty answer")
+                raw = stored
+            elif err is not None:
+                raise err
+            elif raw is None:
+                raw = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        self._raw_cache[inst.id] = (now, raw)
+        return raw[raw.index >= from_dt]
+
     async def _gap_bars(self, inst: Instrument, from_dt: dt.datetime, now: dt.datetime) -> dict | None:
         """Completed 15m candles grouped by day, cached for a few minutes. A
         failure here never blocks the instrument: the close rules still run."""
@@ -784,11 +824,12 @@ class PaperEngine:
     async def refresh_one(self, inst: Instrument) -> None:
         owner = getattr(inst, "owner", None)
         paused = ops_flags.engine_paused(owner)
-        if paused and inst.id in self.snapshots:    # kill switch / strategy OFF: keep the last stored snapshot, evaluate nothing
+        if paused and inst.id in self.snapshots and not self.snapshots[inst.id].get("restored"):    # kill switch / strategy OFF: keep the last stored snapshot, evaluate nothing
             return
         try:
             # first look after a restart while paused: build ONE read-only snapshot so the page has something to show (nothing is journaled)
             self.snapshots[inst.id] = await self._build_snapshot(inst)
+            self._store_snapshot(inst.id)
             if paused:
                 self.snapshots[inst.id]["paused"] = True
                 self.errors.pop(inst.id, None)

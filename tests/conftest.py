@@ -17,6 +17,8 @@ def _dryrun_and_shadow_files_stay_in_the_test_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(dryrun, "DRYRUN_PATH", tmp_path / "dryrun_orders.jsonl")
     monkeypatch.setattr(shadow, "STATE_PATH", tmp_path / "shadow_state.json")
     monkeypatch.setattr(shadow, "LOG_PATH", tmp_path / "shadow_log.jsonl")
+    from app.paper_trading import engine
+    monkeypatch.setattr(engine, "SNAPSHOT_DIR", tmp_path / "snapshots")
     yield
 
 

@@ -56,3 +56,80 @@ def test_a_failing_instrument_is_not_hammered_on_a_fast_loop():
     e._fault_tried["bad"] -= em.FAULT_RETRY_SECONDS + 1       # its pause is over
     asyncio.run(e.refresh_all())
     assert e.visited.count("bad") == 2
+
+
+# ---------------------------------------------------------------- the instrument's own (expired) contract no longer stops the chain
+import datetime as dt
+
+import pandas as pd
+
+from app.live import candle_store
+
+
+def _eng(tmp_path, monkeypatch, provider_result):
+    monkeypatch.setattr(candle_store, "DB", tmp_path / "c.db")
+    e = em.PaperEngine.__new__(em.PaperEngine)
+    e._raw_cache = {}
+    e.feed = SimpleNamespace(healthy=lambda *_: False)
+    calls = []
+
+    async def fake_candles(*a, **k):
+        calls.append(a)
+        if isinstance(provider_result, Exception):
+            raise provider_result
+        return provider_result
+    e._candles = fake_candles
+    e.calls = calls
+    return e
+
+
+INST = SimpleNamespace(id="i1", token="61466", exch_seg="NFO", trading_symbol="BANKNIFTY27OCT26FUT")
+NOW, FROM = dt.datetime(2026, 11, 1, 12, 0), dt.datetime(2026, 1, 1)
+EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+
+def _bars(n=6):
+    idx = pd.date_range("2026-10-15", periods=n, freq="B")
+    return pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1.0}, index=idx)
+
+
+def test_an_empty_answer_for_an_expired_contract_falls_back_to_the_stored_copy(tmp_path, monkeypatch):
+    e = _eng(tmp_path, monkeypatch, EMPTY)
+    candle_store.put("61466", "ONE_DAY", _bars())
+    got = asyncio.run(e._own_candles(INST, "ONE_DAY", FROM, 300, NOW))
+    assert len(got) == 6
+
+
+def test_an_empty_answer_with_nothing_stored_is_empty_not_an_error(tmp_path, monkeypatch):
+    e = _eng(tmp_path, monkeypatch, EMPTY)
+    assert asyncio.run(e._own_candles(INST, "ONE_DAY", FROM, 300, NOW)).empty          # the chain of later contracts can still evaluate
+
+
+def test_an_angel_one_error_with_nothing_stored_still_raises_and_with_a_stored_copy_does_not(tmp_path, monkeypatch):
+    import pytest
+    e = _eng(tmp_path, monkeypatch, RuntimeError("HTTP 403"))
+    with pytest.raises(RuntimeError):
+        asyncio.run(e._own_candles(INST, "ONE_DAY", FROM, 300, NOW))
+    candle_store.put("61466", "ONE_DAY", _bars())
+    assert len(asyncio.run(_eng(tmp_path, monkeypatch, RuntimeError("HTTP 403"))._own_candles(INST, "ONE_DAY", FROM, 300, NOW))) == 6
+
+
+def test_good_candles_are_returned_filtered_and_cached(tmp_path, monkeypatch):
+    e = _eng(tmp_path, monkeypatch, _bars(8))
+    assert len(asyncio.run(e._own_candles(INST, "ONE_DAY", dt.datetime(2026, 10, 20), 300, NOW))) == 5      # only the bars since the start day
+    asyncio.run(e._own_candles(INST, "ONE_DAY", FROM, 300, NOW + dt.timedelta(seconds=5)))
+    assert len(e.calls) == 1                                                                                  # the second look came from the short cache
+
+
+def test_a_snapshot_survives_a_restart_and_is_marked_restored(tmp_path, monkeypatch):
+    monkeypatch.setattr(em, "SNAPSHOT_DIR", tmp_path / "s")
+    e = em.PaperEngine.__new__(em.PaperEngine)
+    e.snapshots = {"a": {"ltp": 5.0}}
+    e._store_snapshot("a")
+    e.snapshots["a"] = {"ltp": 6.0}
+    e._store_snapshot("a")                                    # within the minute: not written again
+    fresh = em.PaperEngine.__new__(em.PaperEngine)
+    fresh.snapshots = {}
+    fresh._restore_snapshot("a")
+    fresh._restore_snapshot("missing")
+    assert fresh.snapshots == {"a": {"ltp": 5.0, "restored": True}}
