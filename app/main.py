@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from app.gzip_mw import SelectiveGZip
 from app.live import stream as live_stream
 from app.ops import flags as ops_flags
 from app.paper_trading.engine import DEFAULT_LOOKBACK_DAYS, TIMEFRAMES, PaperEngine, PaperError
@@ -92,6 +93,7 @@ app.include_router(admin_view.router)
 app.include_router(admin_extra.router)
 app.include_router(option_journal.router)
 app.add_exception_handler(AuthError, auth_api.handle_auth_error)
+app.add_middleware(SelectiveGZip)                 # outermost: compresses scripts, styles and JSON for browsers that accept it (never the live stream)
 
 
 @app.middleware("http")

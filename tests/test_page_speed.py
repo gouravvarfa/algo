@@ -57,3 +57,37 @@ def test_the_system_summary_names_what_is_not_fine(monkeypatch):
     assert [p["key"] for p in out["problems"]] == ["functions", "feed"] and out["problems"][0]["reason"] == "FAULTY: t.bad"      # the worst first
     monkeypatch.setattr(health, "all_tiles", lambda: [health._tile("api", "API server", "OK", "fine")])
     assert ops_api.admin_system_summary(None)["problems"] == []
+
+
+def test_scripts_and_json_are_compressed_but_the_live_stream_never_is():
+    from app.gzip_mw import SelectiveGZip
+    from fastapi.responses import StreamingResponse
+    a = FastAPI()
+    a.add_middleware(SelectiveGZip)
+    big = "x" * 5000
+
+    @a.get("/app/assets/index-abc.js")
+    def js():
+        return PlainTextResponse(big, media_type="text/javascript")
+
+    @a.get("/api/data")
+    def data():
+        return {"rows": [big]}
+
+    @a.get("/api/small")
+    def small():
+        return {"ok": True}
+
+    @a.get("/api/stream")
+    def stream():
+        async def gen():
+            yield b"event: snap\ndata: {}\n\n" + big.encode()
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    c = TestClient(a)
+    for path in ("/app/assets/index-abc.js", "/api/data"):
+        r = c.get(path, headers={"accept-encoding": "gzip"})
+        assert r.headers["content-encoding"] == "gzip" and "accept-encoding" in r.headers["vary"].lower(), path
+    assert "content-encoding" not in c.get("/api/small", headers={"accept-encoding": "gzip"}).headers          # too small to be worth it
+    assert "content-encoding" not in c.get("/api/data", headers={"accept-encoding": "identity"}).headers      # a client that does not ask gets plain bytes
+    assert "content-encoding" not in c.get("/api/stream", headers={"accept-encoding": "gzip"}).headers        # a stream is never buffered for compression
