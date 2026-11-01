@@ -92,7 +92,9 @@ def dev_engines(_=Depends(require("system.read"))):
 def admin_system_summary(_=Depends(require("users.read"))):
     tiles = {t["key"]: t for t in health.all_tiles()}
     pick = lambda k: {"status": tiles[k]["status"], "reason": tiles[k]["reason"]} if k in tiles else None
-    return {"overall": health.overall(list(tiles.values())), "feed": pick("feed"), "engine": pick("engine"), "users": pick("users"), "incidents": pick("incidents")}
+    order = {"DOWN": 0, "DEGRADED": 1}
+    problems = sorted(({"key": t["key"], "title": t["title"], "status": t["status"], "reason": t["reason"]} for t in tiles.values() if t["status"] in order), key=lambda p: order[p["status"]])
+    return {"overall": health.overall(list(tiles.values())), "problems": problems[:6], "feed": pick("feed"), "engine": pick("engine"), "users": pick("users"), "incidents": pick("incidents")}
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

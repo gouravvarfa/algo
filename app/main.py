@@ -268,8 +268,13 @@ async def healthz():
 async def static_revalidate(request, call_next):
     # browsers kept a stale theme.css/shell.js after UI changes; make them revalidate (cheap 304 when unchanged)
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+    path = request.url.path
+    if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
+    elif response.status_code in (200, 304) and path.startswith("/app/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"       # Vite puts a content hash in every file name: a changed file has a new name
+    elif response.status_code in (200, 304) and path.startswith("/app/fonts/"):
+        response.headers["Cache-Control"] = "public, max-age=2592000"                   # fonts keep their names, but almost never change
     return response
 
 
