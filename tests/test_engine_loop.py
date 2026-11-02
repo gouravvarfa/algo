@@ -83,7 +83,7 @@ def _eng(tmp_path, monkeypatch, provider_result):
     return e
 
 
-INST = SimpleNamespace(id="i1", token="61466", exch_seg="NFO", trading_symbol="BANKNIFTY27OCT26FUT")
+INST = SimpleNamespace(id="i1", symbol="BANKNIFTY", token="61466", exch_seg="NFO", trading_symbol="BANKNIFTY27OCT26FUT")
 NOW, FROM = dt.datetime(2026, 11, 1, 12, 0), dt.datetime(2026, 1, 1)
 EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
@@ -181,4 +181,22 @@ def test_a_live_index_price_never_waits_for_the_candle_queue():
         await asyncio.sleep(0.05)
         second = await e.index_quote("BANKNIFTY")
         assert second["prev_close"] == 54000.0 and second["change"] == 1000.0
+    asyncio.run(go())
+
+
+def test_a_failed_15m_fetch_is_remembered_so_the_next_sweep_does_not_wait_again():
+    calls = []
+
+    async def go():
+        e = em.PaperEngine.__new__(em.PaperEngine)
+        e._bars15 = {}
+
+        async def refused(*a, **k):
+            calls.append(a)
+            raise RuntimeError("HTTP 403")
+        e._candles = refused
+        e._new_15m_candle_closed = lambda *_: False
+        assert await e._gap_bars(INST, FROM, NOW) is None
+        assert await e._gap_bars(INST, FROM, NOW + dt.timedelta(seconds=1)) is None
+        assert len(calls) == 1
     asyncio.run(go())

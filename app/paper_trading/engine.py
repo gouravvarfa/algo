@@ -764,8 +764,10 @@ class PaperEngine:
             days = min((now - from_dt).days + 2, TIMEFRAMES["15m"][2])
             df = await self._candles(inst.exch_seg, inst.token, "FIFTEEN_MINUTE", days)
         except Exception:
-            log.exception("15m fetch for gap protocol failed for %s", inst.symbol)
-            return cached[1] if cached else None
+            log.warning("15m fetch for gap protocol failed for %s", inst.symbol)
+            kept = cached[1] if cached else None
+            self._bars15[inst.id] = (now, kept)       # remembered, so the next sweeps do not wait for Angel One again; the background refresh retries
+            return kept
         out: dict = {}
         for ts, r in df.iterrows():
             start = ts.to_pydatetime()
@@ -911,7 +913,10 @@ class PaperEngine:
             for inst in self._ordered():
                 if inst.id in self.faults and time.monotonic() - tried.get(inst.id, 0.0) < FAULT_RETRY_SECONDS:
                     continue                                   # failing (Angel One refusing, say): no hammering and no log flood on a fast loop
+                t1 = time.perf_counter()
                 await self.refresh_one(inst)
+                if time.perf_counter() - t1 > 5:
+                    log.warning("slow evaluation: %s %s took %.1f s", inst.symbol, inst.id, time.perf_counter() - t1)
                 if inst.id in self.faults:
                     tried[inst.id] = time.monotonic()
                 await asyncio.sleep(0)       # let the web server answer between instruments; Angel One's candle limit is kept by _candles itself (gap, share, back-off)
