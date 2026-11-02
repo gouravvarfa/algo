@@ -39,7 +39,11 @@ export interface Chain {
   rows: ChainRow[]
 }
 
+export const AUTO_FLY = '⭐ Iron Fly · ₹65 hedge · auto close at Δ0.62'
+export const AUTO_FLY_DELTA = 0.62
+
 export interface SimPos {
+  auto_delta?: number | null      // a sold leg of the auto iron fly: closed by the simulator at this delta
   id: number | string
   side: Side
   opt: Opt
@@ -95,6 +99,7 @@ export const SIM_PRESETS: Record<string, [Side, Opt, number][]> = {
   'Bull Put Credit Spread': [['SELL', 'PE', 3], ['BUY', 'PE', 6]],
   'Bear Call Credit Spread': [['SELL', 'CE', 3], ['BUY', 'CE', 6]],
   'Iron Fly': [['SELL', 'CE', 0], ['SELL', 'PE', 0], ['BUY', 'CE', 6], ['BUY', 'PE', 6]],
+  [AUTO_FLY]: [],      // strikes are chosen by planPreset: ATM sold, hedges nearest ₹65
   'Short Straddle': [['SELL', 'CE', 0], ['SELL', 'PE', 0]],
   'Short Strangle': [['SELL', 'CE', 4], ['SELL', 'PE', 4]],
   '⭐ Short Strangle +2 · SL 60% · T-2 close (research best)': [['SELL', 'CE', 2], ['SELL', 'PE', 2]],
@@ -112,6 +117,18 @@ export function planPreset(chain: Chain, name: string): { plan: [Side, Opt, numb
   const ai = strikes.indexOf(chain.atm)
   const plan: [Side, Opt, number][] = []
   const missing: string[] = []
+  if (name === AUTO_FLY) {
+    const hedge = (opt: Opt) => chain.rows.filter((r) => (opt === 'CE' ? r.strike > chain.atm : r.strike < chain.atm) && (r[opt]?.ltp ?? 0) > 0)
+      .sort((a, b) => Math.abs(a[opt]!.ltp! - 65) - Math.abs(b[opt]!.ltp! - 65))[0]?.strike
+    const ce = hedge('CE'), pe = hedge('PE')
+    const atm = chain.rows.find((r) => r.strike === chain.atm)
+    if (ce == null) missing.push('CE hedge')
+    if (pe == null) missing.push('PE hedge')
+    if (!((atm?.CE?.ltp ?? 0) > 0)) missing.push(`${chain.atm} CE`)
+    if (!((atm?.PE?.ltp ?? 0) > 0)) missing.push(`${chain.atm} PE`)
+    if (!missing.length) plan.push(['BUY', 'CE', ce!], ['BUY', 'PE', pe!], ['SELL', 'CE', chain.atm], ['SELL', 'PE', chain.atm])
+    return { plan, missing }
+  }
   for (const [side, opt, off] of SIM_PRESETS[name]) {
     const k = strikes[ai + (opt === 'CE' ? off : -off)]
     const row = k == null ? undefined : chain.rows.find((r) => r.strike === k)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { kfmt, planPreset, slPrice, type Chain } from './sim'
+import { AUTO_FLY, kfmt, planPreset, slPrice, type Chain } from './sim'
 
 const row = (strike: number, ce: number | null, pe: number | null) => ({
   strike,
@@ -30,5 +30,13 @@ describe('simulator helpers', () => {
   it('refuses a preset when a leg has no real price (nothing is guessed)', () => {
     const r = planPreset(chain([row(22900, 150, 90), row(23000, 100, 100), row(23100, 60, null)]), 'Bear Put Spread')
     expect(r.missing.length).toBeGreaterThan(0)
+  })
+})
+
+describe('auto iron fly preset', () => {
+  it('sells ATM and hedges at the strikes priced nearest Rs 65', () => {
+    const row = (strike: number, ce: number, pe: number) => ({ strike, CE: { ltp: ce }, PE: { ltp: pe } })
+    const chain = { atm: 100, rows: [row(80, 300, 40), row(90, 200, 62), row(100, 100, 100), row(110, 57, 150), row(120, 40, 200)] } as unknown as Chain
+    expect(planPreset(chain, AUTO_FLY).plan).toEqual([['BUY', 'CE', 110], ['BUY', 'PE', 90], ['SELL', 'CE', 100], ['SELL', 'PE', 100]])
   })
 })

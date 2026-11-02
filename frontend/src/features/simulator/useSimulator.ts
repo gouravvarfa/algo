@@ -4,7 +4,7 @@ import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { fresh, useLiveTicks } from '../../lib/stream'
 import { useToast } from '../../lib/toast'
-import { PRESET_RULES, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
+import { AUTO_FLY, AUTO_FLY_DELTA, PRESET_RULES, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
 const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY']
 const ls = {
@@ -349,7 +349,7 @@ export function useSimulator(ds: DataSource) {
     }
     const { plan, missing } = planPreset(c, name)
     if (missing.length) { toast(`${name}: no real price for ${missing.join(', ')} at this ${c.mode === 'intraday' ? 'minute' : 'date'}; nothing added`); return }
-    const legs = plan.map(([s, o, k]) => makeLeg(c, s, o, k))
+    const legs = plan.map(([s, o, k]) => { const l = makeLeg(c, s, o, k); return typeof l !== 'string' && name === AUTO_FLY && s === 'SELL' ? { ...l, auto_delta: AUTO_FLY_DELTA } : l })
     const bad = legs.find((l) => typeof l === 'string')
     if (bad) { toast(String(bad)); return }
     setPositions((p) => [...p, ...(legs as SimPos[])])
@@ -364,6 +364,16 @@ export function useSimulator(ds: DataSource) {
     setPositions((p) => p.map((x) => (x.id === id ? { ...x, closed: true, exit: v.ltp!, exit_date: date, exit_time: useIntra ? tm : live ? (chain?.time ?? '').slice(0, 5) : null, realized: v.pnl } : x)))
   }
   const exitAll = () => { if (readOnly) return; let n = 0; positions.forEach((p) => { if (!p.closed && valued[String(p.id)]?.ltp != null) { exitPos(p.id); n++ } }); if (!n) toast('No open legs with a price on this date') }
+  // The auto iron fly: a sold leg closes itself at its delta, once the valuation on screen belongs to the chain on screen. Only this preset does this.
+  useEffect(() => {
+    if (readOnly || !chain || valKey.current !== keyOf(chain.date, chain.time)) return
+    const after = (p: SimPos) => chain.date > p.entry_date || (chain.date === p.entry_date && (!p.entry_time || !chain.time || chain.time >= p.entry_time))
+    const hit = positions.filter((p) => !p.closed && p.auto_delta && p.expiry === chain.expiry && after(p) && valued[String(p.id)]?.ltp != null
+      && Math.abs(chain.rows.find((r) => r.strike === p.strike)?.[p.opt]?.delta ?? 0) >= p.auto_delta)
+    if (!hit.length) return
+    setPositions((all) => all.map((x) => (hit.some((h) => h.id === x.id) ? { ...x, closed: true, exit: valued[String(x.id)].ltp!, exit_date: chain.date, exit_time: (chain.time ?? '').slice(0, 5) || null, exit_reason: `auto Δ${x.auto_delta}`, realized: valued[String(x.id)].pnl } : x)))
+    toast(`Auto close at Δ${hit[0].auto_delta}: ${hit.map((h) => `${n0(h.strike)} ${h.opt}`).join(', ')}`)
+  }, [valued]) // eslint-disable-line react-hooks/exhaustive-deps
   const clearAll = () => { if (readOnly) return; if (positions.length && !confirm('Remove all simulated positions?')) return; setPositions([]) }
   const exportCsv = () => {
     if (!positions.length) { toast('No positions to export'); return }
