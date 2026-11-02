@@ -328,7 +328,13 @@ class PaperEngine:
                 f"Running longer than Angel One serves {inst.timeframe} history ({max_days} days) — remove and re-add this instrument."
             )
 
-        raw = await self._own_candles(inst, interval, from_dt, days_back, now)
+        try:
+            raw = await self._own_candles(inst, interval, from_dt, days_back, now)
+        except Exception as exc:
+            if not (minutes is None and inst.instrument_type == "FUTURE"):
+                raise
+            log.warning("own candles of %s unavailable (%s); going on with the contract chain", inst.symbol, str(exc)[:60])      # Angel One refusing must not stop the chain
+            raw = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         # A futures instrument is evaluated across its contract chain (Oct -> Nov -> ...): the candles of its OWN first contract are not needed once that
         # contract has expired and Angel One no longer serves it, so an empty answer for it must not stop the chain.
         chain_capable = minutes is None and inst.instrument_type == "FUTURE"
