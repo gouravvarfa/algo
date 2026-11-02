@@ -133,3 +133,32 @@ def test_a_snapshot_survives_a_restart_and_is_marked_restored(tmp_path, monkeypa
     fresh._restore_snapshot("a")
     fresh._restore_snapshot("missing")
     assert fresh.snapshots == {"a": {"ltp": 5.0, "restored": True}}
+
+
+def test_a_slow_angel_one_does_not_hold_up_a_sweep_and_the_refresh_arrives_later(tmp_path, monkeypatch):
+    from app.live.chain_eval import ContractRef
+    monkeypatch.setattr(candle_store, "DB", tmp_path / "c.db")
+    c = ContractRef("BANKNIFTY23NOV26FUT", "1", "NFO", dt.date(2026, 11, 23), 30)
+    old, new = _bars(6), _bars(7)
+    calls = []
+
+    async def go():
+        e = em.PaperEngine.__new__(em.PaperEngine)
+        e._chain_cache = {("d", "1"): (NOW - dt.timedelta(hours=1), old)}
+        release = asyncio.Event()
+
+        async def slow(*a, **k):
+            calls.append(a)
+            await release.wait()
+            return new
+        e._candles = slow
+        t0 = time.perf_counter()
+        first = await asyncio.wait_for(e._contract_daily(c, FROM, NOW), 1)
+        assert time.perf_counter() - t0 < 0.2 and len(first) == 6            # answered at once from what it had
+        await asyncio.sleep(0)
+        await e._contract_daily(c, FROM, NOW)                                 # still stale: no second call while one is running
+        assert len(calls) == 1
+        release.set()
+        await asyncio.sleep(0.05)
+        assert len(e._chain_cache[("d", "1")][1]) == 7                        # the newer candles arrived
+    asyncio.run(go())

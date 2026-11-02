@@ -495,6 +495,21 @@ class PaperEngine:
             "markers": sorted(markers, key=lambda m: m["time"]),
         }
 
+    def _refresh_later(self, key, load) -> None:
+        """Fetch newer candles in the background: the sweep keeps going on what it has, so a slow or refusing Angel One never holds up stops and entries.
+        Only one refresh per key runs at a time. The very first load of a contract is still awaited: a strategy must not be evaluated without its history."""
+        tasks = self.__dict__.setdefault("_bg_tasks", {})
+        running = tasks.get(key)
+        if running is not None and not running.done():
+            return
+
+        async def run():
+            try:
+                await load()
+            except Exception as exc:
+                log.warning("background candle refresh failed for %s: %s", key, str(exc)[:80])
+        tasks[key] = asyncio.create_task(run())
+
     async def _candles(self, *args, **kwargs):
         """Every Angel One candle request goes through here: at most one at a time and at least CANDLE_CALL_GAP seconds apart,
         so the startup burst (daily + 15m + 1m + index) cannot trip the rate limit.
@@ -567,8 +582,14 @@ class PaperEngine:
         """Daily candles of one contract: Angel One when it answers, merged with (and falling back to) the local store."""
         key = ("d", c.token)
         hit = self._chain_cache.get(key)
-        if hit and (now - hit[0]).total_seconds() < DAILY_RAW_CACHE_WITH_FEED:
+        if hit:
+            if (now - hit[0]).total_seconds() >= DAILY_RAW_CACHE_WITH_FEED:
+                self._refresh_later(key, lambda: self._load_daily(c, from_dt, now_ist()))
             return hit[1]
+        return await self._load_daily(c, from_dt, now)
+
+    async def _load_daily(self, c: ContractRef, from_dt: dt.datetime, now: dt.datetime) -> pd.DataFrame:
+        key = ("d", c.token)
         stored = candle_store.get(c.token, "ONE_DAY", from_dt)
         try:
             fresh = await self._candles(c.exch_seg, c.token, "ONE_DAY", (now - from_dt).days + 2, include_partial=True)
@@ -585,26 +606,32 @@ class PaperEngine:
         key = ("m", c.token)
         hit = self._chain_cache.get(key)
         refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(c.token) else LIVE_MINUTES_REFRESH_SECONDS
-        if hit and (now - hit[0]).total_seconds() < refresh:
+        if hit:
             base = hit[1]
+            if (now - hit[0]).total_seconds() >= refresh:          # the ticks cover the newest minutes meanwhile
+                self._refresh_later(key, lambda: self._load_minutes(c, first_day, now_ist()))
         else:
-            since = dt.datetime.combine(first_day, dt.time(9, 0))
-            stored = candle_store.get(c.token, "ONE_MINUTE", since)
-            days = max(LIVE_MINUTES_DAYS, min(TIMEFRAMES["1m"][2] - 1, (now.date() - first_day).days + 3))
-            try:
-                fresh = await self._candles(c.exch_seg, c.token, "ONE_MINUTE", days, include_partial=True)
-                fresh = drop_incomplete_trailing_bars(fresh, 1, now)
-                candle_store.put(c.token, "ONE_MINUTE", fresh)
-            except Exception as exc:
-                log.warning("1-minute candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
-                if "too many requests" in str(exc).lower():
-                    self._cooldown_until[("c", c.token)] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
-                fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-            df = candle_store.merge(stored, fresh)
-            base = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
-            self._chain_cache[key] = (now, base)
+            base = await self._load_minutes(c, first_day, now)
         out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)), lenient)
         return [m for m in out if m.ts.date() >= pin] if pin else out
+
+    async def _load_minutes(self, c: ContractRef, first_day: dt.date, now: dt.datetime) -> list:
+        since = dt.datetime.combine(first_day, dt.time(9, 0))
+        stored = candle_store.get(c.token, "ONE_MINUTE", since)
+        days = max(LIVE_MINUTES_DAYS, min(TIMEFRAMES["1m"][2] - 1, (now.date() - first_day).days + 3))
+        try:
+            fresh = await self._candles(c.exch_seg, c.token, "ONE_MINUTE", days, include_partial=True)
+            fresh = drop_incomplete_trailing_bars(fresh, 1, now)
+            candle_store.put(c.token, "ONE_MINUTE", fresh)
+        except Exception as exc:
+            log.warning("1-minute candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
+            if "too many requests" in str(exc).lower():
+                self._cooldown_until[("c", c.token)] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
+            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        df = candle_store.merge(stored, fresh)
+        base = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
+        self._chain_cache[("m", c.token)] = (now, base)
+        return base
 
     @tracked("chain_eval.chain")
     async def _chain(self, inst: Instrument, now: dt.datetime, from_dt: dt.datetime):
@@ -697,8 +724,13 @@ class PaperEngine:
         is no longer served); the caller decides whether that matters. An Angel One error with nothing stored is raised as it is."""
         rc = self._raw_cache.get(inst.id)
         ttl = DAILY_RAW_CACHE_WITH_FEED if self.feed.healthy(inst.token) else 15
-        if rc and (now - rc[0]).total_seconds() < ttl:
+        if rc:
+            if (now - rc[0]).total_seconds() >= ttl:
+                self._refresh_later(("o", inst.id), lambda: self._load_own(inst, interval, from_dt, days_back, now_ist()))
             return rc[1][rc[1].index >= from_dt]
+        return await self._load_own(inst, interval, from_dt, days_back, now)
+
+    async def _load_own(self, inst: Instrument, interval: str, from_dt: dt.datetime, days_back: int, now: dt.datetime) -> pd.DataFrame:
         raw, err = None, None
         try:
             raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
@@ -720,8 +752,14 @@ class PaperEngine:
         """Completed 15m candles grouped by day, cached for a few minutes. A
         failure here never blocks the instrument: the close rules still run."""
         cached = self._bars15.get(inst.id)
-        if cached and not self._new_15m_candle_closed(cached[0], now) and (now - cached[0]).total_seconds() < GAP_15M_REFRESH_SECONDS:
+        if cached:
+            if self._new_15m_candle_closed(cached[0], now) or (now - cached[0]).total_seconds() >= GAP_15M_REFRESH_SECONDS:
+                self._refresh_later(("g", inst.id), lambda: self._load_gap_bars(inst, from_dt, now_ist()))
             return cached[1]
+        return await self._load_gap_bars(inst, from_dt, now)
+
+    async def _load_gap_bars(self, inst: Instrument, from_dt: dt.datetime, now: dt.datetime) -> dict | None:
+        cached = self._bars15.get(inst.id)
         try:
             days = min((now - from_dt).days + 2, TIMEFRAMES["15m"][2])
             df = await self._candles(inst.exch_seg, inst.token, "FIFTEEN_MINUTE", days)
