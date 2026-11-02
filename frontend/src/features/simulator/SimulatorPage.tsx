@@ -66,6 +66,7 @@ export default function SimulatorPage() {
       <div className="simmain">
         <ChainPanel chain={c} error={s.chainError} loading={s.loading} live={s.live} canTrade={!s.readOnly} onAdd={s.addPos}
           strikeView={strikeView} setStrikeView={setStrikeView} onlyTraded={onlyTraded} setOnlyTraded={setOnlyTraded}
+          held={new Map(s.positions.filter((x) => !x.closed && x.expiry === c?.expiry).map((x) => [`${x.opt}|${x.strike}`, x.side]))}
           title={`Option chain · ${s.sym}${c ? ' · ' + dmy(c.expiry) : ''}`} asof={asof} atmKey={isLive ? 'live' : `${s.date}|${s.tm}|${c?.expiry}`} />
         <div className="rcol">
           <PositionsPanel chain={c} positions={s.positions} valued={s.valued} readOnly={s.readOnly} live={s.live} date={s.date} useIntra={s.useIntra} tm={s.tm} mult={s.mult}
