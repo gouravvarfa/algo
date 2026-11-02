@@ -452,6 +452,13 @@ async def intraday_chain(date: str, time: str, symbol: str = "NIFTY", expiry: st
             rec[o] = {"ltp": ltp, "ts": r["ts"] if r else None, "age_min": age, "volume": r["volume"] if r else 0,
                       "oi": oi.get((k, o)), "chg_oi": None, "iv": round(iv, 1) if iv else None,
                       "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
+        # a deep in-the-money leg often trades below intrinsic value (stale, thin), so it has no IV of its own; the other side of the same
+        # strike (the liquid out-of-the-money one) carries the same IV by put-call parity, so use it for the delta (flagged iv_from_other)
+        for o, other in (("CE", "PE"), ("PE", "CE")):
+            a, b = rec.get(o), rec.get(other)
+            if a and a["ltp"] and a["iv"] is None and b and b["iv"]:
+                a["iv"], a["iv_from_other"] = b["iv"], True
+                a["delta"] = round(bs.greeks(spot, k, t, RATE, 0.0, b["iv"] / 100, o == "CE")["delta"], 2)
         out.append({"strike": k, **rec})
     if not out:
         raise HTTPException(404, f"no strikes for {expiry} on {date}")

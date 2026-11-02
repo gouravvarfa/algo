@@ -154,6 +154,9 @@ export function useSimulator(ds: DataSource) {
 
   // ---------- chain
   const loadTok = useRef(0)
+  const chainKey = useRef('')                              // date|minute of the chain on screen; playback waits for it (and valKey) before the next minute
+  const valKey = useRef('')
+  const keyOf = (d: string, t?: string | null) => `${d}|${t ?? ''}`
   const loadChain = async (silent: boolean) => {
     if (idx < 0) return
     const tok = ++loadTok.current
@@ -164,9 +167,11 @@ export function useSimulator(ds: DataSource) {
       if (expPinned && c.expiry !== curExp) { setExpPinned(false); toast(`Expiry ${dmy(curExp!)} is not listed on ${dmy(date)}; showing the nearest expiry`) }
       if (c.mode !== 'intraday' && c.mode !== 'live') spotCache.current.set(date, c.underlying)
       setChain(c); setCurExp(c.expiry); setChainError('')
+      chainKey.current = keyOf(c.date, c.time)
     } catch (e) {
       if (tok !== loadTok.current) return
       if (silent) return                                   // keep the last live chain on a missed refresh
+      chainKey.current = keyOf(date, tm)
       setChain(null); setChainError(`${live ? 'Live chain unavailable' : `No data for ${dmy(date)}`}: ${(e as Error).message}`)
     } finally { if (tok === loadTok.current) setLoading(false) }
   }
@@ -212,7 +217,8 @@ export function useSimulator(ds: DataSource) {
     ;(async () => {
       // The simulator never closes a leg by itself: only the person's own Exit does. (Stop-losses belong to the Strategy Builder.)
       const open = positions.filter((p) => !p.closed)
-      if (!open.length) { setMark(null); setValued({}); setMargin(null); marginKey.current = ''; return }
+      const vk = keyOf(chain.date, chain.time)
+      if (!open.length) { setMark(null); setValued({}); setMargin(null); marginKey.current = ''; valKey.current = vk; return }
       let m: Mark | null = null
       const vals: Record<string, Valued> = {}
       try {
@@ -226,7 +232,7 @@ export function useSimulator(ds: DataSource) {
         open.forEach((p) => { vals[String(p.id)] = { ltp: null, pnl: null, note: 'valuation failed: ' + (e as Error).message } })
       }
       if (!alive()) return
-      setMark(m); setValued(vals)
+      setMark(m); setValued(vals); valKey.current = vk
       // margin only when the set of open legs changes (never estimated: the server says "n/a" when it cannot know)
       const legs = open.map((p) => legBody(p, mult))
       const key = JSON.stringify(legs.map((l) => [l.side, l.opt, l.strike, l.expiry, l.lots, l.lot_size, l.entry]))
@@ -262,17 +268,26 @@ export function useSimulator(ds: DataSource) {
     if (!playing) return
     let alive = true
     let timer: number | undefined
+    // The next minute is set only after the chain and the valuation of the previous one are on screen: a reply that arrives after the
+    // next minute was set is dropped as stale, so with a slow server the clock ran while the numbers stood still.
+    const settled = async (key: string) => {
+      for (let n = 0; n < 160 && alive && !(chainKey.current === key && valKey.current === key); n++) await new Promise((r) => setTimeout(r, 50))
+    }
     const step = async () => {
       if (!alive) return
       const s = stateRef.current
       if (s.useIntra) {
         const i = s.mins.indexOf(s.tm ?? '')
-        if (i < s.mins.length - 1) { setTm(s.mins[Math.min(s.mins.length - 1, i + s.speed)]); timer = window.setTimeout(step, 650); return }
+        if (i < s.mins.length - 1) {
+          const nt = s.mins[Math.min(s.mins.length - 1, i + s.speed)]
+          setTm(nt); await settled(keyOf(s.dates[s.idx], nt)); timer = window.setTimeout(step, 650); return
+        }
         if (s.idx < s.dates.length - 1 && s.intraSet.has(s.dates[s.idx + 1])) { await goTo(s.idx + 1, null); timer = window.setTimeout(step, 650); return }
         setPlaying(false); toast('End of the intraday data for this day'); return
       }
       if (s.idx >= s.dates.length - 1) { setPlaying(false); toast('Reached the last available trading date'); return }
       await goTo(s.idx + 1)
+      await settled(keyOf(s.dates[s.idx + 1], null))
       timer = window.setTimeout(step, 1500 / s.speed)
     }
     timer = window.setTimeout(step, 400)
