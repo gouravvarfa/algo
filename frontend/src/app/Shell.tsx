@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { get } from '../lib/api'
 import { num, sign } from '../lib/format'
 import { useSession } from '../lib/session'
+import { fresh, useLiveTicks } from '../lib/stream'
 import type { IndexQuote } from '../lib/types'
 import { Icon, type IconName } from './Icon'
 import { Hamburger, NavBackdrop } from './MobileNav'
@@ -37,11 +38,18 @@ function AnnouncementBanner() {
 function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string }) {
   const q = useQuery({ queryKey: ['index', name], queryFn: () => get<IndexQuote>(`/api/index/${name}`), refetchInterval: 15_000, retry: false })
   const d = q.data
+  // the price itself is pushed tick by tick on every page; the 15 s query brings the previous close
+  const token = name === 'BANKNIFTY' ? '99926009' : '99926000'
+  const { ticks } = useLiveTicks([`NSE:${token}`])
+  const t = ticks[token]
+  const price = fresh(t) ? t.ltp : d?.price
+  const change = price != null && d?.prev_close ? price - d.prev_close : null
+  const pct = change != null && d?.prev_close ? (change / d.prev_close) * 100 : d?.pct
   return (
     <div className="idxcard" title={d ? `${d.live ? 'Live tick' : 'Last REST candle'} · previous close ${num(d.prev_close)}` : ''}>
       <b>{label}</b>
-      <span className="p num">{d?.price != null ? num(d.price) : '–'}</span>{' '}
-      {d?.pct != null && <span className={`num ${sign(d.change)}`} style={{ fontSize: 12 }}>{d.pct >= 0 ? '+' : ''}{d.pct.toFixed(2)}%</span>}
+      <span className="p num">{price != null ? num(price) : '–'}</span>{' '}
+      {pct != null && <span className={`num ${sign(change ?? d?.change)}`} style={{ fontSize: 12 }}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</span>}
     </div>
   )
 }

@@ -955,20 +955,28 @@ class PaperEngine:
         ex, tok = INDEX_TOKENS[name]
         now = now_ist()
         cached = self._prev_close.get(name)
-        if cached is None or (now - cached[0]).total_seconds() > 600:
-            df = await self._candles(ex, tok, "ONE_DAY", 10, include_partial=True)
-            prev = None if df is None or df.empty else df[df.index.date < now.date()]
-            prev_close = float(prev["close"].iloc[-1]) if prev is not None and not prev.empty else None
-            last_close = float(df["close"].iloc[-1]) if df is not None and not df.empty else None
-            self._prev_close[name] = cached = (now, prev_close, last_close)
-        prev_close, last_close = cached[1], cached[2]
         tick = self.feed.latest.get(tok)
         live = self.feed.healthy(tok) and tick is not None
+        if cached is None and not live:
+            cached = await self._load_index_close(name)            # nothing to show yet: this one answer has to wait
+        elif cached is None or (now - cached[0]).total_seconds() > 600:
+            self._refresh_later(("i", name), lambda: self._load_index_close(name))    # a live price never waits for the candle queue
+        prev_close, last_close = cached[1:] if cached else (None, None)
         price = tick.ltp if live else last_close
         change = None if price is None or prev_close is None else round(price - prev_close, 2)
         return {"symbol": name, "price": price, "prev_close": prev_close, "change": change,
                 "pct": None if change is None or not prev_close else round(change / prev_close * 100, 2),
                 "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
+
+    async def _load_index_close(self, name: str) -> tuple:
+        ex, tok = INDEX_TOKENS[name]
+        now = now_ist()
+        df = await self._candles(ex, tok, "ONE_DAY", 10, include_partial=True)
+        prev = None if df is None or df.empty else df[df.index.date < now.date()]
+        prev_close = float(prev["close"].iloc[-1]) if prev is not None and not prev.empty else None
+        last_close = float(df["close"].iloc[-1]) if df is not None and not df.empty else None
+        self._prev_close[name] = (now, prev_close, last_close)
+        return self._prev_close[name]
 
     # ---- views -----------------------------------------------------------
     def overview(self, owner=ALL) -> dict:

@@ -162,3 +162,23 @@ def test_a_slow_angel_one_does_not_hold_up_a_sweep_and_the_refresh_arrives_later
         await asyncio.sleep(0.05)
         assert len(e._chain_cache[("d", "1")][1]) == 7                        # the newer candles arrived
     asyncio.run(go())
+
+
+def test_a_live_index_price_never_waits_for_the_candle_queue():
+    async def go():
+        e = em.PaperEngine.__new__(em.PaperEngine)
+        e._prev_close = {}
+        e.feed = SimpleNamespace(latest={"99926009": SimpleNamespace(ltp=55000.0)}, healthy=lambda *_: True, age=lambda *_: 0.1)
+        release = asyncio.Event()
+
+        async def slow(*a, **k):
+            await release.wait()
+            return pd.DataFrame({"close": [54000.0, 55100.0]}, index=pd.to_datetime(["2026-01-01", "2099-01-01"]))
+        e._candles = slow
+        first = await asyncio.wait_for(e.index_quote("BANKNIFTY"), 1)
+        assert first["price"] == 55000.0 and first["live"] and first["prev_close"] is None     # the price at once; the close follows
+        release.set()
+        await asyncio.sleep(0.05)
+        second = await e.index_quote("BANKNIFTY")
+        assert second["prev_close"] == 54000.0 and second["change"] == 1000.0
+    asyncio.run(go())
