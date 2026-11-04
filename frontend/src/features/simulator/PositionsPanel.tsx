@@ -39,7 +39,7 @@ export function PositionsPanel(p: Props) {
       )}
       <div className="scroll">
         <table className="pt">
-          <thead><tr><th className="l">Leg</th><th>Lots</th><th>Entry ₹</th><th>{p.live ? 'Live ₹' : 'Now / exit ₹'}</th><th>P&amp;L</th><th /></tr></thead>
+          <thead><tr><th className="l">Leg</th><th>Lots</th><th>Entry ₹</th><th>{p.live ? 'Live ₹' : 'Now / exit ₹'}</th><th>P&amp;L</th><th className="actcol" /></tr></thead>
           <tbody>
             {rows.map((x) => {
               const v = p.valued[String(x.id)]
@@ -66,7 +66,7 @@ export function PositionsPanel(p: Props) {
                   <td className="num">₹{num(x.entry)}</td>
                   <td className="num"><b>{x.closed ? `₹${num(x.exit)}` : v?.ltp == null ? <span className="sub">n/a</span> : `₹${num(v.ltp)}`}</b></td>
                   <td className="num"><b>{rupee(x.closed ? x.realized : v?.pnl)}</b></td>
-                  <td>{!p.readOnly && <span className="acts">{!x.closed && <button className="ib" title="Exit at this price" onClick={() => p.onExit(x.id)}>⇥</button>}<button className="ib" title="Remove" onClick={() => p.onRemove(x.id)}>✕</button></span>}</td>
+                  <td className="actcol">{!p.readOnly && <span className="acts">{!x.closed && <button className="ib txt" title="Exit only this leg at this price" onClick={() => p.onExit(x.id)}>Exit</button>}<button className="ib" title="Remove" onClick={() => p.onRemove(x.id)}>✕</button></span>}</td>
                 </tr>
               )
             })}
