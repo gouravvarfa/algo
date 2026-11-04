@@ -107,7 +107,7 @@ export default function UsersPage() {
       )}
       <div className="card">
         <div className="scroll">
-          <table>
+          <table className="userstbl">
             <thead><tr><th /><th className="l">Name</th><th className="l">Role</th><th className="l">Status</th><th className="l">Online</th><th className="l">Device</th><th className="l">Strategy</th><th>Open</th><th>Unrealized</th><th>Realized</th><th>Actions</th></tr></thead>
             <tbody>
               {rows.map((r) => (

@@ -35,7 +35,7 @@ td:has(> .btnrow.acts) { width: 1%; }
 /* iPad / small laptop: keep the Users table inside its card (no sideways scrolling, no clipped buttons) */
 @media (max-width: 1180px) {
   .btnrow.acts { grid-template-columns: repeat(2, 108px); }
-  .page table th:nth-child(6), .page table td:nth-child(6) { display: none; }          /* the Device column is the first to go */
+  table.userstbl th:nth-child(6), table.userstbl td:nth-child(6) { display: none; }   /* the Device column of the Users table is the first to go (only that table: a page-wide rule hid the Exit column of the simulator's Positions on an iPad) */
   form.card.row .field small { display: none; }
   form.card.row { align-items: flex-end; }
 }
