@@ -62,10 +62,10 @@ export function PositionsPanel(p: Props) {
                     {delta != null && <div className={`legdelta${hit ? ' hit' : ''}`} title={x.side === 'SELL' ? `Close this sold leg at delta ${ADJUST_DELTA}` : undefined}>Δ {num(Math.abs(delta), 2)}{x.side === 'SELL' ? ` / ${ADJUST_DELTA}` : ''}{hit ? ' · close this leg' : ''}</div>}
                     <div className="sub legnote">{info}</div>
                   </td>
-                  <td>{x.closed ? x.lots : p.readOnly ? x.lots : <span className="acts"><button className="ib" title="Fewer lots" onClick={() => p.onLots(x.id, -1)}>−</button><b>{x.lots}{p.mult > 1 && <span className="sub">×{p.mult}</span>}</b><button className="ib" title="More lots" onClick={() => p.onLots(x.id, 1)}>+</button></span>}</td>
-                  <td className="num">₹{num(x.entry)}</td>
-                  <td className="num"><b>{x.closed ? `₹${num(x.exit)}` : v?.ltp == null ? <span className="sub">n/a</span> : `₹${num(v.ltp)}`}</b></td>
-                  <td className="num"><b>{rupee(x.closed ? x.realized : v?.pnl)}</b></td>
+                  <td data-label="Lots">{x.closed ? x.lots : p.readOnly ? x.lots : <span className="acts"><button className="ib" title="Fewer lots" onClick={() => p.onLots(x.id, -1)}>−</button><b>{x.lots}{p.mult > 1 && <span className="sub">×{p.mult}</span>}</b><button className="ib" title="More lots" onClick={() => p.onLots(x.id, 1)}>+</button></span>}</td>
+                  <td className="num" data-label="Entry ₹">₹{num(x.entry)}</td>
+                  <td className="num" data-label={p.live ? 'Live ₹' : x.closed ? 'Exit ₹' : 'Now ₹'}><b>{x.closed ? `₹${num(x.exit)}` : v?.ltp == null ? <span className="sub">n/a</span> : `₹${num(v.ltp)}`}</b></td>
+                  <td className="num" data-label="P&L"><b>{rupee(x.closed ? x.realized : v?.pnl)}</b></td>
                   <td className="actcol">{!p.readOnly && <span className="acts">{!x.closed && <button className="ib txt" title="Exit only this leg at this price" onClick={() => p.onExit(x.id)}>Exit</button>}<button className="ib" title="Remove" onClick={() => p.onRemove(x.id)}>✕</button></span>}</td>
                 </tr>
               )

@@ -155,12 +155,22 @@ table.oc td.ltp.held small { font-weight: 700; font-size: 12px; color: var(--tex
 .heldtag.sell { background: var(--danger, #dc2626); } .heldtag.buy { background: var(--success, #059669); }
 table.pt .legdelta { font-size: 12px; font-weight: 700; margin-top: 2px; }
 table.pt .legdelta.hit { color: #fff; background: var(--danger, #dc2626); display: inline-block; padding: 1px 6px; border-radius: 4px; }
-/* the Exit / remove buttons stay in view at the right edge, so a narrow screen (iPad) never has to scroll sideways to find them */
-table.pt .actcol { position: sticky; right: 0; background: var(--bg-surface); box-shadow: -6px 0 6px -6px rgba(0,0,0,.25); }
+/* Exit / remove buttons: labelled, and larger on touch screens */
 .acts .ib.txt { width: auto; padding: 0 10px; font-size: 12px; font-weight: 600; }
 @media (hover: none) { .acts .ib { width: 34px; height: 34px; } .acts .ib.txt { width: auto; padding: 0 12px; } }
-/* Positions table: tighter cells and a narrow leg note keep it inside the panel on an iPad; the leg name stays pinned left and Exit pinned right even when it still has to scroll */
+/* Positions table: tighter cells and a narrow leg note  */
 table.pt th, table.pt td { padding-left: 6px; padding-right: 6px; }
 table.pt .legnote { max-width: 150px; }
-table.pt th:first-child, table.pt td.l { position: sticky; left: 0; z-index: 1; background: var(--bg-surface); }
-table.pt .actcol { z-index: 1; }
+/* Positions on a narrow panel (iPad, laptop): every leg is a small card, so nothing sits off to the side. Top: leg and Exit. Below: Lots / Entry / Live / P&L, each with its label. */
+@media (max-width: 1700px) {
+  table.pt, table.pt tbody { display: block; width: 100%; }
+  table.pt thead { display: none; }
+  table.pt tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 0; padding: 8px 2px; border-bottom: 1px solid var(--border); align-items: center; }
+  table.pt td { display: block; border: 0; height: auto; padding: 2px 6px; text-align: left; white-space: nowrap; }
+  table.pt td::before { content: attr(data-label); display: block; font-size: 10.5px; font-weight: 500; color: var(--text-muted); }
+  table.pt td:nth-child(1) { grid-column: 1 / 4; white-space: normal; }
+  table.pt td:nth-child(1)::before, table.pt td:nth-child(6)::before { content: none; }
+  table.pt td:nth-child(6) { grid-column: 4; grid-row: 1; text-align: right; }
+  table.pt td.empty { grid-column: 1 / -1; }
+  table.pt .legnote { max-width: none; }
+}
