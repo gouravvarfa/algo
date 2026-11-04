@@ -159,3 +159,8 @@ table.pt .legdelta.hit { color: #fff; background: var(--danger, #dc2626); displa
 table.pt .actcol { position: sticky; right: 0; background: var(--bg-surface); box-shadow: -6px 0 6px -6px rgba(0,0,0,.25); }
 .acts .ib.txt { width: auto; padding: 0 10px; font-size: 12px; font-weight: 600; }
 @media (hover: none) { .acts .ib { width: 34px; height: 34px; } .acts .ib.txt { width: auto; padding: 0 12px; } }
+/* Positions table: tighter cells and a narrow leg note keep it inside the panel on an iPad; the leg name stays pinned left and Exit pinned right even when it still has to scroll */
+table.pt th, table.pt td { padding-left: 6px; padding-right: 6px; }
+table.pt .legnote { max-width: 150px; }
+table.pt th:first-child, table.pt td.l { position: sticky; left: 0; z-index: 1; background: var(--bg-surface); }
+table.pt .actcol { z-index: 1; }
