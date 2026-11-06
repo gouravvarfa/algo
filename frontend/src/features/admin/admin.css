@@ -47,3 +47,5 @@ td:has(> .btnrow.acts) { width: 1%; }
 .sslist { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 90; max-height: 260px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.35); -webkit-overflow-scrolling: touch; }
 .sslist li { padding: 10px 12px; border-radius: 8px; font-family: var(--font-mono); font-size: 13px; cursor: pointer; }
 .sslist li:hover, .sslist li.on { background: var(--bg-hover); } .sslist li.none { color: var(--text-muted); cursor: default; font-family: inherit; }
+.sslist li .sshint { color: var(--text-muted); font-family: var(--font-sans, inherit); font-size: 12px; }
+.sslist li[data-group]::before { content: attr(data-group); display: block; margin: 4px 0 6px; font-family: var(--font-sans, inherit); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }

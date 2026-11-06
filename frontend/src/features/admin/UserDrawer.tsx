@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ApiError, api, del, get, post, put } from '../../lib/api'
 import { dt } from '../../lib/format'
 import { useToast } from '../../lib/toast'
@@ -18,7 +18,11 @@ export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user:
   const lim = useQuery({ queryKey: ['admin', 'limits', user.id], queryFn: () => get<Limits>(`/api/admin/users/${user.id}/limits`) })
   const notes = useQuery({ queryKey: ['admin', 'notes', user.id], queryFn: () => get<{ notes: Note[] }>(`/api/admin/users/${user.id}/notes`) })
   const strat = useQuery({ queryKey: ['admin', 'strategies', user.id], queryFn: () => get<{ strategies: { id: string; symbol: string; trading_symbol: string; lots: number | null; expiry: string | null; fault: string | null }[] }>(`/api/admin/users/${user.id}/strategies`) })
-  const fo = useQuery({ queryKey: ['admin', 'fo-stocks'], queryFn: () => get<{ symbols: string[] }>('/api/admin/fo-stocks'), staleTime: 3_600_000 })
+  const fo = useQuery({ queryKey: ['admin', 'fo-stocks'], queryFn: () => get<{ symbols: string[]; commodities?: { symbol: string; label: string; metal: string }[] }>('/api/admin/fo-stocks'), staleTime: 3_600_000 })
+  const choices = useMemo(() => [
+    ...(fo.data?.commodities ?? []).map((c) => ({ value: c.symbol, hint: `${c.label} · MCX`, group: c.metal === 'Gold' ? 'Gold · MCX' : 'Silver · MCX' })),
+    ...(fo.data?.symbols ?? []).map((s) => ({ value: s, group: 'F&O stocks' })),
+  ], [fo.data])
   const [sym, setSym] = useState('')
   const [lots, setLots] = useState('1')
   const assign = useMutation({
@@ -64,7 +68,7 @@ export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user:
       <aside className="drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`Details for ${user.name}`}>
         <div className="card-head"><h2>{user.name} <span className="sub mono">{user.username}</span></h2><span className="spacer" /><button className="btn sm" onClick={onClose}>Close</button></div>
 
-        <h3>Strategies <span className="sub">(Top-Bottom on stock futures, assigned by you)</span></h3>
+        <h3>Strategies <span className="sub">(Top-Bottom on stock futures and MCX gold / silver, assigned by you)</span></h3>
         <ul className="notes">
           {(strat.data?.strategies ?? []).map((x) => (
             <li key={x.id}><span><b>{x.symbol}</b> <span className="sub">{x.trading_symbol} · {x.lots ?? 1} lot · exp {x.expiry}</span>{x.fault ? <span className="chip bad" title={x.fault}> FAULT</span> : null}</span>
@@ -74,9 +78,9 @@ export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user:
         </ul>
         {canAssign && (
           <form className="linkrow" onSubmit={(e: FormEvent) => { e.preventDefault(); if (sym.trim()) assign.mutate() }}>
-            <SearchSelect value={sym} onChange={setSym} options={fo.data?.symbols ?? []} placeholder="Tap to pick an F&O stock, or type, e.g. RELIANCE" />
+            <SearchSelect value={sym} onChange={setSym} options={choices} placeholder="Tap to pick, or type: RELIANCE, GOLD, SILVERM…" />
             <input type="number" min={1} max={50} value={lots} onChange={(e) => setLots(e.target.value)} style={{ width: 72 }} aria-label="Lots" title="Lots" />
-            <button className="btn primary" type="submit" disabled={assign.isPending || !(fo.data?.symbols ?? []).includes(sym.trim().toUpperCase())}>{assign.isPending ? 'Adding…' : 'Assign'}</button>
+            <button className="btn primary" type="submit" disabled={assign.isPending || !choices.some((c) => c.value === sym.trim().toUpperCase())}>{assign.isPending ? 'Adding…' : 'Assign'}</button>
           </form>
         )}
 
