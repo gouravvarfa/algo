@@ -27,6 +27,7 @@ log = logging.getLogger("ticks")
 URL = "wss://smartapisocket.angelone.in/smart-stream"
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 EXCHANGE_TYPE = {"NSE": 1, "NFO": 2, "BSE": 3, "BFO": 4, "MCX": 5}
+SUB_CHUNK = 50                      # tokens per subscribe / unsubscribe message
 HEARTBEAT_SECONDS = 10
 STALE_AFTER_SECONDS = 15          # no tick for this long while the socket is "connected" -> treated as not healthy
 KEEP_MINUTES = 6 * 60 * 5         # minute candles kept in memory per token (several trading days)
@@ -128,6 +129,32 @@ class TickFeed:
         for toks in self.subs.values():
             toks.discard(str(token))
 
+    def subscribed(self, exch_seg: str) -> set[str]:
+        return set(self.subs.get(EXCHANGE_TYPE[exch_seg.upper()], ()))
+
+    def subscribe_many(self, exch_seg: str, tokens) -> None:
+        """Several tokens at once: one message per SUB_CHUNK tokens instead of one per token."""
+        et = EXCHANGE_TYPE[exch_seg.upper()]
+        new = {str(t) for t in tokens} - self.subs.get(et, set())
+        if not new:
+            return
+        self.subs.setdefault(et, set()).update(new)
+        if self._ws is not None and self.connected:
+            asyncio.ensure_future(self._send_subscribe({et: new}))
+
+    def unsubscribe_many(self, exch_seg: str, tokens) -> None:
+        """Stop tokens: dropped from the re-subscribe list, told to the server (action 0), and their last price forgotten so an old tick
+        is never shown as live if the token is wanted again later (until its first new tick the stored minute close is shown instead)."""
+        et = EXCHANGE_TYPE[exch_seg.upper()]
+        gone = {str(t) for t in tokens} & self.subs.get(et, set())
+        if not gone:
+            return
+        self.subs[et] -= gone
+        for t in gone:
+            self.latest.pop(t, None)
+        if self._ws is not None and self.connected:
+            asyncio.ensure_future(self._send_subscribe({et: gone}, action=0))
+
     def start(self) -> None:
         self._stop = False
         self._task = asyncio.create_task(self._run())
@@ -164,16 +191,22 @@ class TickFeed:
                 if self._listener_errors <= 3:
                     log.exception("tick listener failed")
 
-    def _sub_message(self, subs: dict[int, set[str]]) -> str:
-        return json.dumps({"correlationID": "algo-app", "action": 1,
+    def _sub_message(self, subs: dict[int, set[str]], action: int = 1) -> str:
+        return json.dumps({"correlationID": "algo-app", "action": action,
                            "params": {"mode": 1, "tokenList": [{"exchangeType": et, "tokens": sorted(toks)} for et, toks in subs.items() if toks]}})
 
-    async def _send_subscribe(self, subs: dict[int, set[str]]) -> None:
-        if any(subs.values()) and self._ws is not None:
-            try:
-                await self._ws.send(self._sub_message(subs))
-            except Exception as exc:  # the reconnect loop re-subscribes everything
-                log.warning("subscribe failed: %s", exc)
+    async def _send_subscribe(self, subs: dict[int, set[str]], action: int = 1) -> None:
+        """At most SUB_CHUNK tokens per message (Angel One's own client sends no more than 50 at a time)."""
+        if not any(subs.values()) or self._ws is None:
+            return
+        for et, toks in subs.items():
+            toks = sorted(toks)
+            for i in range(0, len(toks), SUB_CHUNK):
+                try:
+                    await self._ws.send(self._sub_message({et: set(toks[i:i + SUB_CHUNK])}, action))
+                except Exception as exc:  # the reconnect loop re-subscribes everything
+                    log.warning("%s failed: %s", "subscribe" if action else "unsubscribe", exc)
+                    return
 
     async def _heartbeat(self, ws) -> None:
         while True:

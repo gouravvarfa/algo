@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import sqlite3
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -772,9 +773,17 @@ async def backtest_get(bid: str, request: Request):
 
 # ---------------------------------------------------------------- live option chain (Angel One WebSocket ticks)
 live_engine = None          # set by app.main: the PaperEngine whose TickFeed and index_quote are shared (one WebSocket for the whole app)
-LIVE_STRIKES = 15           # ATM +/- this many strikes are subscribed per expiry
-LIVE_MAX_TOKENS = 400       # safety cap well under Angel One's per-connection token limit
-_LIVE_SUBS: set[str] = set()
+# Every listed strike is shown. The option tokens this module keeps subscribed are rebuilt on every request: the legs of open positions
+# first (never dropped, whatever the cap), then the chains someone is looking at, nearest the ATM first, up to LIVE_MAX_TOKENS. A chain
+# nobody has asked for in CHAIN_IDLE_SECONDS gives its tokens back, so the list no longer only grows (it used to stop at 400 for the
+# rest of the day, and after that a new position's leg never got a live price, so it could not be exited).
+# A token is never dropped while a browser stream watches it or a paper-trading instrument uses it.
+LIVE_MAX_TOKENS = 700
+CHAIN_IDLE_SECONDS = 120
+PIN_IDLE_SECONDS = 900      # a position's leg keeps its token this long after the last time a browser valued it
+_CHAINS: dict[tuple[str, str], tuple[float, list[str]]] = {}     # (symbol, expiry) -> (last asked, tokens nearest the ATM first)
+_PINS: dict[str, float] = {}                                     # token of an open position's leg -> last valued
+_OPTION_TOKENS: set[str] = set()                                 # every index option token seen: the only tokens this module may drop
 
 
 def _live_ready():
@@ -783,11 +792,38 @@ def _live_ready():
     return live_engine.feed
 
 
-def _sub(feed, token: str) -> None:
-    if token in _LIVE_SUBS or len(_LIVE_SUBS) >= LIVE_MAX_TOKENS:
-        return
-    feed.subscribe("NFO", token)
-    _LIVE_SUBS.add(token)
+def _protected() -> set[str]:
+    from app.ops import context as ops_context
+    keep: set[str] = set()
+    hub = getattr(ops_context, "stream_hub", None)
+    if hub is not None:
+        keep |= set(hub.by_token)
+    if live_engine is not None:
+        keep |= {str(i.token) for i in getattr(live_engine, "instruments", {}).values()}
+    return keep
+
+
+def _sync_subs(feed, now: float | None = None) -> dict:
+    now = time.time() if now is None else now
+    for k in [k for k, (t, _) in _CHAINS.items() if now - t > CHAIN_IDLE_SECONDS]:
+        del _CHAINS[k]
+    for k in [k for k, t in _PINS.items() if now - t > PIN_IDLE_SECONDS]:
+        del _PINS[k]
+    want = list(_PINS)
+    seen = set(want)
+    for _, toks in sorted(_CHAINS.values(), key=lambda v: -v[0]):
+        for tok in toks:
+            if len(want) >= LIVE_MAX_TOKENS:
+                break
+            if tok not in seen:
+                want.append(tok)
+                seen.add(tok)
+    have = feed.subscribed("NFO")
+    keep = _protected()
+    drop = [t for t in have if t in _OPTION_TOKENS and t not in seen and t not in keep]
+    feed.subscribe_many("NFO", want)
+    feed.unsubscribe_many("NFO", drop)
+    return {"wanted": len(want), "dropped": len(drop)}
 
 
 @router.get("/live/chain")
@@ -818,11 +854,11 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
     cons = [c for c in info.contracts if c.expiry.isoformat() == expiry]
     strikes_all = sorted({c.strike for c in cons})
     atm = min(strikes_all, key=lambda k: abs(k - spot))
-    ai = strikes_all.index(atm)
-    strikes = strikes_all[max(0, ai - LIVE_STRIKES): ai + LIVE_STRIKES + 1]
-    book = {(c.strike, c.option_type): c for c in cons if c.strike in strikes}
-    for c in book.values():
-        _sub(feed, c.token)
+    strikes = strikes_all
+    book = {(c.strike, c.option_type): c for c in cons}
+    _OPTION_TOKENS.update(str(c.token) for c in info.contracts if c.option_type in ("CE", "PE"))
+    _CHAINS[(sym, expiry)] = (time.time(), [str(c.token) for c in sorted(book.values(), key=lambda c: (abs(c.strike - spot), c.option_type))])
+    _sync_subs(feed)
     today = now.date().isoformat()
     with _idb() as cdb:
         stored = intraday.chain_at(cdb, sym, today, "15:30", expiry)
@@ -887,7 +923,9 @@ async def live_mark(req: LiveMarkReq):
         if c is None:
             note = "contract not listed any more"
         else:
-            _sub(feed, c.token)
+            _PINS[str(c.token)] = time.time()
+            _OPTION_TOKENS.add(str(c.token))
+            feed.subscribe_many("NFO", [c.token])
             tick = feed.latest.get(c.token)
             if tick is None:
                 note = "waiting for the first live tick"
