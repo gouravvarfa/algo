@@ -49,7 +49,9 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 from app.strategy.top_bottom.gap_protocol import (
+    NSE,
     FirstCandle,
+    Session,
     is_gap_past_system_point,
     is_gap_through_stop,
 )
@@ -114,6 +116,7 @@ def run_intraday(
     roll_in: str | None = None,
     breakeven_pct: float | None = None,       # None = the index rule (2%); stocks pass 3%
     next_day_reentry_from: dt.date | None = NEXT_DAY_REENTRY_FROM,
+    session: Session = NSE,                   # NSE 09:15-15:30; MCX gold / silver start at 09:00
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
@@ -215,15 +218,15 @@ def run_intraday(
         day_open = first.open
 
         flag = {"date": day.isoformat(), "minutes": len(day_min), "time": day_min[-1].ts.isoformat(), "issues": []}
-        window = [m for m in day_min if FIRST_15_START <= m.ts.time() < FIRST_15_END]
-        first15_ok = len(window) == 15 and first.ts.time() == FIRST_15_START
+        window = [m for m in day_min if session.first_start <= m.ts.time() < session.second_start]
+        first15_ok = len(window) == 15 and first.ts.time() == session.first_start
         fc = FirstCandle(high=max(m.high for m in window), low=min(m.low for m in window), open=window[0].open) if first15_ok else None
         fc_source = "derived from the genuine 1-minute candles"
         stored = (first15 or {}).get(day)
         if stored is not None:  # prefer the genuine stored 15-minute candle for the existing gap protocol
             fc, first15_ok, fc_source = stored, True, "stored 15-minute candle"
-        if len(day_min) < 375:
-            flag["issues"].append(f"{375 - len(day_min)} of 375 one-minute candles missing")
+        if len(day_min) < session.minutes:
+            flag["issues"].append(f"{session.minutes - len(day_min)} of {session.minutes} one-minute candles missing")
 
         if open_t is not None and open_t.new_sp_date is None and open_t.breakeven_date is None:
             kind_sp = "TOP" if open_t.direction == "BUY" else "BOTTOM"
@@ -335,7 +338,7 @@ def run_intraday(
             clock = c.ts.time()
             used_high = used_low = False  # a candle's high/low can each be "used" once on its assumed path
             # ------- gap decision pending: nothing fires before 09:30 ---------
-            if mode is not None and clock < FIRST_15_END:
+            if mode is not None and clock < session.second_start:
                 continue
             # ------- GAP EXIT mode: ordinary stop suspended, 15-min level rules
             if mode == "exit" and open_t is not None:

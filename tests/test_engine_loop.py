@@ -83,7 +83,7 @@ def _eng(tmp_path, monkeypatch, provider_result):
     return e
 
 
-INST = SimpleNamespace(id="i1", symbol="BANKNIFTY", token="61466", exch_seg="NFO", trading_symbol="BANKNIFTY27OCT26FUT")
+INST = SimpleNamespace(id="i1", symbol="BANKNIFTY", token="61466", exch_seg="NFO", trading_symbol="BANKNIFTY27OCT26FUT", sess=em.NSE)
 NOW, FROM = dt.datetime(2026, 11, 1, 12, 0), dt.datetime(2026, 1, 1)
 EMPTY = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 

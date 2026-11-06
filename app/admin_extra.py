@@ -421,7 +421,9 @@ def fo_stocks() -> list[str]:
 
 @router.get("/api/admin/fo-stocks")
 def fo_stock_list(_=Depends(require("users.read"))):
-    return {"symbols": fo_stocks()}
+    """What an admin may assign: NSE F&O stocks, and the MCX gold / silver futures (listed apart, with what each one is)."""
+    from app.providers.commodities import COMMODITIES
+    return {"symbols": fo_stocks(), "commodities": [{"symbol": k, "label": v["label"], "metal": v["metal"], "point_value": v["point_value"]} for k, v in COMMODITIES.items()]}
 
 
 class AssignBody(BaseModel):
@@ -458,8 +460,9 @@ async def assign_strategy(user_id: str, body: AssignBody, actor=Depends(require(
     _managed(c, actor, user_id, allow_self=True)
     e = _engine_or_503()
     symbol = body.symbol.strip().upper()
-    if not _SYMBOL_RE.match(symbol) or symbol not in fo_stocks():
-        raise AuthError(400, "BAD_SYMBOL", f"{symbol} is not in the F&O stock list. Pick one from the list.")
+    from app.providers.commodities import COMMODITIES
+    if not _SYMBOL_RE.match(symbol) or (symbol not in fo_stocks() and symbol not in COMMODITIES):
+        raise AuthError(400, "BAD_SYMBOL", f"{symbol} is not in the F&O stock list or the gold / silver list. Pick one from the list.")
     if any(i.owner == user_id and i.symbol == symbol and i.timeframe == "1D" and i.instrument_type == "FUTURE" for i in e.instruments.values()):
         raise AuthError(409, "ALREADY_ASSIGNED", f"{symbol} is already assigned to this account.")
     lookback = (datetime.now(timezone.utc).date() - datetime.fromisoformat(HISTORY_SINCE).date()).days + 1

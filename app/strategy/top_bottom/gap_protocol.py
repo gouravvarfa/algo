@@ -35,6 +35,25 @@ SESSION_END = dt.time(15, 30)
 
 
 @dataclass(frozen=True)
+class Session:
+    """The trading day an instrument lives in. The first 15-minute candle starts at `first_start`, the second at `second_start`, the day is over at
+    `close` (a daily candle is complete only then), and a full day has `minutes` one-minute candles. The gap rules are the same for every session;
+    only these times differ."""
+    name: str
+    first_start: dt.time
+    second_start: dt.time
+    close: dt.time
+    minutes: int
+
+
+NSE = Session("NSE", FIRST_CANDLE_START, SECOND_CANDLE_START, SESSION_END, 375)
+# MCX gold / silver: opens 09:00. It closes at 23:30, or 23:55 outside US daylight saving time; `close` is the later one (a daily candle is never taken
+# as complete early) and `minutes` the shorter day (a full day is never reported as missing minutes).
+MCX = Session("MCX", dt.time(9, 0), dt.time(9, 15), dt.time(23, 55), 870)
+SESSIONS = {"NSE": NSE, "MCX": MCX}
+
+
+@dataclass(frozen=True)
 class Bar15:
     """One 15-minute candle; `start` is its opening timestamp (IST)."""
     start: dt.datetime
@@ -78,16 +97,16 @@ def _complete(bars: Sequence[Bar15], as_of: dt.datetime | None) -> list[Bar15]:
     return sorted(done, key=lambda b: b.start)
 
 
-def first_candle(bars: Sequence[Bar15], as_of: dt.datetime | None = None) -> FirstCandle | None:
-    """The 09:15 candle, only once it is complete (as_of >= 09:30)."""
+def first_candle(bars: Sequence[Bar15], as_of: dt.datetime | None = None, session: Session = NSE) -> FirstCandle | None:
+    """The session's first candle (NSE 09:15), only once it is complete."""
     for b in _complete(bars, as_of):
-        if b.start.time() == FIRST_CANDLE_START:
+        if b.start.time() == session.first_start:
             return FirstCandle(high=b.high, low=b.low, open=b.open)
     return None
 
 
-def _later(bars: Sequence[Bar15], as_of: dt.datetime | None) -> list[Bar15]:
-    return [b for b in _complete(bars, as_of) if b.start.time() >= SECOND_CANDLE_START]
+def _later(bars: Sequence[Bar15], as_of: dt.datetime | None, session: Session = NSE) -> list[Bar15]:
+    return [b for b in _complete(bars, as_of) if b.start.time() >= session.second_start]
 
 
 def is_gap_through_stop(direction: Direction, day_open: float, stop: float) -> bool:
@@ -109,6 +128,7 @@ def resolve_gap_exit(
     bars: Sequence[Bar15],
     as_of: dt.datetime | None = None,
     frozen: FirstCandle | None = None,
+    session: Session = NSE,
 ) -> GapExitResult:
     """
     Existing position, open gapped through its structural stop. `as_of=None`
@@ -116,16 +136,16 @@ def resolve_gap_exit(
     at `as_of` are used (live). Exit fills at the first-candle level (or the
     candle's open if it gapped past that level); no reverse entry here.
     """
-    fc = frozen or first_candle(bars, as_of)
+    fc = frozen or first_candle(bars, as_of, session)
     if fc is None:
         return GapExitResult("GAP_EXIT_PENDING" if as_of is not None else "NO_FIRST_CANDLE")
     protective = fc.low if direction == "BUY" else fc.high
-    for b in _later(bars, as_of):
+    for b in _later(bars, as_of, session):
         if direction == "BUY" and b.low < fc.low:
             return GapExitResult("GAP_EXITED", fc, min(fc.low, b.open), b.start, protective)
         if direction == "SELL" and b.high > fc.high:
             return GapExitResult("GAP_EXITED", fc, max(fc.high, b.open), b.start, protective)
-    day_over = as_of is None or as_of.time() >= SESSION_END
+    day_over = as_of is None or as_of.time() >= session.close
     return GapExitResult("GAP_HELD" if day_over else "GAP_EXIT_PENDING", fc, None, None, protective)
 
 
@@ -134,16 +154,17 @@ def resolve_gap_entry(
     bars: Sequence[Bar15],
     as_of: dt.datetime | None = None,
     frozen: FirstCandle | None = None,
+    session: Session = NSE,
 ) -> GapEntryResult:
     """Fresh entry after a gap past the system point: BUY above the first
     candle HIGH, SELL below its LOW (first completed later candle that does)."""
-    fc = frozen or first_candle(bars, as_of)
+    fc = frozen or first_candle(bars, as_of, session)
     if fc is None:
         return GapEntryResult("NO_FIRST_CANDLE")
-    for b in _later(bars, as_of):
+    for b in _later(bars, as_of, session):
         if direction == "BUY" and b.high > fc.high:
             return GapEntryResult("TRIGGERED", fc, max(fc.high, b.open), b.start)
         if direction == "SELL" and b.low < fc.low:
             return GapEntryResult("TRIGGERED", fc, min(fc.low, b.open), b.start)
-    day_over = as_of is None or as_of.time() >= SESSION_END
+    day_over = as_of is None or as_of.time() >= session.close
     return GapEntryResult("NO_ENTRY" if day_over else "WAITING", fc)

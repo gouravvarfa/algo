@@ -38,7 +38,9 @@ import datetime as dt
 import uuid
 
 from app.strategy.top_bottom.gap_protocol import (
+    NSE,
     Bar15,
+    Session,
     is_gap_past_system_point,
     is_gap_through_stop,
     resolve_gap_entry,
@@ -135,14 +137,14 @@ def _open_trade(
     )
 
 
-def res_handled_gap(pre_top, pre_bottom, prev_close, day_open, day_bars) -> bool:
+def res_handled_gap(pre_top, pre_bottom, prev_close, day_open, day_bars, session: Session = NSE) -> bool:
     """True when today is a gap-past-system-point day with a usable first
     candle but no breakout — the close-based entry must then be skipped."""
     for direction, level in (("BUY", pre_top), ("SELL", pre_bottom)):
         if level is None:
             continue
         if is_gap_past_system_point(direction, prev_close, day_open, level):
-            return resolve_gap_entry(direction, day_bars).status == "NO_ENTRY"
+            return resolve_gap_entry(direction, day_bars, session=session).status == "NO_ENTRY"
     return False
 
 
@@ -160,6 +162,7 @@ def run_top_bottom_backtest(
     highs: list[float] | None = None,
     lows: list[float] | None = None,
     breakeven_pct: float | None = None,        # profit that arms the breakeven stop; None = the index rule (2%). Stocks pass 3%
+    session: Session = NSE,                    # the trading day the 15-minute gap bars belong to (NSE 09:15; MCX 09:00)
 ) -> tuple[list[Signal], list[Trade]]:
     """
     Pure function: bar arrays in, signals + trades out. Entries, exits and
@@ -231,7 +234,7 @@ def run_top_bottom_backtest(
             if open_trade is not None:
                 direction = open_trade.direction
                 if is_gap_through_stop(direction, opens[i], open_trade.active_stop):
-                    res = resolve_gap_exit(direction, day_bars)
+                    res = resolve_gap_exit(direction, day_bars, session=session)
                     if res.status == "GAP_EXITED":
                         open_trade.exit_date = res.exit_time
                         open_trade.exit_price = res.exit_level
@@ -270,7 +273,7 @@ def run_top_bottom_backtest(
                 for direction, level, anchor in (("BUY", pre_top, pre_bottom), ("SELL", pre_bottom, pre_top)):
                     if level is None or not is_gap_past_system_point(direction, closes[i - 1], opens[i], level):
                         continue
-                    res = resolve_gap_entry(direction, day_bars)
+                    res = resolve_gap_entry(direction, day_bars, session=session)
                     if res.status == "NO_FIRST_CANDLE":
                         break
                     if res.status == "TRIGGERED":
@@ -287,7 +290,7 @@ def run_top_bottom_backtest(
                     break
                 if open_trade is not None and open_trade.gap_state == "GAP_ENTRY" and open_trade.entry_date.date() == date.date():
                     continue
-                if res_handled_gap(pre_top, pre_bottom, closes[i - 1], opens[i], day_bars):
+                if res_handled_gap(pre_top, pre_bottom, closes[i - 1], opens[i], day_bars, session):
                     continue
 
         latest_top, latest_bottom = cur_top, cur_bottom

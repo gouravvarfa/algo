@@ -38,7 +38,8 @@ from app.paper_trading.shadow import Shadow
 from app.live.ticks import TickFeed, merge_minutes
 from app.providers import angelone_scrip_master as scrip_master
 from app.providers.angelone_provider import AngelOneProvider
-from app.strategy.top_bottom.gap_protocol import Bar15
+from app.strategy.top_bottom.gap_protocol import NSE, SESSIONS, Bar15, Session
+from app.providers.commodities import COMMODITIES
 from app.strategy.top_bottom.intraday import ENTRY_DAY_STOP_PCT, Minute, STRUCT_CAP_DISTANCE, run_intraday
 from app.strategy.top_bottom.backtest import SWING_LEFT_BARS, SWING_RIGHT_BARS, run_top_bottom_backtest
 from app.strategy.top_bottom.strategy import _build_level_lines
@@ -79,15 +80,15 @@ STOCK_BREAKEVEN_PCT = 0.03          # stocks arm the breakeven stop at +3% profi
 
 
 def breakeven_pct_for(symbol: str) -> float | None:
-    """None = the strategy's own index rule (2%). Every other symbol is a stock future: 3%."""
-    return None if symbol in INDEX_TOKENS else STOCK_BREAKEVEN_PCT
+    """None = the strategy's own index rule (2%): BankNifty, Nifty and the MCX gold / silver futures. Every other symbol is a stock future: 3%."""
+    return None if symbol in INDEX_TOKENS or symbol in COMMODITIES else STOCK_BREAKEVEN_PCT
 
 
 STOCK_STRUCT_CAP = 0.03             # stocks: a structural stop 3%+ away from the entry keeps the entry-day 1% stop (the indexes use 2%)
 
 
 def struct_cap_for(symbol: str) -> float:
-    return STRUCT_CAP_DISTANCE if symbol in INDEX_TOKENS else STOCK_STRUCT_CAP
+    return STRUCT_CAP_DISTANCE if symbol in INDEX_TOKENS or symbol in COMMODITIES else STOCK_STRUCT_CAP
 
 
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
@@ -115,6 +116,17 @@ class Instrument(BaseModel):
     from_date: str  # replay starts FLAT here
     added_at: str  # trades entered at/after this are LIVE paper trades
     owner: str | None = None  # platform user id; None = the single-user / open-mode watchlist
+    session: str = "NSE"  # the trading day the strategy's first-candle / gap rules use: NSE, or MCX for gold and silver
+    point_value: float | None = None  # rupees per lot for a price move of 1.00 when the lot size alone does not say (MCX gold / silver); None = quantity x points
+
+    @property
+    def sess(self) -> Session:
+        return SESSIONS.get(self.session, NSE)
+
+    @property
+    def pnl_units(self) -> int:
+        """What a price point is multiplied with to get rupees: the units traded, or lots x point value for the MCX contracts (quoted in another unit than the lot)."""
+        return int(round((self.lots or 1) * self.point_value)) if self.point_value else self.quantity
 
 
 class PaperError(ValueError):
@@ -125,9 +137,9 @@ def now_ist() -> dt.datetime:
     return dt.datetime.now(IST).replace(tzinfo=None)
 
 
-def market_open(now: dt.datetime | None = None) -> bool:
+def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
     now = now or now_ist()
-    return now.weekday() < 5 and dt.time(9, 15) <= now.time() <= dt.time(15, 30)
+    return now.weekday() < 5 and session.first_start <= now.time() <= session.close
 
 
 def trim_partial_first_day(mins: list, lenient: bool = False) -> list:
@@ -264,6 +276,8 @@ class PaperEngine:
                 quantity=size * c.lot_size, lots=size, lot_size=c.lot_size, token=c.token,
                 trading_symbol=c.trading_symbol, exch_seg=c.exch_seg, expiry=c.expiry,
             )
+            if c.exch_seg == "MCX":
+                fields.update(session="MCX", point_value=COMMODITIES[symbol]["point_value"])
         else:
             raise PaperError("instrument_type must be EQUITY or FUTURE")
 
@@ -340,7 +354,7 @@ class PaperEngine:
         chain_capable = minutes is None and inst.instrument_type == "FUTURE"
         if raw.empty and not chain_capable:
             raise PaperError("No candle data returned by Angel One")
-        confirmed = raw if raw.empty else (drop_incomplete_trailing_daily_bar(raw, now) if minutes is None else drop_incomplete_trailing_bars(raw, minutes, now))
+        confirmed = raw if raw.empty else (drop_incomplete_trailing_daily_bar(raw, now, inst.sess.close) if minutes is None else drop_incomplete_trailing_bars(raw, minutes, now))
         if len(confirmed) < 5 and not chain_capable:
             raise PaperError("Not enough confirmed candles yet")
 
@@ -383,8 +397,8 @@ class PaperEngine:
                 engine_note = "WARNING: " + "; ".join(chain.warnings) + ". " + engine_note
         else:
             signals, trades = run_top_bottom_backtest(
-                inst.symbol, inst.trading_symbol, inst.expiry, "STOCK", inst.quantity, dates, closes, list(confirmed["open"]),
-                intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]], breakeven_pct_for(inst.symbol),
+                inst.symbol, inst.trading_symbol, inst.expiry, "STOCK", inst.pnl_units, dates, closes, list(confirmed["open"]),
+                intraday, [float(h) for h in confirmed["high"]], [float(x) for x in confirmed["low"]], breakeven_pct_for(inst.symbol), session=inst.sess,
             )
             engine_note, engine_warn = "Daily-close rules only", False
             if minutes is None:
@@ -426,7 +440,7 @@ class PaperEngine:
                 "exit_date": None if is_open else _iso(t.exit_date),
                 "exit_price": None if is_open else round(t.exit_price, 2),
                 "pnl_points": round(pts, 2),
-                "pnl_amount": round(pts * inst.quantity, 2),
+                "pnl_amount": round(pts * inst.pnl_units, 2),
                 "pnl_pct": round(pts / t.entry_price * 100.0, 2) if t.entry_price else 0.0,
                 "exit_reason": None if is_open else t.exit_reason,
                 "breakeven": t.breakeven_date is not None,
@@ -653,7 +667,7 @@ class PaperEngine:
 
         async def get_daily(c):
             df = await self._contract_daily(c, from_dt, now)
-            return drop_incomplete_trailing_daily_bar(df, now) if len(df) else df
+            return drop_incomplete_trailing_daily_bar(df, now, inst.sess.close) if len(df) else df
 
         async def get_minutes(c):
             if c.token == contracts[0].token:
@@ -666,16 +680,16 @@ class PaperEngine:
             return await self._contract_minutes(c, contract_cutoff(contracts[0].expiry), now, lenient=inst.symbol not in INDEX_TOKENS)
 
         def daily_engine(c, df):
-            _sig, trs = run_top_bottom_backtest(inst.symbol, c.trading_symbol, c.expiry.isoformat(), "STOCK", inst.quantity,
+            _sig, trs = run_top_bottom_backtest(inst.symbol, c.trading_symbol, c.expiry.isoformat(), "STOCK", inst.pnl_units,
                                                 [t.to_pydatetime() for t in df.index], [float(x) for x in df["close"]], list(df["open"]),
                                                 gap_bars if c.token == inst.token else None, [float(h) for h in df["high"]], [float(x) for x in df["low"]],
-                                                breakeven_pct_for(inst.symbol))
+                                                breakeven_pct_for(inst.symbol), session=inst.sess)
             return trs
 
         return await chain_eval.evaluate(
             contracts=contracts, from_dt=from_dt, now=now, symbol=inst.symbol, get_daily=get_daily, get_minutes=get_minutes,
             daily_engine=daily_engine, reconstruct=lambda rows, fd: reconstruct_state(rows, fd, breakeven_pct_for(inst.symbol)),
-            entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol))
+            entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess)
 
     async def _live_intraday(self, inst: Instrument, confirmed: pd.DataFrame, daily_trades: list, now: dt.datetime):
         """Live version of the replay's hybrid mode. Structure (System Points) still comes from confirmed DAILY closes;
@@ -713,7 +727,7 @@ class PaperEngine:
             first_day = mins[0].ts.date()      # run_intraday never uses a day's own daily candle on that day, so no filtering is needed
             initial, _warn = reconstruct_state(rows, first_day, breakeven_pct_for(inst.symbol))
             res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol),
-                               breakeven_pct=breakeven_pct_for(inst.symbol))
+                               breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess)
             older = [t for t in daily_trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
             note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {struct_cap_for(inst.symbol) * 100:g}%+ away); earlier history uses daily closes"
             out = older + res.trades
@@ -759,7 +773,7 @@ class PaperEngine:
         failure here never blocks the instrument: the close rules still run."""
         cached = self._bars15.get(inst.id)
         if cached:
-            if self._new_15m_candle_closed(cached[0], now) or (now - cached[0]).total_seconds() >= GAP_15M_REFRESH_SECONDS:
+            if self._new_15m_candle_closed(cached[0], now, inst.sess) or (now - cached[0]).total_seconds() >= GAP_15M_REFRESH_SECONDS:
                 self._refresh_later(("g", inst.id), lambda: self._load_gap_bars(inst, from_dt, now_ist()))
             return cached[1]
         return await self._load_gap_bars(inst, from_dt, now)
@@ -782,10 +796,10 @@ class PaperEngine:
         return out
 
     @staticmethod
-    def _new_15m_candle_closed(fetched_at: dt.datetime, now: dt.datetime) -> bool:
+    def _new_15m_candle_closed(fetched_at: dt.datetime, now: dt.datetime, session: Session = NSE) -> bool:
         """True once a 15-minute candle has completed after the last fetch (+20 s for Angel One to publish it), so the
         gap protocol sees the 09:15-09:30 candle (and every later one) right after it closes, not up to 10 minutes late."""
-        if not market_open(now):
+        if not market_open(now, session):
             return False
         boundary = now.replace(minute=now.minute - now.minute % 15, second=0, microsecond=0)
         return fetched_at < boundary + dt.timedelta(seconds=20) <= now
@@ -932,13 +946,18 @@ class PaperEngine:
             self.last_sweep_s = time.perf_counter() - t0
             self._sweeps.append((time.time(), self.last_sweep_s * 1000))
 
+    def _any_market_open(self) -> bool:
+        """NSE hours, or the MCX hours while a gold / silver strategy is assigned (they trade until late evening)."""
+        return market_open() or any(i.session != "NSE" and market_open(session=i.sess) for i in self.instruments.values())
+
     async def _loop(self) -> None:
         while True:
             try:
                 await self.refresh_all()
             except Exception:
                 log.exception("tick failed")
-            if market_open() and self.feed.healthy():
+            open_now = self._any_market_open()
+            if open_now and self.feed.healthy():
                 try:                                         # a new tick arrived: re-check stops / entries (at most about once a second)
                     await asyncio.wait_for(self.feed.updated.wait(), 5)
                 except asyncio.TimeoutError:
@@ -946,7 +965,7 @@ class PaperEngine:
                 self.feed.updated.clear()
                 await asyncio.sleep(self.sweep_sleep(self.last_sweep_s))
             else:
-                await asyncio.sleep(20 if market_open() else 300)
+                await asyncio.sleep(20 if open_now else 300)
 
     def start(self) -> None:
         for inst in self.instruments.values():

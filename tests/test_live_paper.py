@@ -130,6 +130,7 @@ def _engine(provider):
 
 class _I:
     id, symbol, exch_seg, token = "i1", "BANKNIFTY", "NFO", "1"
+    sess = pe.NSE            # every real Instrument has its trading session (NSE unless it is gold / silver)
 
 
 def test_live_intraday_failure_never_breaks_the_instrument(caplog):

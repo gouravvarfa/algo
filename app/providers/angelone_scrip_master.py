@@ -12,9 +12,10 @@ from dataclasses import dataclass
 import httpx
 
 from app.core.cache import cache
+from app.providers.commodities import COMMODITIES
 
 SCRIP_MASTER_URL = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json"
-CACHE_KEY = "angelone:scrip_master:v3"  # v3: broadened to include NFO index futures for Top-Bottom Backtesting
+CACHE_KEY = "angelone:scrip_master:v4"  # v4: also the MCX gold / silver futures (v3: NFO index futures for Top-Bottom Backtesting)
 CACHE_TTL_SECONDS = 24 * 3600
 
 # NSE: equities ("") + indices ("AMXIDX"). NFO: stock futures ("FUTSTK") and
@@ -22,6 +23,8 @@ CACHE_TTL_SECONDS = 24 * 3600
 # are deliberately excluded, this project never trades options.
 RELEVANT_NSE_TYPES = {"", "AMXIDX"}
 RELEVANT_NFO_TYPES = {"FUTSTK", "FUTIDX"}
+# MCX: only the gold and silver futures of app/providers/commodities.py ("FUTCOM")
+MCX_COMMODITY_TYPES = {"FUTCOM"}
 
 
 @dataclass
@@ -52,6 +55,7 @@ async def _download_and_filter() -> list[dict]:
         for row in rows
         if (row.get("exch_seg") == "NSE" and row.get("instrumenttype") in RELEVANT_NSE_TYPES)
         or (row.get("exch_seg") == "NFO" and row.get("instrumenttype") in RELEVANT_NFO_TYPES)
+        or (row.get("exch_seg") == "MCX" and row.get("instrumenttype") in MCX_COMMODITY_TYPES and row.get("name") in COMMODITIES)
     ]
     del rows  # the full ~150k-row list is no longer needed
     cache.set(CACHE_KEY, filtered, CACHE_TTL_SECONDS)
@@ -148,7 +152,7 @@ class FutureContract:
     underlying: str  # scrip master "name" — e.g. "RELIANCE", "NIFTY"
     trading_symbol: str  # e.g. "RELIANCE29SEP26FUT"
     token: str
-    exch_seg: str  # always "NFO"
+    exch_seg: str  # "NFO" (stock / index futures) or "MCX" (gold / silver)
     expiry: str  # ISO date "2026-09-29"
     is_index: bool  # True for FUTIDX (NIFTY/BANKNIFTY/...), False for FUTSTK
     lot_size: int  # real exchange lot size, straight from Angel One's own scrip master — never guessed
@@ -186,9 +190,9 @@ async def search_futures(query: str, limit: int = 25) -> list[FutureContract]:
     matches = [
         row
         for row in rows
-        if row.get("exch_seg") == "NFO"
-        and row.get("instrumenttype") in RELEVANT_NFO_TYPES
-        and str(row.get("name", "")).upper().startswith(q)
+        if str(row.get("name", "")).upper().startswith(q)
+        and ((row.get("exch_seg") == "NFO" and row.get("instrumenttype") in RELEVANT_NFO_TYPES)
+             or (row.get("exch_seg") == "MCX" and row.get("instrumenttype") in MCX_COMMODITY_TYPES and row.get("name") in COMMODITIES))
     ]
     matches.sort(key=lambda r: (r["name"], _parse_expiry(r.get("expiry", ""))))
     return [
@@ -196,7 +200,7 @@ async def search_futures(query: str, limit: int = 25) -> list[FutureContract]:
             underlying=row["name"],
             trading_symbol=row["symbol"],
             token=row["token"],
-            exch_seg="NFO",
+            exch_seg=row["exch_seg"],
             expiry=_parse_expiry(row.get("expiry", "")).date().isoformat(),
             is_index=row.get("instrumenttype") == "FUTIDX",
             lot_size=int(float(row.get("lotsize") or 0)),
