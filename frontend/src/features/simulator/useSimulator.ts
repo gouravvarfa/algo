@@ -4,7 +4,7 @@ import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { fresh, useLiveTicks } from '../../lib/stream'
 import { useToast } from '../../lib/toast'
-import { AUTO_FLY, AUTO_FLY_DELTA, PRESET_RULES, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
+import { ADJ_DELTA, ADJ_MAX, ADJ_SELL_DELTA, AUTO_FLY, AUTO_FLY_ADJ, AUTO_FLY_DELTA, PRESET_RULES, pickResell, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
 const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY']
 const ls = {
@@ -349,7 +349,7 @@ export function useSimulator(ds: DataSource) {
     }
     const { plan, missing } = planPreset(c, name)
     if (missing.length) { toast(`${name}: no real price for ${missing.join(', ')} at this ${c.mode === 'intraday' ? 'minute' : 'date'}; nothing added`); return }
-    const legs = plan.map(([s, o, k]) => { const l = makeLeg(c, s, o, k); return typeof l !== 'string' && name === AUTO_FLY && s === 'SELL' ? { ...l, auto_delta: AUTO_FLY_DELTA } : l })
+    const legs = plan.map(([s, o, k]) => { const l = makeLeg(c, s, o, k); if (typeof l === 'string' || s !== 'SELL') return l; return name === AUTO_FLY ? { ...l, auto_delta: AUTO_FLY_DELTA } : name === AUTO_FLY_ADJ ? { ...l, auto_delta: ADJ_DELTA, auto_resell: ADJ_SELL_DELTA, auto_left: ADJ_MAX } : l })
     const bad = legs.find((l) => typeof l === 'string')
     if (bad) { toast(String(bad)); return }
     setPositions((p) => [...p, ...(legs as SimPos[])])
@@ -371,8 +371,25 @@ export function useSimulator(ds: DataSource) {
     const hit = positions.filter((p) => !p.closed && p.auto_delta && p.expiry === chain.expiry && after(p) && valued[String(p.id)]?.ltp != null
       && Math.abs(chain.rows.find((r) => r.strike === p.strike)?.[p.opt]?.delta ?? 0) >= p.auto_delta)
     if (!hit.length) return
-    setPositions((all) => all.map((x) => (hit.some((h) => h.id === x.id) ? { ...x, closed: true, exit: valued[String(x.id)].ltp!, exit_date: chain.date, exit_time: (chain.time ?? '').slice(0, 5) || null, exit_reason: `auto Δ${x.auto_delta}`, realized: valued[String(x.id)].pnl } : x)))
-    toast(`Auto close at Δ${hit[0].auto_delta}: ${hit.map((h) => `${n0(h.strike)} ${h.opt}`).join(', ')}`)
+    const fresh: SimPos[] = []
+    const msgs: string[] = []
+    const reasons = new Map<SimPos['id'], string>()
+    for (const h of hit) {
+      let why = `auto Δ${h.auto_delta}`
+      if (h.auto_resell && (h.auto_left ?? 0) > 0) {
+        const hedge = positions.find((x) => !x.closed && x.side === 'BUY' && x.opt === h.opt && x.expiry === h.expiry)?.strike
+        const k = hedge == null ? null : pickResell(chain, h.opt, hedge, h.auto_resell, h.strike)
+        const leg = k == null ? null : makeLeg(chain, 'SELL', h.opt, k)
+        if (leg && typeof leg !== 'string') {
+          fresh.push({ ...leg, auto_delta: h.auto_delta, auto_resell: h.auto_resell, auto_left: (h.auto_left ?? 0) - 1 })
+          why += ` → sold ${n0(k!)} ${h.opt}`
+          msgs.push(`${n0(h.strike)} ${h.opt} closed, ${n0(k!)} ${h.opt} sold`)
+        } else msgs.push(`${n0(h.strike)} ${h.opt} closed (no strike near Δ${h.auto_resell} inside the hedge to sell again)`)
+      } else msgs.push(`${n0(h.strike)} ${h.opt} closed${h.auto_resell ? ' (adjustments used up)' : ''}`)
+      reasons.set(h.id, why)
+    }
+    setPositions((all) => [...all.map((x) => (reasons.has(x.id) ? { ...x, closed: true, exit: valued[String(x.id)].ltp!, exit_date: chain.date, exit_time: (chain.time ?? '').slice(0, 5) || null, exit_reason: reasons.get(x.id), realized: valued[String(x.id)].pnl } : x)), ...fresh])
+    toast(`Auto adjust at Δ${hit[0].auto_delta}: ${msgs.join(' · ')}`)
   }, [valued]) // eslint-disable-line react-hooks/exhaustive-deps
   const clearAll = () => { if (readOnly) return; if (positions.length && !confirm('Remove all simulated positions?')) return; setPositions([]) }
   const exportCsv = () => {

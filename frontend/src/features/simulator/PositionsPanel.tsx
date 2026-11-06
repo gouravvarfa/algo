@@ -46,7 +46,8 @@ export function PositionsPanel(p: Props) {
               const off = p.chain && x.expiry === p.chain.expiry ? x.strike - p.chain.atm : null
               const leg = !x.closed && p.chain && x.expiry === p.chain.expiry ? p.chain.rows.find((r) => r.strike === x.strike)?.[x.opt] : null
               const delta = leg?.delta ?? null
-              const hit = x.side === 'SELL' && delta != null && Math.abs(delta) >= ADJUST_DELTA
+              const trig = x.auto_delta ?? ADJUST_DELTA
+              const hit = x.side === 'SELL' && delta != null && Math.abs(delta) >= trig
               const warn: string[] = []
               if (!x.closed && (p.date < x.entry_date || (p.date === x.entry_date && p.useIntra && x.entry_time && p.tm && p.tm < x.entry_time))) warn.push('viewing a time before entry')
               if (x.stale_entry) warn.push(`entry price was a trade ${x.stale_entry} min old`)
@@ -59,7 +60,7 @@ export function PositionsPanel(p: Props) {
                   <td className="l">
                     <span className={`badge ${x.side}`}>{x.side}</span> <b>{n0(x.strike)} {x.opt}</b>
                     {off != null && <span className="sub"> {off === 0 ? 'ATM' : (off > 0 ? '+' : '−') + n0(Math.abs(off))}</span>}
-                    {delta != null && <div className={`legdelta${hit ? ' hit' : ''}`} title={x.side === 'SELL' ? `Close this sold leg at delta ${ADJUST_DELTA}` : undefined}>Δ {num(Math.abs(delta), 2)}{x.side === 'SELL' ? ` / ${ADJUST_DELTA}` : ''}{hit ? ' · close this leg' : ''}</div>}
+                    {delta != null && <div className={`legdelta${hit ? ' hit' : ''}`} title={x.side === 'SELL' ? `Close this sold leg at delta ${trig}` : undefined}>Δ {num(Math.abs(delta), 2)}{x.side === 'SELL' ? ` / ${trig}` : ''}{hit ? ' · close this leg' : ''}</div>}
                     <div className="sub legnote">{info}</div>
                   </td>
                   <td data-label="Lots">{x.closed ? x.lots : p.readOnly ? x.lots : <span className="acts"><button className="ib" title="Fewer lots" onClick={() => p.onLots(x.id, -1)}>−</button><b>{x.lots}{p.mult > 1 && <span className="sub">×{p.mult}</span>}</b><button className="ib" title="More lots" onClick={() => p.onLots(x.id, 1)}>+</button></span>}</td>

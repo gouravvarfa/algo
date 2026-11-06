@@ -41,9 +41,15 @@ export interface Chain {
 
 export const AUTO_FLY = '⭐ Iron Fly · ₹65 hedge · auto close at Δ0.62'
 export const AUTO_FLY_DELTA = 0.62
+export const AUTO_FLY_ADJ = '⭐ Iron Fly · ₹65 hedge · adjust at Δ0.70, re-sell Δ0.50'
+export const ADJ_DELTA = 0.70           // the sold leg is closed at this delta ...
+export const ADJ_SELL_DELTA = 0.50      // ... and the same side is sold again at the strike nearest this delta
+export const ADJ_MAX = 3                // adjustments per side, so a one-way day cannot churn without end
 
 export interface SimPos {
   auto_delta?: number | null      // a sold leg of the auto iron fly: closed by the simulator at this delta
+  auto_resell?: number | null     // ... and, when set, the same side is sold again at the strike nearest this delta
+  auto_left?: number | null       // adjustments this side may still make
   id: number | string
   side: Side
   opt: Opt
@@ -100,6 +106,7 @@ export const SIM_PRESETS: Record<string, [Side, Opt, number][]> = {
   'Bear Call Credit Spread': [['SELL', 'CE', 3], ['BUY', 'CE', 6]],
   'Iron Fly': [['SELL', 'CE', 0], ['SELL', 'PE', 0], ['BUY', 'CE', 6], ['BUY', 'PE', 6]],
   [AUTO_FLY]: [],      // strikes are chosen by planPreset: ATM sold, hedges nearest ₹65
+  [AUTO_FLY_ADJ]: [],  // the same legs; the adjusting is done by the simulator (see useSimulator)
   'Short Straddle': [['SELL', 'CE', 0], ['SELL', 'PE', 0]],
   'Short Strangle': [['SELL', 'CE', 4], ['SELL', 'PE', 4]],
   '⭐ Short Strangle +2 · SL 60% · T-2 close (research best)': [['SELL', 'CE', 2], ['SELL', 'PE', 2]],
@@ -117,7 +124,7 @@ export function planPreset(chain: Chain, name: string): { plan: [Side, Opt, numb
   const ai = strikes.indexOf(chain.atm)
   const plan: [Side, Opt, number][] = []
   const missing: string[] = []
-  if (name === AUTO_FLY) {
+  if (name === AUTO_FLY || name === AUTO_FLY_ADJ) {
     const hedge = (opt: Opt) => chain.rows.filter((r) => (opt === 'CE' ? r.strike > chain.atm : r.strike < chain.atm) && (r[opt]?.ltp ?? 0) > 0)
       .sort((a, b) => Math.abs(a[opt]!.ltp! - 65) - Math.abs(b[opt]!.ltp! - 65))[0]?.strike
     const ce = hedge('CE'), pe = hedge('PE')
@@ -143,3 +150,11 @@ export const kfmt = (v: number): string =>
   Math.abs(v) >= 1e5 ? (v / 1e5).toFixed(1) + 'L' : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v).toLocaleString('en-IN')
 
 export const daysBetween = (from: string, to: string): number => Math.round((new Date(to).getTime() - new Date(from).getTime()) / 864e5)
+
+/** The strike to sell again after an adjustment: on the same side, nearest the target delta, strictly inside the hedge that is held (so the fly stays an iron fly),
+ *  with a real price, and not the strike that was just closed. null when no strike is close enough to the target. */
+export function pickResell(chain: Chain, opt: Opt, hedge: number, target: number, closed: number, tol = 0.15): number | null {
+  const c = chain.rows.filter((r) => (opt === 'CE' ? r.strike < hedge : r.strike > hedge) && r.strike !== closed && (r[opt]?.ltp ?? 0) > 0 && r[opt]?.delta != null)
+    .map((r) => ({ k: r.strike, d: Math.abs(Math.abs(r[opt]!.delta!) - target) })).sort((a, b) => a.d - b.d)[0]
+  return c && c.d <= tol ? c.k : null
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AUTO_FLY, kfmt, planPreset, slPrice, type Chain } from './sim'
+import { AUTO_FLY, AUTO_FLY_ADJ, kfmt, pickResell, planPreset, slPrice, type Chain } from './sim'
 
 const row = (strike: number, ce: number | null, pe: number | null) => ({
   strike,
@@ -38,5 +38,20 @@ describe('auto iron fly preset', () => {
     const row = (strike: number, ce: number, pe: number) => ({ strike, CE: { ltp: ce }, PE: { ltp: pe } })
     const chain = { atm: 100, rows: [row(80, 300, 40), row(90, 200, 62), row(100, 100, 100), row(110, 57, 150), row(120, 40, 200)] } as unknown as Chain
     expect(planPreset(chain, AUTO_FLY).plan).toEqual([['BUY', 'CE', 110], ['BUY', 'PE', 90], ['SELL', 'CE', 100], ['SELL', 'PE', 100]])
+  })
+
+  it('the adjusting iron fly places the same legs as the auto fly', () => {
+    const row = (strike: number, ce: number, pe: number) => ({ strike, CE: { ltp: ce }, PE: { ltp: pe } })
+    const c = { atm: 100, rows: [row(80, 300, 40), row(90, 200, 62), row(100, 100, 100), row(110, 57, 150), row(120, 40, 200)] } as unknown as Chain
+    expect(planPreset(c, AUTO_FLY_ADJ).plan).toEqual(planPreset(c, AUTO_FLY).plan)
+  })
+
+  it('re-sell strike: nearest the target delta, strictly inside the held hedge, never the strike just closed', () => {
+    const row = (k: number, ce: number, pe: number) => ({ strike: k, CE: { ltp: 50, delta: ce }, PE: { ltp: 50, delta: pe } })
+    const c = { rows: [row(90, 0.8, -0.2), row(95, 0.65, -0.35), row(100, 0.5, -0.5), row(105, 0.34, -0.66), row(110, 0.2, -0.8)] } as unknown as Chain
+    expect(pickResell(c, 'CE', 110, 0.5, 95)).toBe(100)                  // nearest 0.50, hedge at 110 is outside it
+    expect(pickResell(c, 'CE', 100, 0.5, 95)).toBeNull()                 // 100 is the hedge, so only strikes below it count and none is near 0.50
+    expect(pickResell(c, 'PE', 90, 0.5, 105)).toBe(100)                  // put side: strikes above the hedge
+    expect(pickResell(c, 'CE', 100, 0.5, 90, 0.1)).toBeNull()            // nothing within the tolerance
   })
 })
