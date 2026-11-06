@@ -48,8 +48,12 @@ def env() -> dict:
 
 
 class Limiter:
-    def __init__(self, rps: float):
-        self.gap, self.lock, self.next = 1.0 / rps, threading.Lock(), 0.0
+    """One shared clock for every thread. When Dhan answers 429 (too many requests) ALL threads stop for `rest` seconds and the pace drops by a quarter
+    (never below MIN_RPS), so a throttle is waited out once instead of every thread hammering it. The pace is never raised again during a run."""
+    MIN_RPS = 1.0
+
+    def __init__(self, rps: float, rest: float = 90.0):
+        self.gap, self.rest, self.lock, self.next, self.hits = 1.0 / rps, rest, threading.Lock(), 0.0, 0
 
     def wait(self):
         with self.lock:
@@ -58,6 +62,15 @@ class Limiter:
             self.next = at + self.gap
         if at > now:
             time.sleep(at - now)
+
+    def throttled(self):
+        with self.lock:
+            now = time.monotonic()
+            if self.next < now + self.rest - 5:                  # a throttle already being waited out is not counted again by the other threads
+                self.hits += 1
+                self.gap = min(self.gap * 1.25, 1.0 / self.MIN_RPS)
+                self.next = now + self.rest
+                print(f"{time.strftime('%H:%M:%S')} Dhan said too many requests: all threads rest {self.rest:.0f}s, pace now {1.0 / self.gap:.2f} calls/s (hit {self.hits})", flush=True)
 
 
 class AuthError(Exception):
@@ -83,7 +96,7 @@ def windows(start: dt.date, end: dt.date):
 
 def fetch(h: dict, lim: Limiter, body: dict):
     """(status, parsed JSON or text). Retries network errors and rate limits; raises AuthError when the token is refused."""
-    for attempt in range(6):
+    for attempt in range(8):
         lim.wait()
         req = urllib.request.Request(URL, data=json.dumps(body).encode(), headers=h, method="POST")
         try:
@@ -93,7 +106,10 @@ def fetch(h: dict, lim: Limiter, body: dict):
             text = e.read().decode(errors="replace")[:300]
             if e.code in (401, 403) or "DH-901" in text or "DH-902" in text:
                 raise AuthError(text)
-            if e.code == 429 or "DH-904" in text or e.code >= 500:
+            if e.code == 429 or "DH-904" in text:
+                lim.throttled()
+                continue
+            if e.code >= 500:
                 time.sleep(5 * (attempt + 1))
                 continue
             return e.code, text
