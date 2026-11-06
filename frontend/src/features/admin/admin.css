@@ -42,3 +42,8 @@ td:has(> .btnrow.acts) { width: 1%; }
 @media (max-width: 860px) {
   .btnrow.acts { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
 }
+/* searchable drop-down (SearchSelect): the list sits under the box, rows are big enough for a finger */
+.ss { position: relative; flex: 1; min-width: 0; } .ss input { width: 100%; }
+.sslist { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 90; max-height: 260px; overflow-y: auto; margin: 0; padding: 4px; list-style: none; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.35); -webkit-overflow-scrolling: touch; }
+.sslist li { padding: 10px 12px; border-radius: 8px; font-family: var(--font-mono); font-size: 13px; cursor: pointer; }
+.sslist li:hover, .sslist li.on { background: var(--bg-hover); } .sslist li.none { color: var(--text-muted); cursor: default; font-family: inherit; }

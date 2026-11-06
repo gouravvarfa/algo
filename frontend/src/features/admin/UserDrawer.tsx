@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, api, del, get, post, put } from '../../lib/api'
 import { dt } from '../../lib/format'
 import { useToast } from '../../lib/toast'
+import { SearchSelect } from './SearchSelect'
 import './admin.css'
 
 interface Limits { max_lots: number | null; allowed_symbols: string[] | null }
@@ -73,8 +74,7 @@ export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user:
         </ul>
         {canAssign && (
           <form className="linkrow" onSubmit={(e: FormEvent) => { e.preventDefault(); if (sym.trim()) assign.mutate() }}>
-            <input list="fo-stocks" value={sym} onChange={(e) => setSym(e.target.value.toUpperCase())} placeholder="Type to pick an F&O stock, e.g. RELIANCE" maxLength={20} />
-            <datalist id="fo-stocks">{(fo.data?.symbols ?? []).map((x) => <option key={x} value={x} />)}</datalist>
+            <SearchSelect value={sym} onChange={setSym} options={fo.data?.symbols ?? []} placeholder="Tap to pick an F&O stock, or type, e.g. RELIANCE" />
             <input type="number" min={1} max={50} value={lots} onChange={(e) => setLots(e.target.value)} style={{ width: 72 }} aria-label="Lots" title="Lots" />
             <button className="btn primary" type="submit" disabled={assign.isPending || !(fo.data?.symbols ?? []).includes(sym.trim().toUpperCase())}>{assign.isPending ? 'Adding…' : 'Assign'}</button>
           </form>
