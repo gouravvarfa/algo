@@ -120,3 +120,37 @@ def test_sl_hit_gap_and_eod_fallback_and_buy_side():
     assert hit["date"] == "2026-03-11" and hit["how"] == "SL (gap open)" and hit["price"] == 120 and hit["source"] == "EOD high/low"
     q = api.SLPos(id="c", side="BUY", opt="CE", strike=100, expiry="2026-03-12", entry_date="2026-03-09", sl=85.0)
     assert api.first_sl_hit(q, "2026-03-11", None, lambda d: [], lambda d: {"2026-03-10": (100, 101, 84)}.get(d), ["2026-03-09", "2026-03-10"])["price"] == 85.0
+
+
+# ---------------------------------------------------------------- a leg that does not exist on the viewed date must not enter that day's payoff
+def _leg(side, opt, strike, expiry, entry, lot=65):
+    return {"side": side, "opt": opt, "strike": strike, "expiry": expiry, "lots": 1, "lot_size": lot, "entry": entry, "entry_date": D}
+
+
+def test_intraday_payoff_ignores_legs_of_an_expiry_that_is_not_listed_that_day(iclient):
+    good = _leg("SELL", "CE", 22500, "2026-03-10", 100.0)
+    far = [_leg("BUY", "PE", 24150, "2030-01-03", 64.65), _leg("SELL", "PE", 24500, "2030-01-03", 192.25), _leg("SELL", "CE", 24500, "2030-01-03", 154.05)]
+    r = iclient.post("/api/options/intraday/mark", json={"date": D, "time": "09:17", "positions": [good] + far}).json()
+    assert r["payoff"]["net_credit"] == pytest.approx(100.0 * 65)                          # only the listed leg
+    assert len(r["positions"]) == 4 and all(p["ltp"] is None for p in r["positions"][1:])
+    assert "no 1-minute prices" in r["positions"][1]["note"]
+    assert r["total"] == pytest.approx(-650)                                               # the P&L total is unchanged: unpriced legs never counted
+
+
+def test_eod_payoff_ignores_expired_and_missing_legs(iclient):
+    # the shared test data has NIFTY expiries 2026-03-10 and 2026-03-17 on 2026-03-06
+    live = _leg("SELL", "CE", 22500, "2026-03-10", 100.0)
+    expired = _leg("SELL", "PE", 22500, "2026-03-05", 50.0)                                 # expired before the viewed day
+    missing = _leg("SELL", "CE", 30000, "2026-03-10", 5.0)                                  # no such strike in the data
+    r = iclient.post("/api/options/sim/mark", json={"date": "2026-03-06", "positions": [live, expired, missing]}).json()
+    assert r["payoff"]["net_credit"] == pytest.approx(100.0 * 65)
+    assert r["positions"][0]["ltp"] is not None and r["positions"][2]["ltp"] is None
+
+
+def test_eod_payoff_of_one_straddle_is_its_premium_even_with_other_years_legs_open(iclient):
+    """The reported case: a sold straddle viewed on its own day showed Max profit = premium - the max loss of an unrelated later iron fly."""
+    straddle = [_leg("SELL", "CE", 22500, "2026-03-10", 100.0), _leg("SELL", "PE", 22500, "2026-03-10", 100.0)]
+    fly = [_leg("BUY", "CE", 24750, "2030-11-09", 66.15), _leg("BUY", "PE", 24150, "2030-11-09", 64.65),
+           _leg("SELL", "CE", 24500, "2030-11-09", 154.05), _leg("SELL", "PE", 24500, "2030-11-09", 192.25)]
+    r = iclient.post("/api/options/sim/mark", json={"date": "2026-03-06", "positions": straddle + fly}).json()
+    assert r["payoff"]["max_profit"] == pytest.approx(200.0 * 65) and r["payoff"]["max_profit"] > 0

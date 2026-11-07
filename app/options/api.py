@@ -217,6 +217,7 @@ async def sim_mark(req: MarkReq):
         und = und_row[0]
         for p in req.positions:
             qty, sign = p.lots * p.lot_size, (1 if p.side == "BUY" else -1)
+            in_payoff = False                       # only a leg that is alive and priced on this date belongs to this day's payoff (a leg of another year must not be added to it)
             if p.expiry < req.date:
                 r = c.execute("SELECT underlying FROM options_eod WHERE symbol=? AND trade_date=? LIMIT 1", (sym, p.expiry)).fetchone()
                 if not r:
@@ -227,8 +228,10 @@ async def sim_mark(req: MarkReq):
                 r = c.execute("SELECT close, volume FROM options_eod WHERE symbol=? AND trade_date=? AND expiry=? AND strike=? AND opt=?",
                               (sym, req.date, p.expiry, p.strike, p.opt)).fetchone()
                 ltp, note = (r[0], "" if r[1] else "not traded today (NSE close)") if r else (None, "contract missing in Bhavcopy")
+                in_payoff = r is not None
             out.append({"ltp": ltp, "pnl": round((ltp - p.entry) * qty * sign, 2) if ltp is not None else None, "note": note})
-            pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
+            if in_payoff:
+                pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
     total = sum(x["pnl"] for x in out if x["pnl"] is not None)
     return {"underlying": und, "positions": out, "total": round(total, 2), "payoff": engine.payoff(pay, und) if pay else None}
 
@@ -541,6 +544,7 @@ async def intraday_mark(req: IntradayMarkReq):
         sp = intraday.spot_at(c, sym, req.date, hm)
         if not sp:
             raise HTTPException(404, f"no index minute at or before {req.date} {hm}")
+        exps = set(intraday.expiries_on(c, sym, req.date))
         out, pay = [], []
         for p in req.positions:
             qty, sign = p.lots * p.lot_size, (1 if p.side == "BUY" else -1)
@@ -551,6 +555,8 @@ async def intraday_mark(req: IntradayMarkReq):
                     ltp, note = (max(0.0, r[0] - p.strike) if p.opt == "CE" else max(0.0, p.strike - r[0])), "settled at expiry"
                 else:
                     ltp, note = None, "expiry-day data not loaded"
+            elif p.expiry not in exps:
+                ltp, note = None, "this expiry has no 1-minute prices on this date"
             else:
                 r = intraday.price_at(c, sym, p.expiry, p.strike, p.opt, req.date, hm)
                 if r:
@@ -559,7 +565,8 @@ async def intraday_mark(req: IntradayMarkReq):
                 else:
                     ltp, note = None, "no trade yet today at this minute"
             out.append({"ltp": ltp, "pnl": round((ltp - p.entry) * qty * sign, 2) if ltp is not None else None, "note": note})
-            pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
+            if p.expiry >= req.date and p.expiry in exps:      # alive and listed on this date: the only legs that belong to this day's payoff
+                pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
     total = sum(x["pnl"] for x in out if x["pnl"] is not None)
     return {"underlying": sp[0], "spot_ts": sp[1], "positions": out, "total": round(total, 2), "payoff": engine.payoff(pay, sp[0]) if pay else None}
 
@@ -981,7 +988,8 @@ async def live_mark(req: LiveMarkReq):
             else:
                 ltp = tick.ltp
         out.append({"ltp": ltp, "pnl": round((ltp - p.entry) * qty * sign, 2) if ltp is not None else None, "note": note})
-        pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
+        if c is not None:                                      # a contract that is not listed (any more) is not part of today's payoff
+            pay.append({"side": p.side, "opt": p.opt, "strike": p.strike, "entry": p.entry, "qty": qty})
     total = sum(x["pnl"] for x in out if x["pnl"] is not None)
     und = q.get("price")
     return {"underlying": und, "positions": out, "total": round(total, 2), "payoff": engine.payoff(pay, und) if pay and und else None}
