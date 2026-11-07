@@ -54,3 +54,41 @@ async def cancel(s: AngelOneSession, order_id: str) -> None:
     d = await _post(s, CANCEL, {"variety": "NORMAL", "orderid": order_id})
     if d.get("status") is not True:
         raise AngelOneApiError(d.get("message") or "Angel One did not cancel the order", "data", retryable=False)
+
+
+MODIFY = "/rest/secure/angelbroking/order/v1/modifyOrder"
+_PLACE_KEYS = {"variety", "tradingsymbol", "symboltoken", "transactiontype", "exchange", "ordertype", "producttype", "duration", "price", "triggerprice", "quantity", "ordertag",
+               "squareoff", "stoploss"}
+
+
+def _checked(payload: dict[str, Any]) -> dict[str, Any]:
+    """Only the fields Angel One's order call knows, only the two order types the app uses, always a day order. Anything else is a bug and stops here."""
+    extra = set(payload) - _PLACE_KEYS - {"orderid"}
+    if extra:
+        raise AngelOneApiError(f"unexpected order field(s): {sorted(extra)}", "data", retryable=False)
+    if payload.get("ordertype") not in ("LIMIT", "STOPLOSS_LIMIT") or payload.get("duration") != "DAY":
+        raise AngelOneApiError("only LIMIT and STOPLOSS_LIMIT day orders may be sent", "data", retryable=False)
+    if payload.get("variety") not in ("NORMAL", "STOPLOSS") or payload.get("transactiontype") not in ("BUY", "SELL") or not payload.get("symboltoken"):
+        raise AngelOneApiError("order is missing its variety, side or contract token", "data", retryable=False)
+    return {**payload, "squareoff": "0", "stoploss": "0"} if "squareoff" not in payload else payload
+
+
+async def place_payload(s: AngelOneSession, payload: dict[str, Any]) -> str:
+    """Send one prepared LIMIT or STOPLOSS_LIMIT order (the executor builds it). Same contract as place_limit: id, AngelOneApiError (refused) or Unknown (cannot tell)."""
+    d = await _post(s, PLACE, _checked(payload))
+    oid = (d.get("data") or {}).get("orderid") if isinstance(d.get("data"), dict) else None
+    if d.get("status") is True and oid:
+        return str(oid)
+    if d.get("status") is True:
+        raise Unknown("Angel One accepted the request but gave no order id. Check your Angel One order book.")
+    raise AngelOneApiError(d.get("message") or "Angel One rejected the order", "data", retryable=False)
+
+
+async def modify_payload(s: AngelOneSession, order_id: str, payload: dict[str, Any]) -> None:
+    """Change the price / trigger of an order we placed (the stop order following the strategy's stop)."""
+    p = _checked(payload)
+    keys = ("variety", "ordertype", "producttype", "duration", "price", "triggerprice", "quantity", "tradingsymbol", "symboltoken", "exchange")
+    body = {**{k: p[k] for k in keys if k in p}, "orderid": order_id}                   # exactly the fields Angel One's modify call takes
+    d = await _post(s, MODIFY, body)
+    if d.get("status") is not True:
+        raise AngelOneApiError(d.get("message") or "Angel One did not modify the order", "data", retryable=False)

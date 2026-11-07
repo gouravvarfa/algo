@@ -241,7 +241,38 @@ CREATE TABLE user_instrument_real (   -- the person's own real-order switch for 
 );
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9)]
+_V10 = """
+CREATE TABLE real_tb_state (          -- the real-order executor's memory per person and Top-Bottom instrument: position, orders, pending entry, halt. Survives a restart.
+  user_id TEXT NOT NULL,
+  instrument_id TEXT NOT NULL,
+  state_json TEXT NOT NULL,
+  updated_at REAL NOT NULL,
+  PRIMARY KEY (user_id, instrument_id)
+);
+CREATE TABLE real_tb_orders (         -- every real order the executor sent for Top-Bottom: kept forever, listed to admins
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  instrument_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  contract TEXT NOT NULL,
+  role TEXT NOT NULL,                 -- entry | stop | exit
+  side TEXT NOT NULL,
+  qty INTEGER NOT NULL,
+  order_type TEXT NOT NULL,
+  price REAL,
+  trigger_price REAL,
+  broker_order_id TEXT,
+  status TEXT NOT NULL,               -- placed | open | filled | cancelled | rejected | unknown
+  why TEXT,
+  message TEXT,
+  filled_avg REAL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX idx_real_tb_orders_user ON real_tb_orders (user_id, created_at);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

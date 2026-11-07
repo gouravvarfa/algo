@@ -45,6 +45,9 @@ async def lifespan(_: FastAPI):
     engine.feed.listeners.append(hub.on_tick)
     ops_context.stream_hub = hub
     engine.start()
+    from app.broker import tb_real
+    engine.real = tb_real.RealTB()        # real Top-Bottom orders for accounts that switched them on (nothing happens for anybody else)
+    engine.real.start()
     try:                                  # legs saved before the options journal existed go into it once (idempotent)
         from app.db import platform_db
         _c = platform_db.connect()
@@ -58,6 +61,7 @@ async def lifespan(_: FastAPI):
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
     asyncio.create_task(_selftest_loop())                  # known-answer checks every 10 minutes (developer panel)
     yield
+    await engine.real.stop()
     await engine.stop()
 
 

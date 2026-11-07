@@ -245,6 +245,40 @@ def set_my_instrument(instrument_id: str, body: InstrumentSwitch, request: Reque
     return my_instruments(request, c)
 
 
+# ---- Top-Bottom real orders: what the executor holds and has done ---------------------------------------------------------------------------
+def _executor():
+    from app import main as appmain
+    return getattr(appmain.engine, "real", None) if appmain.engine is not None else None
+
+
+@router.get("/api/me/broker/tb")
+def my_tb(request: Request, c=Depends(db)):
+    rt = _executor()
+    return {"instruments": rt.view(c, user_id_of(request)) if rt is not None else []}
+
+
+@router.post("/api/me/broker/tb/{instrument_id}/clear-halt")
+def my_tb_clear_halt(instrument_id: str, request: Request, c=Depends(db)):
+    """After looking at Angel One, the person lets the executor carry on. Nothing is sent by this call."""
+    rt = _executor()
+    u = getattr(request.state, "user", None)
+    uid = user_id_of(request)
+    if rt is None or not rt.clear_halt(c, uid, instrument_id, u["username"] if u else "local"):
+        raise AuthError(404, "NOT_HALTED", "This instrument is not halted.")
+    audit.append(c, "broker.tb.clear_halt", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid, detail={"instrument_id": instrument_id})
+    return {"ok": True}
+
+
+@router.get("/api/admin/broker/tb")
+def admin_tb(limit: int = 100, actor=Depends(require("users.read")), c=Depends(db)):
+    rt = _executor()
+    names = {r["id"]: (r["username"], r["name"]) for r in c.execute("SELECT id, username, name FROM users")}
+    state = [{**x, "username": (names.get(x["user_id"]) or (None, None))[0], "name": (names.get(x["user_id"]) or (None, None))[1]} for x in (rt.view(c, None) if rt is not None else [])]
+    orders_ = [dict(r) | {"username": (names.get(r["user_id"]) or (None, None))[0], "name": (names.get(r["user_id"]) or (None, None))[1]}
+               for r in c.execute("SELECT * FROM real_tb_orders ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 300)),))]
+    return {"instruments": state, "orders": orders_}
+
+
 # ---- real orders: preview -> send (once) -> cancel; the checks live in app/broker/orders.py --------------------------------------------------
 async def _orders(coro):
     """Run an order step; a refusal comes back as JSON with the failed check list, so the screen can show exactly why."""

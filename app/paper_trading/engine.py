@@ -848,6 +848,7 @@ class PaperEngine:
         JOURNAL_SEEN.write_text(json.dumps(seen))
         self._shadow_call(dryrun.record, events, snap)                  # the orders a real account would send (written only, never sent)
         self._shadow_step("handle", events, snap, now_ist())            # the simulated account follows the signals with its own fills
+        self._real_step("handle", events, snap, now_ist())              # accounts that switched real orders on for this instrument
 
     @staticmethod
     def _shadow_call(fn, *args) -> None:
@@ -861,6 +862,12 @@ class PaperEngine:
         sh = getattr(self, "shadow", None)
         if sh is not None:
             self._shadow_call(getattr(sh, name), *args)
+
+    def _real_step(self, name: str, *args) -> None:
+        """Tell the real-order executor (app/broker/tb_real.py) what the strategy just did. It only queues the news; nothing is sent from here, and a failure here never touches the paper engine."""
+        rt = getattr(self, "real", None)
+        if rt is not None:
+            self._shadow_call(getattr(rt, name), *args)
 
     def shadow_view(self, owner=ALL) -> dict:
         exits = [{"instrument_id": e.get("instrument_id"), "at": e.get("at", ""), "pnl": e.get("pnl_amount") or 0.0}
@@ -899,6 +906,7 @@ class PaperEngine:
                 ops_incidents.record("engine", f"{inst.symbol} recovered", severity="info", user_id=owner, auto_action="fault cleared")
             self._journal(inst, self.snapshots[inst.id])
             self._shadow_step("sync", inst.id, owner, inst.symbol, self.snapshots[inst.id], now_ist())
+            self._real_step("sync", inst.id, owner, inst.symbol, self.snapshots[inst.id], now_ist())
         except Exception as exc:  # one bad instrument (or user) must never stop the others: isolate it, record it, go on
             log.exception("refresh failed for %s", inst.symbol)
             msg = str(exc) or exc.__class__.__name__

@@ -150,7 +150,7 @@ def test_the_order_routes_of_angel_one_appear_in_one_file_only():
     """Sending an order is isolated in app/broker/angel_orders.py so it can be audited in one read."""
     import pathlib
     root = pathlib.Path(account.__file__).resolve().parents[1]
-    hits = [p.relative_to(root).as_posix() for p in root.rglob("*.py") if "order/v1/placeOrder" in p.read_text(encoding="utf-8") or "order/v1/cancelOrder" in p.read_text(encoding="utf-8")]
+    hits = [p.relative_to(root).as_posix() for p in root.rglob("*.py") if any(w in p.read_text(encoding="utf-8") for w in ("order/v1/placeOrder", "order/v1/cancelOrder", "order/v1/modifyOrder"))]
     assert hits == ["broker/angel_orders.py"]
 
 

@@ -10,6 +10,8 @@ interface Acct {
   mode_changed_at: number | null; mode_changed_by: string | null
 }
 interface AdminOrder { id: string; username: string | null; name: string | null; side: string; lots: number; symbol: string; strike: number; opt: string; expiry: string; price: number; intent: string; status: string; broker_order_id: string | null; message: string | null; created_at: number }
+interface TbRow { user_id: string; username: string | null; name: string | null; symbol: string; position: { side: string; qty: number; contract: string; entry_price: number | null } | null; pending_entry: boolean; halted: string | null; released: boolean; stop_target: number | null }
+interface TbOrder { id: string; username: string | null; name: string | null; symbol: string; contract: string; role: string; side: string; qty: number; order_type: string; price: number | null; trigger_price: number | null; status: string; message: string | null; created_at: number }
 interface Overview { master_on: boolean; can_turn_on: boolean; accounts: Acct[]; counts: { connected: number; allowed: number; real_now: number; total: number } }
 
 const SYMS = ['NIFTY', 'BANKNIFTY']
@@ -51,6 +53,7 @@ export default function BrokerAdminPage() {
   const toast = useToast()
   const q = useQuery({ queryKey: ['admin', 'broker'], queryFn: () => get<Overview>('/api/admin/broker/overview'), refetchInterval: 30_000 })
   const [edit, setEdit] = useState<string | null>(null)
+  const tb = useQuery({ queryKey: ['admin', 'broker-tb'], queryFn: () => get<{ instruments: TbRow[]; orders: TbOrder[] }>('/api/admin/broker/tb?limit=100'), refetchInterval: 15_000 })
   const ord = useQuery({ queryKey: ['admin', 'broker-orders'], queryFn: () => get<{ orders: AdminOrder[] }>('/api/admin/broker/orders?limit=100'), refetchInterval: 20_000 })
   const refresh = () => { void qc.invalidateQueries({ queryKey: ['admin', 'broker'] }) }
   const master = useMutation({
@@ -124,6 +127,29 @@ export default function BrokerAdminPage() {
               </div>
             )}
           </div>
+          <div className="card" style={{ borderColor: tb.data?.instruments.some((x) => x.halted) ? 'var(--danger)' : undefined }}>
+            <div className="card-head"><h2>Top-Bottom real orders</h2><span className="spacer" /><span className="sub">what the executor holds right now</span></div>
+            {!tb.data || tb.data.instruments.length === 0 ? <p className="empty">No instrument has real orders switched on yet.</p> : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tbl"><thead><tr><th>User</th><th>Instrument</th><th>Real position</th><th>State</th></tr></thead>
+                  <tbody>{tb.data.instruments.map((x) => (
+                    <tr key={x.user_id + x.symbol}><td>{x.name ?? x.username}</td><td>{x.symbol}</td>
+                      <td>{x.position ? <><b>{x.position.side} {x.position.qty}</b> {x.position.contract}<div className="sub">at {x.position.entry_price ?? '–'}{x.stop_target != null ? ` · stop ${x.stop_target}` : ''}</div></> : x.pending_entry ? 'entry being placed' : '–'}</td>
+                      <td>{x.halted ? <span className="chip bad" title={x.halted}>HALTED</span> : x.released ? <span className="chip warn">switch off, position open</span> : <span className="chip ok">running</span>}{x.halted && <div className="sub err">{x.halted}</div>}</td></tr>
+                  ))}</tbody></table>
+              </div>
+            )}
+            {tb.data && tb.data.orders.length > 0 && (
+              <details style={{ marginTop: 8 }}><summary>{tb.data.orders.length} recent Top-Bottom orders</summary>
+                <div style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr><th>When</th><th>User</th><th>Order</th><th>Price</th><th>Status</th></tr></thead>
+                  <tbody>{tb.data.orders.map((o) => (
+                    <tr key={o.id}><td>{when(o.created_at)}</td><td>{o.name ?? o.username}</td><td>{o.role} <b>{o.side}</b> {o.qty} {o.contract}<div className="sub">{o.order_type}</div></td>
+                      <td>{o.price != null ? `₹${o.price}` : '–'}{o.trigger_price != null ? ` / trg ${o.trigger_price}` : ''}</td>
+                      <td><span className={'chip ' + (o.status === 'filled' ? 'ok' : o.status === 'rejected' || o.status === 'unknown' ? 'bad' : 'muted')} title={o.message ?? ''}>{o.status}</span></td></tr>
+                  ))}</tbody></table></div></details>
+            )}
+          </div>
+
           <div className="card">
             <div className="card-head"><h2>Real orders</h2><span className="spacer" /><span className="sub">newest first · every order is also in the Audit log</span></div>
             {!ord.data || ord.data.orders.length === 0 ? <p className="empty">No real order has been prepared yet.</p> : (
