@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AUTO_FLY, AUTO_FLY_ADJ, kfmt, pickResell, planPreset, slPrice, type Chain } from './sim'
+import { AUTO_FLY, AUTO_FLY_ADJ, kfmt, nearestDateIndex, pickResell, planPreset, slPrice, type Chain } from './sim'
 
 const row = (strike: number, ce: number | null, pe: number | null) => ({
   strike,
@@ -53,5 +53,17 @@ describe('auto iron fly preset', () => {
     expect(pickResell(c, 'CE', 100, 0.5, 95)).toBeNull()                 // 100 is the hedge, so only strikes below it count and none is near 0.50
     expect(pickResell(c, 'PE', 90, 0.5, 105)).toBe(100)                  // put side: strikes above the hedge
     expect(pickResell(c, 'CE', 100, 0.5, 90, 0.1)).toBeNull()            // nothing within the tolerance
+  })
+})
+
+describe('date picker', () => {
+  const dates = ['2026-03-05', '2026-03-06', '2026-03-09', '2026-03-10']
+  it('goes to the picked session, or to the session before a weekend / holiday, or to the ends', () => {
+    expect(nearestDateIndex(dates, '2026-03-09')).toBe(2)
+    expect(nearestDateIndex(dates, '2026-03-07')).toBe(1)           // a Saturday: Friday's session
+    expect(nearestDateIndex(dates, '2026-01-01')).toBe(0)           // before everything: the first
+    expect(nearestDateIndex(dates, '2026-12-01')).toBe(3)           // after everything: the last
+    expect(nearestDateIndex([], '2026-03-09')).toBe(-1)
+    expect(nearestDateIndex(dates, '')).toBe(-1)
   })
 })

@@ -158,3 +158,12 @@ export function pickResell(chain: Chain, opt: Opt, hedge: number, target: number
     .map((r) => ({ k: r.strike, d: Math.abs(Math.abs(r[opt]!.delta!) - target) })).sort((a, b) => a.d - b.d)[0]
   return c && c.d <= tol ? c.k : null
 }
+
+/** The index in `dates` (sorted ISO dates) a picked calendar date should go to: that date when it is a session, else the session before it (a weekend or a holiday), else the first / last. -1 when there are no dates. */
+export function nearestDateIndex(dates: string[], picked: string): number {
+  if (!dates.length || !picked) return -1
+  const exact = dates.indexOf(picked)
+  if (exact >= 0) return exact
+  const next = dates.findIndex((d) => d > picked)
+  return next < 0 ? dates.length - 1 : Math.max(0, next - 1)
+}

@@ -6,7 +6,7 @@ import { PositionsPanel } from './PositionsPanel'
 import { RiskPanel } from './RiskPanel'
 import { TimeBar } from './TimeBar'
 import { useSimulator } from './useSimulator'
-import type { Sym } from './sim'
+import { nearestDateIndex, type Sym } from './sim'
 import './simulator.css'
 
 export default function SimulatorPage() {
@@ -43,7 +43,8 @@ export default function SimulatorPage() {
             {c?.expiries.map((e) => <option key={e} value={e}>{dmy(e)} (DTE {Math.round((new Date(e).getTime() - new Date(c.date).getTime()) / 864e5)})</option>)}</select></label>
           <label className="field">Historical date
             <span className="row" style={{ gap: 6, alignItems: 'center' }}>
-              <input type="date" value={s.date} min={s.dates[0]} max={s.dates[s.dates.length - 1]} disabled={s.live} onChange={(e) => { const i = s.dates.indexOf(e.target.value); if (i >= 0) s.goIndex(i) }} />
+              <input type="date" value={s.date} min={s.dates[0]} max={s.dates[s.dates.length - 1]} disabled={s.live} title={s.live ? 'Switch LIVE off to pick a date' : 'A weekend or a holiday goes to the session before it'}
+                onChange={(e) => { const i = nearestDateIndex(s.dates, e.target.value); if (i >= 0) s.goIndex(i) }} />
               <button className="ib" disabled={s.idx <= 0 || s.live} onClick={() => s.goIndex(s.idx - 1)} title="Previous trading day">‹</button>
               <button className="ib" disabled={s.idx >= s.dates.length - 1 || s.live} onClick={() => s.goIndex(s.idx + 1)} title="Next trading day">›</button>
             </span></label>
