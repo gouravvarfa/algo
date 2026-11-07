@@ -167,11 +167,36 @@ async def repair_errors(session, info: UnderlyingInfo, days_back: int = 5, db: P
 
 
 # ---------------------------------------------------------------- reads
+_DAYS_MEMO: dict[tuple, dict] = {}
+
+
+def _day_list(c: sqlite3.Connection, symbol: str) -> list[str]:
+    """Every day with index minutes, found by jumping from day to day on the (symbol, ts) index instead of reading every row."""
+    out, x = [], c.execute("SELECT MIN(ts) FROM candles WHERE symbol=? AND opt='IDX'", (symbol,)).fetchone()[0]
+    while x:
+        out.append(x[:10])
+        x = c.execute("SELECT MIN(ts) FROM candles WHERE symbol=? AND opt='IDX' AND ts > ?", (symbol, x[:10] + " 23:59")).fetchone()[0]
+    return out
+
+
 def days(c: sqlite3.Connection, symbol: str) -> list[dict]:
-    """Trading days that have index minutes AND option minutes, with coverage counts."""
-    idx = dict(c.execute("SELECT substr(ts,1,10), COUNT(*) FROM candles WHERE symbol=? AND opt='IDX' GROUP BY 1", (symbol,)).fetchall())
-    opt = dict(c.execute("SELECT substr(ts,1,10), COUNT(DISTINCT expiry||strike||opt) FROM candles WHERE symbol=? AND opt!='IDX' GROUP BY 1", (symbol,)).fetchall())
-    return [{"date": d, "index_minutes": idx[d], "contracts": opt.get(d, 0)} for d in sorted(idx) if opt.get(d)]
+    """Trading days that have index minutes AND option minutes, with coverage counts. A finished day (earlier than the newest two) is counted once per process."""
+    path = c.execute("PRAGMA database_list").fetchone()[2]
+    memo = _DAYS_MEMO.setdefault((path, symbol), {})
+    ds = _day_list(c, symbol)
+    out = []
+    for n, d in enumerate(ds):
+        r = memo.get(d)
+        if r is None:
+            lo, hi = d + " 00:00", d + " 23:59"
+            idx = c.execute("SELECT COUNT(*) FROM candles WHERE symbol=? AND opt='IDX' AND ts BETWEEN ? AND ?", (symbol, lo, hi)).fetchone()[0]
+            opt = c.execute("SELECT COUNT(*) FROM (SELECT DISTINCT expiry, strike, opt FROM candles WHERE symbol=? AND opt!='IDX' AND ts BETWEEN ? AND ?)", (symbol, lo, hi)).fetchone()[0]
+            r = {"date": d, "index_minutes": idx, "contracts": opt}
+            if n < len(ds) - 2:
+                memo[d] = r
+        if r["contracts"]:
+            out.append(dict(r))
+    return out
 
 
 def minutes(c: sqlite3.Connection, symbol: str, day: str) -> list[str]:

@@ -22,11 +22,26 @@ _CACHE: dict = {}
 CACHE_TTL = 600.0      # seconds: loaded history changes only when a loader runs; a restart or this TTL refreshes it
 
 
+_REFRESHING: set = set()
+
+
 async def _cached(key, fn):
-    """Run a slow read-only DB query in a worker thread (it must not block the event loop) and keep the answer briefly."""
+    """Run a slow read-only DB query in a worker thread (it must not block the event loop). Stale-while-revalidate: once a key has ever been
+    answered, every call returns that answer at once, and an answer older than CACHE_TTL is refreshed in the background, so nobody waits for the slow query twice."""
     import time as _t
     hit = _CACHE.get(key)
-    if hit and _t.time() - hit[0] < CACHE_TTL:
+    if hit:
+        if _t.time() - hit[0] >= CACHE_TTL and key not in _REFRESHING:
+            _REFRESHING.add(key)
+
+            async def refresh():
+                try:
+                    _CACHE[key] = (_t.time(), await asyncio.to_thread(fn))
+                except Exception:
+                    pass
+                finally:
+                    _REFRESHING.discard(key)
+            asyncio.create_task(refresh())
         return hit[1]
     val = await asyncio.to_thread(fn)
     _CACHE[key] = (_t.time(), val)
@@ -150,7 +165,11 @@ async def sim_dates(symbol: str = "NIFTY"):
 
     def q():
         with _db() as c:
-            return {"dates": [r[0] for r in c.execute("SELECT DISTINCT trade_date FROM options_eod WHERE symbol=? ORDER BY 1", (sym,))]}
+            # a loose index scan: jump from date to date on the primary key (trade_date first) instead of reading every row of five years
+            return {"dates": [r[0] for r in c.execute(
+                "WITH RECURSIVE d(x) AS (SELECT MIN(trade_date) FROM options_eod WHERE symbol=? UNION ALL "
+                "SELECT (SELECT MIN(trade_date) FROM options_eod WHERE trade_date > x AND symbol=?) FROM d WHERE x IS NOT NULL) "
+                "SELECT x FROM d WHERE x IS NOT NULL ORDER BY 1", (sym, sym))]}
     return await _cached(("sim_dates", sym), q)
 
 
