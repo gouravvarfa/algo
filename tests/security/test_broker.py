@@ -152,3 +152,59 @@ def test_the_order_routes_of_angel_one_appear_in_one_file_only():
     root = pathlib.Path(account.__file__).resolve().parents[1]
     hits = [p.relative_to(root).as_posix() for p in root.rglob("*.py") if "order/v1/placeOrder" in p.read_text(encoding="utf-8") or "order/v1/cancelOrder" in p.read_text(encoding="utf-8")]
     assert hits == ["broker/angel_orders.py"]
+
+
+def test_preflight_reports_every_step_and_never_orders(db, new_client, monkeypatch):
+    from app.options import master
+    user, _, c_user = _two(db, new_client)
+    api(c_user, "PUT", "/api/me/broker", json=BODY)
+    contract = master.OptionContract(symbol="NIFTY10NOV2625000CE", token="111", name="NIFTY", strike=25000.0, expiry=__import__("datetime").date(2026, 11, 10), option_type="CE", lot_size=65, tick_size=0.05)
+    info = master.UnderlyingInfo(name="NIFTY", spot_token="99926000", spot_symbol="Nifty 50", vix_token=None, contracts=[contract], source="test")
+    calls = []
+
+    async def fake_login(**k):
+        return ao.AngelOneSession(k["api_key"], "jwt", "", "", k["client_code"])
+
+    async def noop(s):
+        return None
+
+    async def funds(s):
+        return {"availablecash": "125000"}
+
+    async def positions(s):
+        return [{"tradingsymbol": "X", "netqty": "-65"}]
+
+    async def book(s):
+        calls.append("book")
+        return []
+
+    async def ltp(s, ex, sym, tok):
+        return 25012.5
+
+    async def margin(s, basket):
+        calls.append("margin")
+        return {"totalMarginRequired": 140000}
+
+    monkeypatch.setattr(ao, "login", fake_login)
+    monkeypatch.setattr(ao, "logout", noop)
+    monkeypatch.setattr(ao, "get_funds", funds)
+    monkeypatch.setattr(ao, "get_positions", positions)
+    monkeypatch.setattr(ao, "get_order_book", book)
+    monkeypatch.setattr(ao, "get_ltp", ltp)
+    monkeypatch.setattr(ao, "get_margin", margin)
+    monkeypatch.setattr(master, "load_underlying", lambda sym, *a, **k: info)
+    r = api(c_user, "POST", "/api/me/broker/preflight")
+    j = r.json()
+    assert r.status_code == 200 and j["ok"] is True and [x["name"] for x in j["steps"]] == ["Login", "Funds", "Positions", "Today's orders", "Live price", "Margin calculator"]
+    assert all(x["ok"] for x in j["steps"]) and "125,000" in j["steps"][1]["detail"] and "nothing was ordered" in j["steps"][5]["detail"]
+    assert c_user.get("/api/me/broker").json()["status"] == "connected"
+    for s in SECRETS:
+        assert s not in r.text
+
+    async def bad_funds(s):
+        raise ao.AngelOneApiError("Invalid Token", "data")
+
+    monkeypatch.setattr(ao, "get_funds", bad_funds)
+    j = api(c_user, "POST", "/api/me/broker/preflight").json()
+    assert j["ok"] is False and [x["name"] for x in j["steps"] if not x["ok"]] == ["Funds"] and "Nothing was ordered" in j["hint"]
+    assert c_user.get("/api/me/broker").json()["status"] == "error"

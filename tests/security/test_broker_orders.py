@@ -72,6 +72,7 @@ def world(monkeypatch):
     monkeypatch.setattr(orders, "market_open", lambda now: True)
     monkeypatch.setattr(orders, "MIN_GAP_S", 0.0)
     monkeypatch.setattr(store, "MIN_GAP_S", 0.0)
+    monkeypatch.setitem(flags.DEFAULTS, "real.options", True)        # the option ticket is off by default; these tests exercise it
     orders._sessions.clear()
     orders._last_send.clear()
     broker_api._bad_pw.clear()
@@ -274,3 +275,13 @@ def test_contract_list_for_the_ticket(db, new_client, world):
     r = api(c_user, "GET", "/api/me/broker/contracts?symbol=NIFTY")
     assert r.status_code == 200 and r.json()["expiries"] == ["2026-11-10"] and r.json()["strikes"]["2026-11-10"] == [25000.0] and r.json()["lot_size"] == 65
     assert api(c_user, "GET", "/api/me/broker/contracts?symbol=SENSEX").status_code == 400
+
+
+def test_option_orders_are_off_by_default_so_nothing_can_be_previewed_or_sent(db, new_client, world, monkeypatch):
+    user, _, _, c_user = setup(db, new_client)
+    monkeypatch.setitem(flags.DEFAULTS, "real.options", False)
+    flags._cache = None
+    r = preview(c_user)
+    assert r.status_code == 403 and r.json()["error"] == "OPTIONS_OFF" and world.placed == []
+    assert api(c_user, "POST", "/api/me/broker/orders/abc/send").status_code == 403
+    assert c_user.get("/api/me/broker").json()["options_orders"] is False

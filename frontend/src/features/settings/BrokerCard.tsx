@@ -5,8 +5,9 @@ import { OrderTicket } from './OrderTicket'
 
 interface Status {
   configured: boolean; client_code?: string; mode: string; effective_mode: string; status: string; status_message: string | null; last_checked_at?: number | null
-  real_allowed: boolean; real_master_on: boolean; real_blockers: string[]; max_lots?: number; max_daily_loss?: number | null; allowed_symbols?: string[]
+  real_allowed: boolean; real_master_on: boolean; options_orders?: boolean; real_blockers: string[]; max_lots?: number; max_daily_loss?: number | null; allowed_symbols?: string[]
 }
+interface Pre { ok: boolean; steps: { name: string; ok: boolean; detail: string }[]; hint: string | null }
 interface Summary {
   funds: { available_cash: number | null; net: number | null; span_margin: number | null; exposure_margin: number | null; m2m_realised: number | null; m2m_unrealised: number | null }
   positions: { symbol: string; exchange: string; product: string; net_qty: number | null; avg_price: number | null; ltp: number | null; pnl: number | null }[]
@@ -41,6 +42,7 @@ export function BrokerCard() {
     onSuccess: () => { setErr(''); setAskPw(false); setPw(''); refresh() },
     onError: (e) => { setErr(msg(e)); setPw('') },
   })
+  const pre = useMutation({ mutationFn: () => post<Pre>('/api/me/broker/preflight'), onSuccess: () => { setErr(''); refresh() }, onError: (e) => { setErr(msg(e)); refresh() } })
   const sum = useMutation({ mutationFn: () => get<Summary>('/api/me/broker/summary'), onError: (e) => setErr(msg(e)) })
   const s = st.data
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
@@ -74,6 +76,7 @@ export function BrokerCard() {
       {s?.configured && !open && (
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <button className="btn" disabled={test.isPending} onClick={() => test.mutate()}>{test.isPending ? 'Checking…' : 'Test connection'}</button>
+          <button className="btn" disabled={pre.isPending} title="Checks login, funds, positions, orders, a live price and the margin calculator. Sends no order." onClick={() => pre.mutate()}>{pre.isPending ? 'Running…' : 'Pre-flight check'}</button>
           <button className="btn" disabled={sum.isPending} onClick={() => sum.mutate()}>{sum.isPending ? 'Reading…' : 'View my account'}</button>
           <button className="btn" onClick={() => setOpen(true)}>Change details</button>
           <button className="btn danger" onClick={() => { if (window.confirm('Remove your Angel One details from this app?')) remove.mutate() }}>Remove</button>
@@ -106,8 +109,21 @@ export function BrokerCard() {
           )}
         </div>
       )}
-      {s?.configured && !open && s.real_allowed && <OrderTicket symbols={s.allowed_symbols ?? ['NIFTY']} maxLots={s.max_lots ?? 1} canTrade={s.effective_mode === 'real'} />}
+      {s?.configured && !open && s.real_allowed && s.options_orders && <OrderTicket symbols={s.allowed_symbols ?? ['NIFTY']} maxLots={s.max_lots ?? 1} canTrade={s.effective_mode === 'real'} />}
       {err && <p className="err" role="alert">{err}</p>}
+      {pre.data && (
+        <div style={{ marginTop: 12 }}>
+          <b>{pre.data.ok ? 'All checks passed. No order was sent.' : 'Something needs fixing. No order was sent.'}</b>
+          <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 3 }}>
+            {pre.data.steps.map((x) => (
+              <li key={x.name} style={{ display: 'flex', gap: 8, color: x.ok ? 'var(--text-secondary)' : 'var(--danger)', fontWeight: x.ok ? 400 : 600 }}>
+                <span aria-hidden>{x.ok ? '✓' : '✗'}</span><span><b>{x.name}</b> · <span style={{ fontWeight: 400 }}>{x.detail}</span></span>
+              </li>
+            ))}
+          </ul>
+          {pre.data.hint && <p className="note">{pre.data.hint}</p>}
+        </div>
+      )}
       {sum.data && (
         <div style={{ marginTop: 12 }}>
           <dl className="kv">

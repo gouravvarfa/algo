@@ -74,6 +74,16 @@ async def test_my_broker(request: Request, c=Depends(db)):
     return out
 
 
+@router.post("/api/me/broker/preflight")
+async def my_preflight(request: Request, c=Depends(db)):
+    """Read-only dry check of the whole chain (login, funds, positions, orders, price, margin). Never sends an order."""
+    uid = user_id_of(request)
+    u = getattr(request.state, "user", None)
+    out = await _run(account.preflight(c, uid))
+    audit.append(c, "broker.preflight", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid, detail={"ok": out["ok"], "failed": [x["name"] for x in out["steps"] if not x["ok"]]})
+    return out
+
+
 @router.get("/api/me/broker/summary")
 async def my_broker_summary(request: Request, c=Depends(db)):
     return await _run(account.summary(c, user_id_of(request)))
@@ -191,6 +201,48 @@ def admin_master(body: MasterBody, actor=Depends(require("users.manage")), c=Dep
     audit.append(c, "broker.master", actor_id=actor["id"], actor_role=actor["role"], target_type="platform", target_id="real.enabled",
                  detail={"actor": actor["username"], "enabled": body.enabled, "accounts_back_to_paper": n})
     return {"master_on": body.enabled, "accounts_back_to_paper": n}
+
+
+# ---- Top-Bottom: the person's real-order switch for each instrument ------------------------------------------------------------------------
+class InstrumentSwitch(BaseModel):
+    real: bool
+
+
+def _owned_instrument(request: Request, instrument_id: str):
+    from app import main as appmain
+    u = getattr(request.state, "user", None)
+    inst = appmain.engine.owned(instrument_id, u["id"] if u else None)
+    if inst is None:
+        raise AuthError(404, "NOT_FOUND", "Instrument not found.")
+    return inst
+
+
+@router.get("/api/me/broker/instruments")
+def my_instruments(request: Request, c=Depends(db)):
+    from app import main as appmain
+    uid = user_id_of(request)
+    u = getattr(request.state, "user", None)
+    owner = u["id"] if u else None
+    sw = store.instrument_switches(c, uid)
+    r = store.row(c, uid)
+    mode = store.effective_mode(r)
+    items = [{"instrument_id": i.id, "symbol": i.symbol, "trading_symbol": i.trading_symbol, "real_on": sw.get(i.id, False), "real_effective": sw.get(i.id, False) and mode == "real"}
+             for i in appmain.engine.instruments.values() if i.owner == owner]
+    return {"account_mode": mode, "real_allowed": bool(r and r["real_allowed"]), "blockers": store.blockers(r), "instruments": items}
+
+
+@router.put("/api/me/broker/instruments/{instrument_id}")
+def set_my_instrument(instrument_id: str, body: InstrumentSwitch, request: Request, c=Depends(db)):
+    inst = _owned_instrument(request, instrument_id)
+    u = getattr(request.state, "user", None)
+    uid = user_id_of(request)
+    try:
+        store.instrument_set(c, uid, instrument_id, inst.symbol, body.real, u["username"] if u else "local")
+    except store.BrokerError as e:
+        raise AuthError(e.status, e.code, e.message)
+    audit.append(c, "broker.instrument", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid,
+                 detail={"instrument": inst.symbol, "instrument_id": instrument_id, "real": body.real})
+    return my_instruments(request, c)
 
 
 # ---- real orders: preview -> send (once) -> cancel; the checks live in app/broker/orders.py --------------------------------------------------

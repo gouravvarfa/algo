@@ -7,6 +7,7 @@ import { useDataSource } from '../../lib/datasource'
 import { dt, money, n2, num, sign, words } from '../../lib/format'
 import { fresh, streamSpec, useLiveTicks } from '../../lib/stream'
 import type { IndexQuote, JournalEvent, Overview, Position, Snapshot, Trade } from '../../lib/types'
+import { RealSwitch } from './RealSwitch'
 import { TradeChart } from './TradeChart'
 import './topbottom.css'
 
@@ -160,6 +161,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
             <span className="hero-sym">{inst.trading_symbol}</span>
             <span className="sub">{inst.lots || 1} lot · qty {inst.quantity} · exp {inst.expiry}</span>
           </div>
+          <RealSwitch instrumentId={inst.id} symbol={inst.symbol} />
           <div className="hero-pnl">
             <span className="k">Open P&amp;L</span>
             <b className={`num ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</b>

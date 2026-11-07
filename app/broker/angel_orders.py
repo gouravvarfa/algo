@@ -10,7 +10,8 @@ from typing import Any
 
 import httpx
 
-from app.providers.angelone_client import BASE_URL, AngelOneSession, _base_headers, _parse_json_or_raise, AngelOneApiError
+from app.providers import angelone_client as ao
+from app.providers.angelone_client import AngelOneSession, _base_headers, _parse_json_or_raise, AngelOneApiError
 
 PLACE = "/rest/secure/angelbroking/order/v1/placeOrder"
 CANCEL = "/rest/secure/angelbroking/order/v1/cancelOrder"
@@ -27,7 +28,7 @@ def _headers(s: AngelOneSession) -> dict[str, str]:
 async def _post(s: AngelOneSession, route: str, body: dict[str, Any]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=20.0) as client:
         try:
-            response = await client.post(BASE_URL + route, headers=_headers(s), json=body)
+            response = await client.post(ao.BASE_URL + route, headers=_headers(s), json=body)
         except httpx.HTTPError as exc:
             raise Unknown(f"No answer from Angel One ({type(exc).__name__}). The order may or may not have been received.") from exc
     try:

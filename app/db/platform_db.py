@@ -229,7 +229,19 @@ CREATE TABLE broker_orders (          -- every real order a person prepared: the
 CREATE INDEX idx_broker_orders_user ON broker_orders (user_id, created_at);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8)]
+_V9 = """
+CREATE TABLE user_instrument_real (   -- the person's own real-order switch for one Top-Bottom instrument; off unless they turned it on, and cleared whenever the account leaves real mode
+  user_id TEXT NOT NULL,
+  instrument_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  real_on INTEGER NOT NULL DEFAULT 0,
+  changed_at REAL NOT NULL,
+  changed_by TEXT,
+  PRIMARY KEY (user_id, instrument_id)
+);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

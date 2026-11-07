@@ -4,6 +4,8 @@ Nothing in this module can place, modify or cancel an order. The login is made f
 """
 from __future__ import annotations
 
+import asyncio
+
 from app.broker import store
 from app.providers import angelone_client as ao
 
@@ -70,3 +72,53 @@ async def summary(c, user_id: str) -> dict:
     pos = [_position(p) for p in positions]
     return {"funds": _funds(funds), "positions": pos, "open_positions": [p for p in pos if p["net_qty"]], "orders": [_order(o) for o in orders],
             "note": "Read directly from your Angel One account just now. This screen cannot place or change orders."}
+
+
+async def preflight(c, user_id: str) -> dict:
+    """A dry check of everything real trading depends on, against the person's real Angel One account, WITHOUT sending any order: login, funds, positions, today's
+    orders, a live price, the margin calculator. Each step is reported on its own so a failure says exactly which part is wrong."""
+    from app.options import master
+    store.throttle(user_id)
+    steps: list[dict] = []
+
+    def add(name: str, ok: bool, detail: str) -> None:
+        steps.append({"name": name, "ok": bool(ok), "detail": detail})
+
+    try:
+        s = await login(c, user_id)
+    except store.BrokerError as exc:
+        return {"ok": False, "steps": [{"name": "Account details", "ok": False, "detail": exc.message}], "hint": None}
+    except ao.AngelOneApiError as exc:
+        store.set_status(c, user_id, "error", str(exc))
+        return {"ok": False, "steps": [{"name": "Login", "ok": False, "detail": str(exc)}],
+                "hint": "Check the client code, PIN, SmartAPI key and the TOTP secret. If everything is right and it still fails only here, the SmartAPI app may need this server's IP address registered."}
+    add("Login", True, "Angel One accepted your client code, PIN and TOTP")
+    try:
+        async def step(name, coro, show):
+            try:
+                v = await coro
+                add(name, True, show(v))
+                return v
+            except ao.AngelOneApiError as exc:
+                add(name, False, str(exc))
+                return None
+        await step("Funds", ao.get_funds(s), lambda d: f"Available cash {_num(d.get('availablecash')):,.0f}" if _num(d.get("availablecash")) is not None else "Read, but no cash figure came back")
+        await step("Positions", ao.get_positions(s), lambda d: f"{len([p for p in d if _num(p.get('netqty'))])} open position(s)")
+        await step("Today's orders", ao.get_order_book(s), lambda d: f"{len(d)} order(s) today")
+        try:
+            info = await asyncio.to_thread(master.load_underlying, "NIFTY")
+            ltp = await ao.get_ltp(s, "NSE", info.spot_symbol, info.spot_token)
+            add("Live price", ltp is not None, f"NIFTY last price {ltp:,.2f}" if ltp is not None else "Angel One returned no price")
+            nearest = min((k for k in info.contracts), key=lambda k: (k.expiry, abs(k.strike - (ltp or k.strike))), default=None)
+            if nearest is not None:
+                d = await ao.get_margin(s, [{"exchange": "NFO", "qty": nearest.lot_size, "price": 0, "productType": "CARRYFORWARD", "token": nearest.token, "tradeType": "SELL", "orderType": "MARKET"}])
+                add("Margin calculator", d.get("totalMarginRequired") is not None, f"Margin for a one-lot sample: {_num(d.get('totalMarginRequired')) or 0:,.0f} (calculation only, nothing was ordered)")
+        except ao.AngelOneApiError as exc:
+            add("Live price / margin", False, str(exc))
+        except Exception as exc:                       # the instrument list could not be loaded
+            add("Instrument list", False, f"Could not load Angel One's instrument list: {type(exc).__name__}")
+    finally:
+        await ao.logout(s)
+    ok = all(x["ok"] for x in steps)
+    store.set_status(c, user_id, "connected" if ok else "error", None if ok else next(x["detail"] for x in steps if not x["ok"]))
+    return {"ok": ok, "steps": steps, "hint": None if ok else "Fix the first red step. Nothing was ordered."}

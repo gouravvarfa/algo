@@ -110,7 +110,7 @@ def public(r) -> dict:
                 "real_allowed": False, "real_master_on": master, "real_blockers": blockers(None)}
     return {"configured": True, "broker": r["broker"], "client_code": mask(r["client_code"]), "mode": r["mode"], "effective_mode": effective_mode(r),
             "status": r["status"], "status_message": r["status_message"], "last_checked_at": r["last_checked_at"], "updated_at": r["updated_at"],
-            "updated_by": r["updated_by"], "real_allowed": bool(r["real_allowed"]), "real_master_on": master, "real_blockers": blockers(r),
+            "updated_by": r["updated_by"], "real_allowed": bool(r["real_allowed"]), "real_master_on": master, "options_orders": bool(flags.get("real.options")), "real_blockers": blockers(r),
             **limits(r), "mode_changed_at": r["mode_changed_at"], "mode_changed_by": r["mode_changed_by"]}
 
 
@@ -126,6 +126,8 @@ def set_mode(c, user_id: str, mode: str, actor: str) -> None:
         if b:
             raise BrokerError(403, "REAL_BLOCKED", " ".join(b))
     c.execute("UPDATE user_broker SET mode=?, mode_changed_at=?, mode_changed_by=? WHERE user_id=?", (mode, time.time(), actor, user_id))
+    if mode == "paper":
+        c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE user_id=? AND real_on=1", (time.time(), actor, user_id))   # coming back later never re-arms them
     c.commit()
 
 
@@ -146,14 +148,39 @@ def grant(c, user_id: str, allowed: bool, max_lots: int, max_daily_loss: float |
               "mode_changed_by=CASE WHEN ?=0 AND mode='real' THEN ? ELSE mode_changed_by END WHERE user_id=?",
               (1 if allowed else 0, max_lots, max_daily_loss, json.dumps(syms) if syms is not None else None, 1 if allowed else 0, 1 if allowed else 0, time.time(),
                1 if allowed else 0, actor, user_id))
+    if not allowed:
+        c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE user_id=? AND real_on=1", (time.time(), actor, user_id))
     c.commit()
 
 
 def force_all_paper(c, actor: str) -> int:
     """The kill switch: every account back to paper. Returns how many were on real."""
     n = c.execute("UPDATE user_broker SET mode='paper', mode_changed_at=?, mode_changed_by=? WHERE mode='real'", (time.time(), actor)).rowcount
+    c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE real_on=1", (time.time(), actor))
     c.commit()
     return n
+
+
+def instrument_switches(c, user_id: str) -> dict[str, bool]:
+    return {r["instrument_id"]: bool(r["real_on"]) for r in c.execute("SELECT instrument_id, real_on FROM user_instrument_real WHERE user_id=?", (user_id,))}
+
+
+def instrument_set(c, user_id: str, instrument_id: str, symbol: str, on: bool, actor: str) -> None:
+    """The person's real-order switch for one instrument. OFF is always allowed; ON only while the whole account is in effective real mode."""
+    if on:
+        r = row(c, user_id)
+        if effective_mode(r) != "real":
+            raise BrokerError(403, "REAL_BLOCKED", "Real orders cannot be switched on for an instrument: " + (" ".join(blockers(r)) or "your account is on paper. Switch the account to REAL in Settings first."))
+    c.execute("INSERT INTO user_instrument_real (user_id, instrument_id, symbol, real_on, changed_at, changed_by) VALUES (?,?,?,?,?,?) "
+              "ON CONFLICT(user_id, instrument_id) DO UPDATE SET real_on=excluded.real_on, symbol=excluded.symbol, changed_at=excluded.changed_at, changed_by=excluded.changed_by",
+              (user_id, instrument_id, symbol, 1 if on else 0, time.time(), actor))
+    c.commit()
+
+
+def instrument_real(c, user_id: str, instrument_id: str) -> bool:
+    """True only when this instrument's switch is on AND the account is still in effective real mode. The question the order step will ask before every order."""
+    on = c.execute("SELECT real_on FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (user_id, instrument_id)).fetchone()
+    return bool(on and on["real_on"]) and effective_mode(row(c, user_id)) == "real"
 
 
 def throttle(user_id: str) -> None:

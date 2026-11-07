@@ -20,6 +20,7 @@ import uuid
 
 from app.broker import account, angel_orders, store
 from app.db import audit
+from app.ops import flags
 from app.options import master
 from app.providers import angelone_client as ao
 
@@ -41,6 +42,11 @@ class OrderError(Exception):
     def __init__(self, status: int, code: str, message: str, checks: list | None = None):
         super().__init__(message)
         self.status, self.code, self.message, self.checks = status, code, message, checks
+
+
+def _options_on() -> None:
+    if not flags.get("real.options"):
+        raise OrderError(403, "OPTIONS_OFF", "Real option orders are not switched on. For now real orders are planned for the Top-Bottom strategy only.")
 
 
 def now_ist() -> dt.datetime:
@@ -211,6 +217,7 @@ def view(r) -> dict:
 
 
 async def preview(c, user_id: str, body: dict) -> dict:
+    _options_on()
     req = parse(body)
     r, contract, ltp, positions, funds, margin, _ = await _context(c, user_id, req)
     checks, intent = evaluate(row=r, req=req, contract=contract, ltp=ltp, positions=positions, funds=funds, margin_required=margin, orders_today=orders_today(c, user_id), now=now_ist())
@@ -230,6 +237,7 @@ def _finish(c, pid: str, status: str, message: str | None, broker_id: str | None
 
 
 async def send(c, user_id: str, preview_id: str, actor: dict | None) -> dict:
+    _options_on()
     row = c.execute("SELECT * FROM broker_orders WHERE id=? AND user_id=?", (preview_id, user_id)).fetchone()
     if row is None:
         raise OrderError(404, "NO_PREVIEW", "No such preview.")

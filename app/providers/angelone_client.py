@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, TypeVar
 
@@ -27,6 +28,9 @@ logger = logging.getLogger("scanner.angelone_client")
 T = TypeVar("T")
 
 BASE_URL = "https://apiconnect.angelone.in"
+_override = os.environ.get("ANGEL_BASE_URL", "")
+if _override.startswith(("http://127.0.0.1", "http://localhost")):      # a fake Angel One on this machine for end-to-end tests; any other value is ignored
+    BASE_URL = _override.rstrip("/")
 
 ROUTES = {
     "login": "/rest/auth/angelbroking/user/v1/loginByPassword",
