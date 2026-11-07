@@ -88,9 +88,9 @@ export function ChainPanel({ chain, error, loading, live, canTrade, onAdd, strik
                 return (
                   <tr key={r.strike} className={atm ? 'atm' : ''}>
                     <LtpCell leg={r.CE} opt="CE" strike={r.strike} chain={chain} live={live} canTrade={canTrade} onAdd={onAdd} itm={ceItm && !atm} held={held.get(`CE|${r.strike}`)} />
-                    <Plain v={r.CE?.iv} f={(n) => `${num(n, 1)}%`} itm={ceItm && !atm} cls="iv" /><Plain v={r.CE?.oi} f={lakh} itm={ceItm && !atm} cls="oibar ce" bar={pct(r.CE?.oi, maxOi.ce)} />
+                    <Plain v={r.CE?.iv} f={(n) => `${r.CE?.iv_est || r.CE?.iv_from_other ? '~' : ''}${num(n, 1)}%`} itm={ceItm && !atm} cls="iv" /><Plain v={r.CE?.oi} f={lakh} itm={ceItm && !atm} cls="oibar ce" bar={pct(r.CE?.oi, maxOi.ce)} />
                     <td className="k">{n0(r.strike)}<small>{atm ? 'ATM' : `ATM ${off > 0 ? '+' : '−'}${n0(Math.abs(off))}`}</small></td>
-                    <Plain v={r.PE?.oi} f={lakh} itm={peItm && !atm} cls="oibar pe" bar={pct(r.PE?.oi, maxOi.pe)} /><Plain v={r.PE?.iv} f={(n) => `${num(n, 1)}%`} itm={peItm && !atm} cls="iv" />
+                    <Plain v={r.PE?.oi} f={lakh} itm={peItm && !atm} cls="oibar pe" bar={pct(r.PE?.oi, maxOi.pe)} /><Plain v={r.PE?.iv} f={(n) => `${r.PE?.iv_est || r.PE?.iv_from_other ? '~' : ''}${num(n, 1)}%`} itm={peItm && !atm} cls="iv" />
                     <LtpCell leg={r.PE} opt="PE" strike={r.strike} chain={chain} live={live} canTrade={canTrade} onAdd={onAdd} itm={peItm && !atm} held={held.get(`PE|${r.strike}`)} />
                   </tr>
                 )

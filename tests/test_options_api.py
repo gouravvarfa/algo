@@ -57,10 +57,10 @@ def test_sim_chain_unknown_date_is_a_404_not_a_fabricated_chain(client):
     assert r.status_code == 404
 
 
-def test_untraded_contract_has_no_calculated_iv(client):
+def test_untraded_contract_has_no_iv_of_its_own(client):
     c = client.get("/api/options/sim/chain?date=2026-03-06").json()
     pe = next(r for r in c["rows"] if r["strike"] == 22600)["PE"]
-    assert pe["volume"] == 0 and pe["iv"] is None and pe["delta"] is None
+    assert pe["volume"] == 0 and (pe.get("iv_est") or pe.get("iv_from_other")) or pe["iv"] is None          # no IV of its own; if one is shown it is flagged as an estimate
 
 
 def _pos(**kw):

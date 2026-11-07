@@ -11,6 +11,8 @@ export interface Leg {
   chg_oi: number | null
   volume: number | null
   iv: number | null
+  iv_est?: boolean            // no price on either side: interpolated between the neighbouring strikes
+  iv_from_other?: boolean     // taken from the other side of the same strike (put-call parity)
   delta: number | null
   age_min?: number | null
   ts?: string | null

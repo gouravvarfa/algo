@@ -138,7 +138,7 @@ import uuid  # noqa: E402
 
 from pydantic import BaseModel  # noqa: E402
 
-from app.options import bs, engine, strategy as strat, whatif  # noqa: E402
+from app.options import bs, engine, iv_fill, strategy as strat, whatif  # noqa: E402
 
 RATE = 0.065
 SAVE_DIR = bhavcopy.ROOT.parent / "backtests"
@@ -175,6 +175,7 @@ async def sim_chain(date: str, symbol: str = "NIFTY", expiry: str | None = None)
             delta = round(bs.greeks(und, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2)
         by.setdefault(k, {})[o] = {"ltp": cl, "oi": oi, "chg_oi": coi, "volume": vol, "iv": round(iv, 1) if iv else None, "delta": delta}
     strikes = sorted(by)
+    iv_fill.fill([{"strike": k, "CE": by[k].get("CE"), "PE": by[k].get("PE")} for k in strikes], und, t, RATE)
     atm = min(strikes, key=lambda k: abs(k - und))
     ce_oi = sum((v.get("CE") or {}).get("oi") or 0 for v in by.values())
     pe_oi = sum((v.get("PE") or {}).get("oi") or 0 for v in by.values())
@@ -502,16 +503,10 @@ async def intraday_chain(date: str, time: str, symbol: str = "NIFTY", expiry: st
             rec[o] = {"ltp": ltp, "ts": r["ts"] if r else None, "age_min": age, "volume": r["volume"] if r else 0,
                       "oi": oi.get((k, o)), "chg_oi": None, "iv": round(iv, 1) if iv else None,
                       "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
-        # a deep in-the-money leg often trades below intrinsic value (stale, thin), so it has no IV of its own; the other side of the same
-        # strike (the liquid out-of-the-money one) carries the same IV by put-call parity, so use it for the delta (flagged iv_from_other)
-        for o, other in (("CE", "PE"), ("PE", "CE")):
-            a, b = rec.get(o), rec.get(other)
-            if a and a["ltp"] and a["iv"] is None and b and b["iv"]:
-                a["iv"], a["iv_from_other"] = b["iv"], True
-                a["delta"] = round(bs.greeks(spot, k, t, RATE, 0.0, b["iv"] / 100, o == "CE")["delta"], 2)
         out.append({"strike": k, **rec})
     if not out:
         raise HTTPException(404, f"no strikes for {expiry} on {date}")
+    iv_fill.fill(out, spot, t, RATE)
     atm = min(strikes, key=lambda k: abs(k - spot))
     a = next(r for r in out if r["strike"] == atm)
     ce_oi = sum((r.get("CE") or {}).get("oi") or 0 for r in out)
@@ -944,6 +939,7 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
                       "iv": round(iv, 1) if iv else None,
                       "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
         out.append({"strike": k, **rec})
+    iv_fill.fill(out, spot, t, RATE)
     a = next(r for r in out if r["strike"] == atm)
     ce_oi = sum((r.get("CE") or {}).get("oi") or 0 for r in out)
     pe_oi = sum((r.get("PE") or {}).get("oi") or 0 for r in out)
