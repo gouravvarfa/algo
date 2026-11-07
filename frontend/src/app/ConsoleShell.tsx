@@ -14,6 +14,7 @@ const ITEMS: Record<ConsoleKind, Item[]> = {
   admin: [
     { to: '/admin', label: 'Overview', icon: 'health', end: true },
     { to: '/admin/users', label: 'Users', icon: 'users' },
+    { to: '/admin/broker', label: 'Broker & Real', icon: 'shield' },
     { to: '/admin/audit', label: 'Audit log', icon: 'audit' },
     { to: '/admin/announcements', label: 'Announcements', icon: 'flag' },
   ],

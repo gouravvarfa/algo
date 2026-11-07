@@ -195,7 +195,16 @@ CREATE TABLE user_broker (            -- one broker account per user; the secret
 );
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6)]
+_V7 = """
+ALTER TABLE user_broker ADD COLUMN real_allowed INTEGER NOT NULL DEFAULT 0;      -- an admin has granted this person real orders (0 = paper only, whatever they click)
+ALTER TABLE user_broker ADD COLUMN max_lots INTEGER NOT NULL DEFAULT 1;          -- most lots one real order or one open position may hold
+ALTER TABLE user_broker ADD COLUMN max_daily_loss REAL;                          -- rupees; real orders stop for the day beyond this loss (NULL = no cap)
+ALTER TABLE user_broker ADD COLUMN allowed_symbols TEXT;                         -- JSON list, e.g. ["NIFTY"] (NULL = the app's list)
+ALTER TABLE user_broker ADD COLUMN mode_changed_at REAL;
+ALTER TABLE user_broker ADD COLUMN mode_changed_by TEXT;
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

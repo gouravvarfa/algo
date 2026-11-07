@@ -79,6 +79,8 @@ p { margin: 0; }
 .pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
 .pill.open i { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 .pill.paper { color: var(--warning); }
+.pill.real { color: #fff; background: var(--danger); border-color: var(--danger); text-decoration: none; animation: realpulse 2.4s ease-in-out infinite; }
+@keyframes realpulse { 50% { box-shadow: 0 0 0 4px var(--danger-soft); } }
 .page { padding: 18px 24px 40px; display: grid; gap: 14px; max-width: 1680px; margin: 0 auto; }
 .page > * { min-width: 0; }
 

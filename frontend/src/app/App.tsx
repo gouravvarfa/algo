@@ -25,6 +25,7 @@ const ErrorsPage = lazy(() => import('../features/developer/ErrorsPage'))
 const StreamPage = lazy(() => import('../features/developer/StreamPage'))
 const FlagsPage = lazy(() => import('../features/developer/FlagsPage'))
 const AnnouncementsPage = lazy(() => import('../features/admin/AnnouncementsPage'))
+const BrokerAdminPage = lazy(() => import('../features/admin/BrokerAdminPage'))
 const AdminOverview = lazy(() => import('../features/admin/OverviewPage'))
 const SessionsPage = lazy(() => import('../features/developer/MorePages').then((m) => ({ default: m.SessionsPage })))
 const LoginAttemptsPage = lazy(() => import('../features/developer/MorePages').then((m) => ({ default: m.LoginAttemptsPage })))
@@ -74,6 +75,7 @@ export function App() {
         <Route index element={<AdminOverview />} />
         <Route path="users" element={<UsersPage />} />
         <Route path="users/:id/view/:page" element={<Guard need="users.view_as"><ViewAsPage /></Guard>} />
+        <Route path="broker" element={<BrokerAdminPage />} />
         <Route path="audit" element={<Guard need="audit.read"><AuditPage /></Guard>} />
         <Route path="announcements" element={<Guard need="users.manage"><AnnouncementsPage /></Guard>} />
         <Route path="*" element={<Navigate to="/admin" replace />} />

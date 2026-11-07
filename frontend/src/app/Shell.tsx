@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { get } from '../lib/api'
 import { num, sign } from '../lib/format'
 import { useSession } from '../lib/session'
@@ -92,6 +92,8 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
   const { pathname } = useLocation()
   const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 60_000, retry: false })
   const open = ov.data?.market_open
+  const br = useQuery({ queryKey: ['broker'], queryFn: () => get<{ effective_mode: string }>('/api/me/broker'), refetchInterval: 60_000, retry: false })
+  const real = br.data?.effective_mode === 'real'
   return (
     <header className="topbar">
       <Hamburger open={navOpen} onClick={onNav} />
@@ -100,7 +102,11 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
       <span className={'pill' + (open ? ' open' : '')} title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected.">
         <i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}
       </span>
-      <span className="pill paper" title="Paper trading and research only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>
+      {real ? (
+        <Link to="/settings" className="pill real" title="Real mode is switched on for your Angel One account. Click to see your limits."><b>REAL</b>&nbsp;armed</Link>
+      ) : (
+        <span className="pill paper" title="Paper trading and research only. No order is sent to a broker."><b>PAPER</b>&nbsp;no orders</span>
+      )}
       <ThemeToggle />
     </header>
   )

@@ -11,6 +11,7 @@ Known switches (all default to the safe, normal value):
   feature.collector   false -> the daily option download does not run
   strategy.enabled    false -> that user's Top-Bottom strategy is switched off (scope user:<id>): no new signals, entries or exits are evaluated
   strategy.locked     true  -> an admin switched it off, so the person cannot switch it back on themselves
+  real.enabled        false -> REAL broker orders are off for everybody (the default, and the kill switch: false forces every account back to paper)
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import time
 
 from app.db import platform_db
 
-DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.stream": True, "feature.margin": True, "feature.collector": True, "strategy.enabled": True, "strategy.locked": False}
+DEFAULTS = {"engines.paused": False, "engine.paused": False, "feature.live_chain": True, "feature.stream": True, "feature.margin": True, "feature.collector": True, "strategy.enabled": True, "strategy.locked": False, "real.enabled": False}
 _CACHE_SECONDS = 2.0
 _cache: dict | None = None
 _cache_at = 0.0

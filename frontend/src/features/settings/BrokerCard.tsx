@@ -2,7 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { del, get, post, put } from '../../lib/api'
 
-interface Status { configured: boolean; client_code?: string; mode: string; status: string; status_message: string | null; last_checked_at?: number | null }
+interface Status {
+  configured: boolean; client_code?: string; mode: string; effective_mode: string; status: string; status_message: string | null; last_checked_at?: number | null
+  real_allowed: boolean; real_master_on: boolean; real_blockers: string[]; max_lots?: number; max_daily_loss?: number | null; allowed_symbols?: string[]
+}
 interface Summary {
   funds: { available_cash: number | null; net: number | null; span_margin: number | null; exposure_margin: number | null; m2m_realised: number | null; m2m_unrealised: number | null }
   positions: { symbol: string; exchange: string; product: string; net_qty: number | null; avg_price: number | null; ltp: number | null; pnl: number | null }[]
@@ -22,6 +25,8 @@ export function BrokerCard() {
   const [open, setOpen] = useState(false)
   const [f, setF] = useState({ client_code: '', api_key: '', pin: '', totp_secret: '' })
   const [err, setErr] = useState('')
+  const [askPw, setAskPw] = useState(false)
+  const [pw, setPw] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: ['broker'] })
   const save = useMutation({
     mutationFn: () => put<Status>('/api/me/broker', f),
@@ -30,6 +35,11 @@ export function BrokerCard() {
   })
   const test = useMutation({ mutationFn: () => post<Status>('/api/me/broker/test'), onSuccess: () => { setErr(''); refresh() }, onError: (e) => { setErr(msg(e)); refresh() } })
   const remove = useMutation({ mutationFn: () => del('/api/me/broker'), onSuccess: () => { setErr(''); qc.removeQueries({ queryKey: ['broker-summary'] }); refresh() } })
+  const mode = useMutation({
+    mutationFn: (v: { mode: string; password?: string }) => put<Status>('/api/me/broker/mode', v),
+    onSuccess: () => { setErr(''); setAskPw(false); setPw(''); refresh() },
+    onError: (e) => { setErr(msg(e)); setPw('') },
+  })
   const sum = useMutation({ mutationFn: () => get<Summary>('/api/me/broker/summary'), onError: (e) => setErr(msg(e)) })
   const s = st.data
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value })
@@ -43,7 +53,9 @@ export function BrokerCard() {
       {s?.configured && !open && (
         <dl className="kv">
           <dt>Client code</dt><dd>{s.client_code}</dd>
-          <dt>Mode</dt><dd>Paper (real orders are not switched on)</dd>
+          <dt>Mode</dt><dd><span className={'chip ' + (s.effective_mode === 'real' ? 'bad' : 'muted')}>{s.effective_mode === 'real' ? 'REAL' : 'PAPER'}</span>
+            {s.mode === 'real' && s.effective_mode !== 'real' && <span className="sub"> &nbsp;you chose real, but it is blocked right now</span>}</dd>
+          {s.real_allowed && <><dt>Your real limits</dt><dd>{s.max_lots} lot{(s.max_lots ?? 1) > 1 ? 's' : ''} · {s.max_daily_loss == null ? 'no daily loss cap' : `₹${s.max_daily_loss.toLocaleString('en-IN')} daily loss`} · {s.allowed_symbols?.join(', ')}</dd></>}
           {s.status_message && <><dt>Last problem</dt><dd className="err">{s.status_message}</dd></>}
         </dl>
       )}
@@ -64,6 +76,33 @@ export function BrokerCard() {
           <button className="btn" disabled={sum.isPending} onClick={() => sum.mutate()}>{sum.isPending ? 'Reading…' : 'View my account'}</button>
           <button className="btn" onClick={() => setOpen(true)}>Change details</button>
           <button className="btn danger" onClick={() => { if (window.confirm('Remove your Angel One details from this app?')) remove.mutate() }}>Remove</button>
+        </div>
+      )}
+      {s?.configured && !open && (
+        <div className="card" style={{ marginTop: 12, borderColor: s.effective_mode === 'real' ? 'var(--danger)' : undefined }}>
+          <div className="card-head"><h2>Paper or Real</h2></div>
+          {s.effective_mode === 'real' ? (
+            <>
+              <p className="sub"><b>REAL is on.</b> Your Angel One account is armed within the limits above. Switch back to paper any time, no password needed.</p>
+              <button className="btn" disabled={mode.isPending} onClick={() => mode.mutate({ mode: 'paper' })}>Back to PAPER</button>
+            </>
+          ) : (
+            <>
+              {s.real_blockers.length > 0 ? (
+                <><p className="sub">Real mode is not available yet. What is missing:</p>
+                  <ul className="sub" style={{ margin: '4px 0 8px 18px' }}>{s.real_blockers.map((b) => <li key={b}>{b}</li>)}</ul></>
+              ) : <p className="sub">Everything is in place. Real mode uses your own money in your own Angel One account. You will be asked for your password.</p>}
+              {askPw ? (
+                <form className="row" style={{ gap: 8, flexWrap: 'wrap' }} onSubmit={(e) => { e.preventDefault(); if (pw) mode.mutate({ mode: 'real', password: pw }) }}>
+                  <input type="password" autoFocus placeholder="Your account password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" />
+                  <button className="btn danger" disabled={!pw || mode.isPending}>{mode.isPending ? 'Switching…' : 'Switch to REAL'}</button>
+                  <button type="button" className="btn" onClick={() => { setAskPw(false); setPw('') }}>Cancel</button>
+                </form>
+              ) : (
+                <button className="btn danger" disabled={s.real_blockers.length > 0} onClick={() => setAskPw(true)}>Switch to REAL…</button>
+              )}
+            </>
+          )}
         </div>
       )}
       {err && <p className="err" role="alert">{err}</p>}
