@@ -21,6 +21,7 @@ from app.options.master import IST, UnderlyingInfo
 from app.providers.angelone_client import AngelOneApiError, get_candle_data
 
 DB = Path(__file__).resolve().parents[2] / "data" / "intraday" / "nifty_1m.db"
+REPLAY_DB = DB.with_name("nifty_1m_dhan.db")      # older days converted from the Dhan download (app/options/dhan_replay.py); absent = the Simulator behaves as before
 INDEX_KEY = ("", 0.0, "IDX")            # (expiry, strike, opt) used for the index rows
 OPEN, CLOSE = "09:15", "15:30"
 SCHEMA = """

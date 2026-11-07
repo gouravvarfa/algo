@@ -5,6 +5,7 @@ import asyncio
 import datetime as dt
 import sqlite3
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -368,13 +369,55 @@ async def sim_whatif(req: WhatIfReq):
 
 
 # ---------------------------------------------------------------- intraday 1-minute time travel (real Angel One candles)
-from app.options import intraday  # noqa: E402
+from app.options import dhan_replay, intraday  # noqa: E402
 
 INTRADAY_DB = None   # None = intraday.DB; tests point this at a temp file
 
 
 def _idb():
     return intraday.connect(INTRADAY_DB)
+
+
+REPLAY_INTRADAY_DB = None   # None = intraday.REPLAY_DB; tests point this at a temp file
+_REPLAY: dict = {}          # path -> (file mtime, {symbol: {date: day row}})
+
+
+def _replay_path() -> Path:
+    return Path(REPLAY_INTRADAY_DB) if REPLAY_INTRADAY_DB else intraday.REPLAY_DB
+
+
+def _replay_days(sym: str) -> dict[str, dict]:
+    """Days the Dhan replay file holds for `sym` ({} when the file is not there): read again only when the file changes."""
+    p = _replay_path()
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return {}
+    hit = _REPLAY.get(str(p))
+    if not hit or hit[0] != mt:
+        by: dict = {}
+        c = intraday.connect(p)
+        try:
+            if _has_table(c):
+                for (s_,) in c.execute("SELECT DISTINCT symbol FROM replay_days").fetchall():
+                    by[s_] = {d["date"]: d for d in dhan_replay.days(c, s_)}
+        finally:
+            c.close()
+        hit = (mt, by)
+        _REPLAY[str(p)] = hit
+    return hit[1].get(sym, {})
+
+
+def _has_table(c) -> bool:
+    return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='replay_days'").fetchone() is not None
+
+
+def _src(date: str, sym: str):
+    """The connection that holds `date`: the Angel One database when it has that day's minutes, else the Dhan replay file when it has the day, else the Angel One one (as before)."""
+    c = _idb()
+    if date in _replay_days(sym) and not intraday.minutes(c, sym, date):
+        return intraday.connect(_replay_path())
+    return c
 
 
 def _hm(t: str) -> str:
@@ -390,14 +433,17 @@ async def intraday_days(symbol: str = "NIFTY"):
 
     def q():
         with _idb() as c:
-            return {"days": intraday.days(c, sym),
-                    "note": "Real 1-minute candles from Angel One. Only contracts still listed at fetch time are available; no OI in 1-minute data."}
-    return await _cached(("intraday_days", sym), q)
+            main = [dict(d, source="Angel One") for d in intraday.days(c, sym)]
+        have = {d["date"] for d in main}
+        older = [dict(d, source="Dhan") for dt_, d in _replay_days(sym).items() if dt_ not in have]
+        return {"days": sorted(main + older, key=lambda d: d["date"]),
+                "note": "Real 1-minute candles. Recent days: Angel One (contracts still listed at fetch time). Older days (if any): Dhan, nearest weekly expiry only and about +-500 points around the index. No OI in 1-minute data."}
+    return await _cached(("intraday_days", sym, _replay_path().exists()), q)
 
 
 @router.get("/intraday/minutes")
 async def intraday_minutes(date: str, symbol: str = "NIFTY"):
-    with _idb() as c:
+    with _src(date, symbol.upper()) as c:
         m = intraday.minutes(c, symbol.upper(), date)
     if not m:
         raise HTTPException(404, f"no intraday index data on {date}")
@@ -418,7 +464,7 @@ def _prev_oi(sym: str, date: str, expiry: str) -> tuple[dict, str | None, int | 
 @router.get("/intraday/chain")
 async def intraday_chain(date: str, time: str, symbol: str = "NIFTY", expiry: str | None = None):
     sym, hm = symbol.upper(), _hm(time)
-    with _idb() as c:
+    with _src(date, sym) as c:
         sp = intraday.spot_at(c, sym, date, hm)
         if not sp:
             raise HTTPException(404, f"no index minute at or before {date} {hm}")
@@ -491,7 +537,7 @@ class IntradayMarkReq(BaseModel):
 async def intraday_mark(req: IntradayMarkReq):
     """Value positions at a minute with the last real trade at or before it; expired contracts at settlement."""
     sym, hm = req.symbol.upper(), _hm(req.time)
-    with _idb() as c:
+    with _src(req.date, sym) as c:
         sp = intraday.spot_at(c, sym, req.date, hm)
         if not sp:
             raise HTTPException(404, f"no index minute at or before {req.date} {hm}")
@@ -576,14 +622,17 @@ async def sim_sl_check(req: SLReq):
     sym = req.symbol.upper()
     hm = _hm(req.time) if req.time else None
     out = {}
+    rep = _replay_days(sym)
+    rc = intraday.connect(_replay_path()) if rep else None           # older days: the Dhan replay file, unless the Angel One database has the day
     with _db() as b, _idb() as ic:
+        conn_for = lambda d: rc if rc is not None and d in rep and not intraday.minutes(ic, sym, d) else ic
+        day_q = "SELECT DISTINCT substr(ts,1,10) FROM candles WHERE symbol=? AND expiry=? AND strike=? AND opt=? AND ts BETWEEN ? AND ?"
         for p in req.positions:
             days = [r[0] for r in b.execute("SELECT DISTINCT trade_date FROM options_eod WHERE symbol=? AND expiry=? AND strike=? AND opt=? AND trade_date BETWEEN ? AND ? ORDER BY 1",
                                             (sym, p.expiry, p.strike, p.opt, p.entry_date, req.date))]
-            days = sorted(set(days) | set(r[0] for r in ic.execute(
-                "SELECT DISTINCT substr(ts,1,10) FROM candles WHERE symbol=? AND expiry=? AND strike=? AND opt=? AND ts BETWEEN ? AND ?",
-                (sym, p.expiry, p.strike, p.opt, p.entry_date + " 00:00", req.date + " 23:59"))))
-            bars_1m = lambda d, p=p: [(ts[11:], o, h, l, c) for ts, o, h, l, c in ic.execute(
+            args = (sym, p.expiry, p.strike, p.opt, p.entry_date + " 00:00", req.date + " 23:59")
+            days = sorted(set(days) | set(r[0] for r in ic.execute(day_q, args)) | (set(r[0] for r in rc.execute(day_q, args)) if rc is not None else set()))
+            bars_1m = lambda d, p=p: [(ts[11:], o, h, l, c) for ts, o, h, l, c in conn_for(d).execute(
                 "SELECT ts, open, high, low, close FROM candles WHERE symbol=? AND expiry=? AND strike=? AND opt=? AND ts BETWEEN ? AND ? ORDER BY ts",
                 (sym, p.expiry, p.strike, p.opt, d + " 00:00", d + " 23:59"))]
             bar_eod = lambda d, p=p: b.execute("SELECT open, high, low FROM options_eod WHERE symbol=? AND trade_date=? AND expiry=? AND strike=? AND opt=?",
