@@ -9,6 +9,7 @@ interface Acct {
   mode: string; effective_mode: string; real_allowed: boolean; real_blockers: string[]; max_lots: number; max_daily_loss: number | null; allowed_symbols: string[]
   mode_changed_at: number | null; mode_changed_by: string | null
 }
+interface AdminOrder { id: string; username: string | null; name: string | null; side: string; lots: number; symbol: string; strike: number; opt: string; expiry: string; price: number; intent: string; status: string; broker_order_id: string | null; message: string | null; created_at: number }
 interface Overview { master_on: boolean; can_turn_on: boolean; accounts: Acct[]; counts: { connected: number; allowed: number; real_now: number; total: number } }
 
 const SYMS = ['NIFTY', 'BANKNIFTY']
@@ -50,6 +51,7 @@ export default function BrokerAdminPage() {
   const toast = useToast()
   const q = useQuery({ queryKey: ['admin', 'broker'], queryFn: () => get<Overview>('/api/admin/broker/overview'), refetchInterval: 30_000 })
   const [edit, setEdit] = useState<string | null>(null)
+  const ord = useQuery({ queryKey: ['admin', 'broker-orders'], queryFn: () => get<{ orders: AdminOrder[] }>('/api/admin/broker/orders?limit=100'), refetchInterval: 20_000 })
   const refresh = () => { void qc.invalidateQueries({ queryKey: ['admin', 'broker'] }) }
   const master = useMutation({
     mutationFn: (enabled: boolean) => post<{ accounts_back_to_paper: number }>('/api/admin/broker/master', { enabled }),
@@ -122,7 +124,28 @@ export default function BrokerAdminPage() {
               </div>
             )}
           </div>
-          <p className="note">Order sending is not built yet: "REAL" means the account is armed and within its limits, ready for the order step. Every change here is written to the Audit log.</p>
+          <div className="card">
+            <div className="card-head"><h2>Real orders</h2><span className="spacer" /><span className="sub">newest first · every order is also in the Audit log</span></div>
+            {!ord.data || ord.data.orders.length === 0 ? <p className="empty">No real order has been prepared yet.</p> : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="tbl">
+                  <thead><tr><th>When</th><th>User</th><th>Order</th><th>Price</th><th>Status</th><th>Angel One id</th></tr></thead>
+                  <tbody>{ord.data.orders.map((o) => (
+                    <tr key={o.id}>
+                      <td>{when(o.created_at)}</td>
+                      <td>{o.name ?? o.username}</td>
+                      <td><b>{o.side}</b> {o.lots} × {o.symbol} {o.strike} {o.opt}<div className="sub">{o.expiry} · {o.intent}</div></td>
+                      <td>₹{o.price.toLocaleString('en-IN')}</td>
+                      <td><span className={'chip ' + (o.status === 'placed' ? 'ok' : o.status === 'rejected' || o.status === 'unknown' ? 'bad' : 'muted')} title={o.message ?? ''}>{o.status}</span>
+                        {o.status === 'unknown' && <div className="sub err">outcome not known: the user must check Angel One</div>}</td>
+                      <td className="sub">{o.broker_order_id ?? '–'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <p className="note">"REAL" means the account is armed and within its limits. Orders go through a preview with every safety check, and each can be sent only once. Every change here is written to the Audit log.</p>
         </>
       )}
     </div>

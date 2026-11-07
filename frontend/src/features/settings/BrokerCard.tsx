@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { del, get, post, put } from '../../lib/api'
+import { OrderTicket } from './OrderTicket'
 
 interface Status {
   configured: boolean; client_code?: string; mode: string; effective_mode: string; status: string; status_message: string | null; last_checked_at?: number | null
@@ -105,6 +106,7 @@ export function BrokerCard() {
           )}
         </div>
       )}
+      {s?.configured && !open && s.real_allowed && <OrderTicket symbols={s.allowed_symbols ?? ['NIFTY']} maxLots={s.max_lots ?? 1} canTrade={s.effective_mode === 'real'} />}
       {err && <p className="err" role="alert">{err}</p>}
       {sum.data && (
         <div style={{ marginTop: 12 }}>

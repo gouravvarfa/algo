@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import time
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.auth_api import db, require
-from app.broker import account, store
+from app.broker import account, orders, store
 from app.db import audit
 from app.ops import flags
+from app.options import master
 from app.security import authz, passwords, users
 from app.security.users import AuthError
 from app.user_data import user_id_of
@@ -187,3 +191,53 @@ def admin_master(body: MasterBody, actor=Depends(require("users.manage")), c=Dep
     audit.append(c, "broker.master", actor_id=actor["id"], actor_role=actor["role"], target_type="platform", target_id="real.enabled",
                  detail={"actor": actor["username"], "enabled": body.enabled, "accounts_back_to_paper": n})
     return {"master_on": body.enabled, "accounts_back_to_paper": n}
+
+
+# ---- real orders: preview -> send (once) -> cancel; the checks live in app/broker/orders.py --------------------------------------------------
+async def _orders(coro):
+    """Run an order step; a refusal comes back as JSON with the failed check list, so the screen can show exactly why."""
+    try:
+        return await coro
+    except orders.OrderError as e:
+        return JSONResponse({"error": e.code, "message": e.message, "checks": e.checks}, status_code=e.status)
+    except store.BrokerError as e:
+        return JSONResponse({"error": e.code, "message": e.message, "checks": None}, status_code=e.status)
+
+
+@router.get("/api/me/broker/contracts")
+async def my_contracts(symbol: str = "NIFTY", request: Request = None, c=Depends(db)):
+    sym = symbol.upper()
+    if sym not in store.SYMBOLS:
+        raise AuthError(400, "BAD_SYMBOL", f"symbol must be one of {list(store.SYMBOLS)}")
+    info = await asyncio.to_thread(master.load_underlying, sym)
+    exps = sorted({k.expiry.isoformat() for k in info.contracts})
+    return {"symbol": sym, "expiries": exps[:6], "lot_size": info.contracts[0].lot_size if info.contracts else None,
+            "strikes": {e: sorted({k.strike for k in info.contracts if k.expiry.isoformat() == e}) for e in exps[:6]}}
+
+
+@router.post("/api/me/broker/orders/preview")
+async def order_preview(body: dict, request: Request, c=Depends(db)):
+    return await _orders(orders.preview(c, user_id_of(request), body))
+
+
+@router.post("/api/me/broker/orders/{order_id}/send")
+async def order_send(order_id: str, request: Request, c=Depends(db)):
+    return await _orders(orders.send(c, user_id_of(request), order_id, getattr(request.state, "user", None)))
+
+
+@router.post("/api/me/broker/orders/{order_id}/cancel")
+async def order_cancel(order_id: str, request: Request, c=Depends(db)):
+    return await _orders(orders.cancel(c, user_id_of(request), order_id, getattr(request.state, "user", None)))
+
+
+@router.get("/api/me/broker/orders")
+def my_orders(request: Request, c=Depends(db)):
+    return {"orders": orders.listing(c, user_id_of(request))}
+
+
+@router.get("/api/admin/broker/orders")
+def admin_orders(limit: int = 100, actor=Depends(require("users.read")), c=Depends(db)):
+    out = orders.listing(c, None, limit)
+    names = {r["id"]: (r["username"], r["name"]) for r in c.execute("SELECT id, username, name FROM users")}
+    uid = {r["id"]: r["user_id"] for r in c.execute("SELECT id, user_id FROM broker_orders")}
+    return {"orders": [{**o, "user_id": uid.get(o["id"]), "username": (names.get(uid.get(o["id"])) or (None, None))[0], "name": (names.get(uid.get(o["id"])) or (None, None))[1]} for o in out]}

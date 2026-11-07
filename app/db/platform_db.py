@@ -204,7 +204,32 @@ ALTER TABLE user_broker ADD COLUMN mode_changed_at REAL;
 ALTER TABLE user_broker ADD COLUMN mode_changed_by TEXT;
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7)]
+_V8 = """
+CREATE TABLE broker_orders (          -- every real order a person prepared: the preview, whether it was sent, and what the broker answered. Never deleted.
+  id TEXT PRIMARY KEY,                -- the preview id; a preview can be sent once
+  user_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  expiry TEXT NOT NULL,
+  strike REAL NOT NULL,
+  opt TEXT NOT NULL,
+  side TEXT NOT NULL,
+  lots INTEGER NOT NULL,
+  qty INTEGER NOT NULL,
+  price REAL NOT NULL,
+  product TEXT NOT NULL,
+  intent TEXT NOT NULL,               -- entry | exit
+  trading_symbol TEXT NOT NULL,
+  status TEXT NOT NULL,               -- previewed | sending | placed | rejected | unknown | cancelled | expired
+  broker_order_id TEXT,
+  message TEXT,
+  checks_json TEXT,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX idx_broker_orders_user ON broker_orders (user_id, created_at);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

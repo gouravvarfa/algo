@@ -36,6 +36,7 @@ ROUTES = {
     "funds": "/rest/secure/angelbroking/user/v1/getRMS",            # READ-ONLY account views (a user's own Angel One account)
     "positions": "/rest/secure/angelbroking/order/v1/getPosition",
     "orders": "/rest/secure/angelbroking/order/v1/getOrderBook",
+    "ltp": "/rest/secure/angelbroking/order/v1/getLtpData",
 }
 
 AngelOneInterval = Literal[
@@ -271,3 +272,26 @@ async def get_positions(session: AngelOneSession) -> list[dict[str, Any]]:
 
 async def get_order_book(session: AngelOneSession) -> list[dict[str, Any]]:
     return await _read(session, "orders") or []
+
+
+async def get_ltp(session: AngelOneSession, exchange: str, trading_symbol: str, token: str) -> float | None:
+    """Last traded price of one contract (read-only POST of a quote request)."""
+    async def _attempt() -> Any:
+        call_metrics.record_angelone_call()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.post(BASE_URL + ROUTES["ltp"], headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"},
+                                             json={"exchange": exchange, "tradingsymbol": trading_symbol, "symboltoken": token})
+            except httpx.HTTPError as exc:
+                raise AngelOneApiError(f"Could not reach Angel One: {exc}", "network", retryable=True) from exc
+        body = _parse_json_or_raise(response, "data")
+        if response.status_code != 200 or body.get("status") is not True:
+            raise AngelOneApiError(body.get("message", "Angel One refused the quote request"), "data", retryable=False)
+        return body.get("data")
+
+    d = await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
+    try:
+        v = float((d or {}).get("ltp"))
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
