@@ -36,6 +36,9 @@ STALE_SIGNAL_S = 900.0
 NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
+IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
+REAL_TICK_FALLBACK = 0.10          # price grid when the contract's tick is unknown: a multiple of 0.10 is also a multiple of 0.05, so it is valid on either NSE grid
+EXCHANGES = ("NFO",)               # MCX (gold / silver) quantity units at Angel One are not verified yet: no real MCX order until they are
 MAX_ORDERS_PER_DAY = 40
 TICK_S = 5.0
 KEEP_EVENTS = 80
@@ -150,7 +153,7 @@ class RealTB:
         return c.execute("SELECT COUNT(*) FROM real_tb_orders WHERE user_id=? AND created_at>=? AND status IN ('placed','open','filled','unknown')", (user_id, start)).fetchone()[0]
 
     async def _place(self, c, broker, a: dict, now: dt.datetime, role: str, payload: dict, why: str, contract: dict, attempt: int = 0) -> dict | None:
-        if self._orders_today(c, a["user_id"]) >= MAX_ORDERS_PER_DAY:
+        if role == "entry" and self._orders_today(c, a["user_id"]) >= MAX_ORDERS_PER_DAY:          # a stop or an exit is never held back
             self._ev(a, now, f"{role} order not sent: {MAX_ORDERS_PER_DAY} orders already sent today")
             return None
         payload = {**payload, "ordertag": "ALGOTB"}
@@ -211,11 +214,12 @@ class RealTB:
         if row is None or not row["real_on"] or not store.instrument_real(c, uid, inst_id):
             return
         try:
-            at = dt.datetime.fromisoformat(e["at"]).timestamp() if e.get("at") else 0
+            t = dt.datetime.fromisoformat(e["at"]) if e.get("at") else None
+            at = (t if t.tzinfo else t.replace(tzinfo=IST)).timestamp() if t else 0     # the engine writes IST wall time without a zone; the server runs on UTC
         except ValueError:
             at = 0
         a = self._acct(c, uid, inst_id, e["symbol"], row["changed_at"])
-        if at and at < row["changed_at"] - 1:
+        if at and at < row["changed_at"] - 60:                                            # minute precision: same-minute events count as after
             self._ev(a, now, f"{e['event']} {e['direction']} ignored: it happened before the real switch was turned on")
             self._save(c, a)
             return
@@ -241,6 +245,8 @@ class RealTB:
             self._miss(a, now, "contract token unknown, cannot trade it", e)
             return
         contract = dict(contract)
+        if not contract.get("tick_size"):
+            contract["tick_size"] = REAL_TICK_FALLBACK
         inst = snap.get("instrument") or {}
         contract["lot_size"] = contract.get("lot_size") or inst.get("lot_size")
         contract["lots"] = inst.get("lots")
@@ -314,12 +320,20 @@ class RealTB:
     async def _step(self, c, uid: str, iid: str, sym: str, now: dt.datetime) -> None:
         row = c.execute("SELECT real_on, changed_at FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (uid, iid)).fetchone()
         a = self._acct(c, uid, iid, sym, row["changed_at"] if row else 0)
-        if not (a["position"] or a["pending_entry"] or a["orders"]) and not (row and row["real_on"]):
+        busy = bool(a["position"] or a["pending_entry"] or any(o["state"] in ACTIVE for o in a["orders"]) or a.get("_cancel_entry"))
+        if not busy:
+            return                                                        # nothing open, nothing waiting: no call to Angel One at all
+        session = (a["pending_entry"] or {}).get("contract", {}).get("session") or (self.snaps.get(iid) or {}).get("instrument", {}).get("session", "NSE")
+        quiet = a.get("released") or (not a["pending_entry"] and not a.get("exit_since") and not self._market_open(session, now))
+        if quiet and a.get("polled_at") and _age(a["polled_at"], now) < IDLE_POLL_S:
             return
+        a["polled_at"] = _s(now)
         try:
             broker = await self.broker_for(c, uid)
             book = {str(o.get("orderid")): o for o in await broker.book()}
         except Exception as exc:
+            from app.broker import orders as _orders
+            _orders._drop(uid)                                            # the next round logs in afresh
             self._ev(a, now, f"Angel One not reachable this round ({type(exc).__name__}); nothing was sent")
             self._save(c, a)
             return
@@ -353,6 +367,14 @@ class RealTB:
             if b is None:
                 continue
             st = (b.get("status") or b.get("orderstatus") or "").lower()
+            try:
+                filled = int(float(b.get("filledshares") or 0))
+            except ValueError:
+                filled = 0
+            if st != "complete" and 0 < filled < o["qty"] and st in ("cancelled", "rejected"):
+                self._mark(c, o, a, st, f"partly filled: {filled} of {o['qty']}")
+                self._halt(c, a, now, f"a {o['role']} order ended {st} after {filled} of {o['qty']} were filled. Square off or adjust at Angel One, then clear the halt.")
+                continue
             if st == "complete":
                 try:
                     avg = float(b.get("averageprice") or 0) or o.get("price")
@@ -363,9 +385,9 @@ class RealTB:
             elif st in ("rejected", "cancelled"):
                 self._mark(c, o, a, st, b.get("text") or st)
                 self._ev(a, now, f"{o['role']} order {st} by Angel One: {b.get('text') or ''}", order=o["id"])
-                if o["role"] == "stop" and st == "rejected" and a["position"] and a["exit_since"] is None:
-                    a["exit_since"] = _s(now)
-                    self._ev(a, now, "the stop order was rejected: the position will be exited with a LIMIT order, not left unprotected")
+                if o["role"] == "stop" and st == "rejected" and a["position"]:
+                    a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+                    self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
                 if o["role"] == "entry" and st == "rejected" and a["pending_entry"]:
                     self._miss(a, now, f"entry order rejected: {b.get('text') or ''}")
             elif st in ("open", "trigger pending", "open pending", "validation pending", "put order req received", "modify pending", "after market order req received"):
@@ -444,6 +466,8 @@ class RealTB:
 
     async def _entry_guard(self, c, broker, a: dict, pe: dict, now: dt.datetime) -> str | None:
         uid, ct = a["user_id"], pe["contract"]
+        if ct.get("exch_seg", "NFO") not in EXCHANGES:
+            return f"real orders on {ct.get('exch_seg')} are not switched on yet (quantity units at Angel One not verified)"
         r = store.row(c, uid)
         if store.effective_mode(r) != "real":
             return "real mode is not in effect: " + "; ".join(store.blockers(r))
@@ -547,12 +571,12 @@ class RealTB:
             return
         if not market:
             return
-        if not stops and a["stop_target"] is not None and not (a["exit_since"] and _age(a["exit_since"], now) > STOP_GRACE_S):
+        if not stops and a["stop_target"] is not None and not a["exit_since"]:
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
             o = await self._place(c, broker, a, now, "stop", payload, "stop-loss for the open position", ct)
-            if o is not None and o["state"] == "rejected" and a["exit_since"] is None:
-                a["exit_since"] = _s(now)
-                self._ev(a, now, "the stop order was rejected: the position will be exited with a LIMIT order, not left unprotected")
+            if o is not None and o["state"] == "rejected":
+                a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+                self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
         elif stops and a["stop_target"] is not None:
             o = stops[0]
             if o["trigger"] is None or abs(a["stop_target"] - o["trigger"]) >= p["tick"] - 1e-9:

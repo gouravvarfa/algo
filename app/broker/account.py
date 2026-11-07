@@ -43,11 +43,18 @@ async def login(c, user_id: str) -> ao.AngelOneSession:
 
 
 async def _login_or_record(c, user_id: str) -> ao.AngelOneSession:
+    """Only a refused login (wrong details) marks the account as failed. A network hiccup must not quietly switch real trading off until someone
+    presses Test connection; and a login that works again puts the account back to connected."""
     try:
-        return await login(c, user_id)
+        s = await login(c, user_id)
     except ao.AngelOneApiError as exc:
-        store.set_status(c, user_id, "error", str(exc))
+        if exc.kind == "auth":
+            store.set_status(c, user_id, "error", str(exc))
         raise store.BrokerError(400 if exc.kind == "auth" else 502, "LOGIN_FAILED", str(exc)) from exc
+    r = store.row(c, user_id)
+    if r is not None and r["status"] == "error":
+        store.set_status(c, user_id, "connected", None)
+    return s
 
 
 async def check(c, user_id: str) -> dict:

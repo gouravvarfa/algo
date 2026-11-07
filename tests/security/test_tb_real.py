@@ -431,3 +431,80 @@ def test_people_and_admins_can_see_the_executor_state_and_a_person_can_clear_a_h
     assert api(c_user, "POST", f"/api/me/broker/tb/{IID}/clear-halt").status_code == 200
     assert c_user.get("/api/me/broker/tb").json()["instruments"][0]["halted"] is None
     assert api(c_user, "POST", f"/api/me/broker/tb/{IID}/clear-halt").status_code == 404
+
+
+@async_test
+async def test_engine_times_are_read_as_india_time_at_minute_precision(env):
+    """The engine writes 'YYYY-MM-DD HH:MM' in India time without a zone, and the server runs on UTC."""
+    ist_now = dt.datetime.now(tb_real.IST).replace(tzinfo=None)
+    env.db.execute("UPDATE user_instrument_real SET changed_at=?", (dt.datetime.now().timestamp(),))
+    env.db.commit()
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY", at=(ist_now - dt.timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M")))
+    assert env.fb.n == 0                                                                                  # five minutes before the switch: ignored
+    await go(env, env.ev("ENTRY", "BUY", at=ist_now.strftime("%Y-%m-%d %H:%M")))
+    assert env.fb.n == 1                                                                                  # the same minute: acted on
+
+
+@async_test
+async def test_the_daily_order_cap_never_holds_back_a_stop(env, monkeypatch):
+    monkeypatch.setattr(tb_real, "MAX_ORDERS_PER_DAY", 1)
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY"))
+    env.fb.fill(env.fb.last("entry")[0], 50002.5)
+    env.sync(PAPER_BUY, MON)
+    await env.rt.tick(secs(5))
+    assert env.fb.last("stop")[0] is not None
+
+
+@async_test
+async def test_a_partly_filled_order_that_ends_cancelled_halts(env):
+    env.sync(None)
+    env.rt.sync(IID, env.uid, SYM, {"instrument": dict(INST, lots=1, quantity=30), "ltp": 50001.0, "position": None}, MON)
+    await go(env, env.ev("ENTRY", "BUY"))
+    oid, _ = env.fb.last("entry")
+    env.fb.orders[oid].update(status="cancelled", filledshares="15")
+    await env.rt.tick(secs(5))
+    a = env.state()
+    assert a["halted"] and "15 of 30" in a["halted"]
+
+
+@async_test
+async def test_a_rejected_stop_exits_at_once(env):
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY"))
+    env.fb.fill(env.fb.last("entry")[0], 50002.5)
+    env.sync(PAPER_BUY, MON)
+    env.fb.place_error = ao.AngelOneApiError("trigger invalid", "data")
+    await env.rt.tick(secs(5))
+    env.fb.place_error = None
+    await env.rt.tick(secs(10))                                                                           # the very next round, not 30 s later
+    _, x = env.fb.last("entry")
+    assert x["p"]["transactiontype"] == "SELL"
+    stops_tried = [c for c in env.fb.calls if c[0] == "place" and c[1]["ordertype"] == "STOPLOSS_LIMIT"]
+    assert len(stops_tried) == 1                                                                          # no second stop while exiting
+
+
+@async_test
+async def test_nothing_is_asked_of_angel_one_when_there_is_nothing_to_do(env):
+    calls = []
+    inner = env.rt.broker_for
+
+    async def counting(c, uid):
+        calls.append(uid)
+        return await inner(c, uid)
+
+    env.rt.broker_for = counting
+    env.sync(None)
+    for t in (0, 5, 10):
+        await env.rt.tick(secs(t))
+    assert calls == []
+
+
+@async_test
+async def test_mcx_contracts_are_not_traded_for_real_yet(env):
+    mcx = {"trading_symbol": "GOLDM05DEC26FUT", "token": "777", "exch_seg": "MCX", "lot_size": 1, "lots": 1, "quantity": 1, "session": "MCX"}
+    env.rt.sync(IID, env.uid, SYM, {"instrument": mcx, "ltp": 50001.0, "position": None}, MON)
+    await go(env, env.ev("ENTRY", "BUY", contract="GOLDM05DEC26FUT", quantity=1))
+    a = env.state()
+    assert env.fb.n == 0 and "MCX" in a["missed"][-1]["reason"]

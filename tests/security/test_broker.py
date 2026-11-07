@@ -208,3 +208,29 @@ def test_preflight_reports_every_step_and_never_orders(db, new_client, monkeypat
     j = api(c_user, "POST", "/api/me/broker/preflight").json()
     assert j["ok"] is False and [x["name"] for x in j["steps"] if not x["ok"]] == ["Funds"] and "Nothing was ordered" in j["hint"]
     assert c_user.get("/api/me/broker").json()["status"] == "error"
+
+
+def test_a_network_hiccup_at_login_does_not_mark_the_account_failed_and_a_good_login_heals_it(db, new_client, monkeypatch):
+    user, _, c_user = _two(db, new_client)
+    api(c_user, "PUT", "/api/me/broker", json=BODY)
+    db.execute("UPDATE user_broker SET status='connected' WHERE user_id=?", (user.id,))
+    db.commit()
+
+    async def down(**k):
+        raise ao.AngelOneApiError("Could not reach Angel One", "network", retryable=True)
+
+    async def ok(**k):
+        return ao.AngelOneSession(k["api_key"], "jwt", "", "", k["client_code"])
+
+    async def noop(s):
+        return None
+
+    monkeypatch.setattr(ao, "login", down)
+    monkeypatch.setattr(ao, "logout", noop)
+    assert api(c_user, "POST", "/api/me/broker/test").status_code == 502
+    assert c_user.get("/api/me/broker").json()["status"] == "connected"
+    db.execute("UPDATE user_broker SET status='error' WHERE user_id=?", (user.id,))
+    db.commit()
+    monkeypatch.setattr(ao, "login", ok)
+    assert api(c_user, "POST", "/api/me/broker/test").status_code == 200
+    assert c_user.get("/api/me/broker").json()["status"] == "connected"
