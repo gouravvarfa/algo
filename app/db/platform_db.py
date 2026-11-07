@@ -178,7 +178,24 @@ CREATE INDEX idx_option_trades_user ON option_trades (user_id, symbol, id);
 CREATE UNIQUE INDEX idx_option_trades_key ON option_trades (user_id, symbol, pos_id, side, opt, strike, entry_date, entry);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5)]
+_V6 = """
+CREATE TABLE user_broker (            -- one broker account per user; the secrets are encrypted (app/security/crypto.py) and never returned by any API
+  user_id TEXT PRIMARY KEY,
+  broker TEXT NOT NULL DEFAULT 'angelone',
+  client_code TEXT NOT NULL,
+  api_key_enc TEXT NOT NULL,
+  pin_enc TEXT NOT NULL,
+  totp_enc TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'paper' CHECK (mode IN ('paper', 'real')),   -- 'real' is not switchable yet: orders are not built
+  status TEXT NOT NULL DEFAULT 'untested',                                -- untested | connected | error
+  status_message TEXT,
+  last_checked_at REAL,
+  updated_by TEXT,
+  updated_at REAL NOT NULL
+);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { get } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useTheme } from '../../lib/theme'
+import { BrokerCard } from './BrokerCard'
 
 interface Bhav { symbols: { symbol: string; days: number; rows: number; expiries: number; from: string; to: string }[]; days: { date: string; status: string }[] }
 
@@ -33,6 +34,7 @@ export default function SettingsPage() {
           <p className="sub">Signed in as <b>{me.user.name}</b> ({me.user.role}). Change your password and see who opened your dashboard on the <Link to="/account">Account</Link> page.</p>
         </div>
       )}
+      <BrokerCard />
       <div className="card">
         <div className="card-head"><h2>Historical options data</h2></div>
         {data.isLoading ? <div className="skeleton" style={{ height: 60 }} /> : data.data?.symbols.length ? (
@@ -50,7 +52,7 @@ export default function SettingsPage() {
       <div className="card">
         <div className="card-head"><h2>Safety</h2></div>
         <dl className="kv">
-          <dt>Broker orders</dt><dd>Disabled. Simulator, Strategy Builder and Backtesting never place orders.</dd>
+          <dt>Broker orders</dt><dd>Disabled. Your Angel One account can be connected for reading only; the Simulator, Strategy Builder and Backtesting never place orders.</dd>
           <dt>Data</dt><dd>Real NSE / Angel One data only. Missing data is flagged, never filled.</dd>
         </dl>
       </div>

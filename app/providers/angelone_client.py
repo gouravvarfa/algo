@@ -33,6 +33,9 @@ ROUTES = {
     "candle_data": "/rest/secure/angelbroking/historical/v1/getCandleData",
     "logout": "/rest/secure/angelbroking/user/v1/logout",
     "margin": "/rest/secure/angelbroking/margin/v1/batch",   # margin CALCULATOR only: it never places an order
+    "funds": "/rest/secure/angelbroking/user/v1/getRMS",            # READ-ONLY account views (a user's own Angel One account)
+    "positions": "/rest/secure/angelbroking/order/v1/getPosition",
+    "orders": "/rest/secure/angelbroking/order/v1/getOrderBook",
 }
 
 AngelOneInterval = Literal[
@@ -239,3 +242,32 @@ async def get_margin(session: AngelOneSession, positions: list[dict[str, Any]]) 
         return body.get("data") or {}
 
     return await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
+
+
+async def _read(session: AngelOneSession, route: str) -> Any:
+    """GET one read-only account view. Nothing here can place, change or cancel an order."""
+    async def _attempt() -> Any:
+        call_metrics.record_angelone_call()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            try:
+                response = await client.get(BASE_URL + ROUTES[route], headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"})
+            except httpx.HTTPError as exc:
+                raise AngelOneApiError(f"Could not reach Angel One: {exc}", "network", retryable=True) from exc
+        body = _parse_json_or_raise(response, "data")
+        if response.status_code != 200 or body.get("status") is not True:
+            raise AngelOneApiError(body.get("message", f"Angel One refused the {route} request"), "data", retryable=False)
+        return body.get("data")
+
+    return await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
+
+
+async def get_funds(session: AngelOneSession) -> dict[str, Any]:
+    return await _read(session, "funds") or {}
+
+
+async def get_positions(session: AngelOneSession) -> list[dict[str, Any]]:
+    return await _read(session, "positions") or []
+
+
+async def get_order_book(session: AngelOneSession) -> list[dict[str, Any]]:
+    return await _read(session, "orders") or []
