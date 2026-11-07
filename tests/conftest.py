@@ -33,3 +33,11 @@ def _no_platform_users_on_this_machine(tmp_path, monkeypatch):
     yield
     mode.reset()
 
+
+
+@pytest.fixture(autouse=True)
+def _the_real_dhan_replay_file_is_never_read(tmp_path, monkeypatch):
+    """A developer's laptop (and the server) may hold data/intraday/nifty_1m_dhan.db; a test that does not build its own replay file must see none."""
+    from app.options import api
+    monkeypatch.setattr(api, "REPLAY_INTRADAY_DB", tmp_path / "no-replay-file.db")
+    api._REPLAY.clear()
