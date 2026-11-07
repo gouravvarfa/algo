@@ -31,7 +31,13 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   })
   const d = q.data
   const it = d?.instruments.find((i) => i.instrument_id === instrumentId)
-  if (ds.readOnly || !d || !d.real_allowed || !it) return null
+  if (ds.readOnly || !d || !it) return null
+  if (!d.real_allowed) return (
+    <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
+      <span className="chip muted">PAPER</span>
+      <span className="sub">Real orders for <b>{symbol}</b> are not set up: connect Angel One in <Link to="/settings">Settings</Link>, then an admin allows real orders for your account.</span>
+    </div>
+  )
   const st = tb.data?.instruments.find((x) => x.instrument_id === instrumentId)
   const accountReal = d.account_mode === 'real'
   const on = it.real_on && accountReal
