@@ -199,7 +199,7 @@ def chain_at(c: sqlite3.Connection, symbol: str, day: str, hm: str, expiry: str)
 
 
 def expiries_on(c: sqlite3.Connection, symbol: str, day: str) -> list[str]:
-    return [r[0] for r in c.execute("SELECT DISTINCT expiry FROM candles WHERE symbol=? AND opt!='IDX' AND ts BETWEEN ? AND ? AND expiry>=? ORDER BY 1",
+    return [r[0] for r in c.execute("SELECT DISTINCT expiry FROM candles INDEXED BY candles_day WHERE symbol=? AND opt!='IDX' AND ts BETWEEN ? AND ? AND expiry>=? ORDER BY 1",
                                     (symbol, day + " 00:00", day + " 23:59", day))]
 
 
