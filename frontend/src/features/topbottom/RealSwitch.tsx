@@ -47,7 +47,7 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
     <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
       <span className="chip muted">PAPER</span>
       <span className="sub">Real orders for <b>{symbol}</b></span>
-      <button className="btn sm" disabled title={d.blockers.join(' ')}>Turn real ON</button>
+      <button className="btn" style={{ padding: '10px 22px', fontSize: 15, fontWeight: 700, borderRadius: 10, minWidth: 170 }} disabled title={d.blockers.join(' ')}>▶ Turn REAL ON</button>
       {marginLine}
       <span className="sub" style={{ flexBasis: '100%' }}>Not available yet: {d.blockers.length ? d.blockers.join(' · ') : 'an admin has not allowed real orders for your account'}. <Link to="/settings">Settings</Link></span>
     </div>
@@ -60,12 +60,12 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
       <span className={'chip ' + (on ? 'bad' : 'muted')}>{on ? 'REAL' : 'PAPER'}</span>
       <span className="sub">Real orders for <b>{symbol}</b></span>
       {on && <span className="sub"><b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> · qty {it.real_lots * it.lot_size}</span>}
-      <button className={'btn sm' + (on ? '' : ' danger')} disabled={set.isPending || (!on && !accountReal)}
+      <button className={'btn' + (on ? '' : ' danger')} style={{ padding: '10px 22px', fontSize: 15, fontWeight: 700, borderRadius: 10, minWidth: 170 }} disabled={set.isPending || (!on && !accountReal)}
         title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
         onClick={() => {
           if (on) set.mutate(false)
           else { setPickLots(it.real_lots || 1); setTicket(true); void mg.refetch() }
-        }}>{on ? 'Switch to paper' : 'Turn real ON'}</button>
+        }}>{on ? '⏸ Switch to paper' : '▶ Turn REAL ON'}</button>
       {(on || st?.position || st?.pending_entry) && (
         <button className="btn sm danger" disabled={exit.isPending || st?.exiting}
           title="Turns real OFF for this instrument and closes the real position at Angel One now with a LIMIT order"
