@@ -300,6 +300,39 @@ def my_tb_trades(instrument_id: str, request: Request, c=Depends(db)):
     return {"trades": tb_real.RealTB.real_trades(c, uid, instrument_id), "state": st, "real_on": bool(r and r["real_on"]), "since": r["changed_at"] if r else None}
 
 
+_MARGIN: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+@router.get("/api/me/broker/tb/{instrument_id}/margin")
+async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
+    """How much margin one real order of this instrument needs, from Angel One's own margin calculator, next to the cash available. Read-only, kept 2 min."""
+    from app.broker import tb_real
+    inst = _owned_instrument(request, instrument_id)
+    uid = user_id_of(request)
+    r = store.row(c, uid)
+    if r is None or r["status"] != "connected":
+        return {"connected": False}
+    hit = _MARGIN.get((uid, instrument_id))
+    if hit and time.time() - hit[0] < 120:
+        return hit[1]
+    try:
+        b = await tb_real.angel_broker_for(c, uid)
+        f = await b.funds()
+        need = {}
+        for side in ("BUY", "SELL"):
+            m = await b.margin([{"exchange": inst.exch_seg, "qty": inst.quantity, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
+            need[side] = account._num(m.get("totalMarginRequired"))
+    except Exception as exc:
+        orders._drop(uid)
+        return {"connected": True, "error": f"Angel One margin calculator not reachable ({type(exc).__name__})"}
+    cash = account._num(f.get("availablecash"))
+    worst = max((v for v in need.values() if v is not None), default=None)
+    out = {"connected": True, "contract": inst.trading_symbol, "lots": inst.lots or 1, "qty": inst.quantity, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
+           "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time()}
+    _MARGIN[(uid, instrument_id)] = (time.time(), out)
+    return out
+
+
 _FUNDS: dict[str, tuple[float, dict]] = {}
 
 

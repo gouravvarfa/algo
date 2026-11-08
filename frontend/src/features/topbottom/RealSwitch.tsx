@@ -26,22 +26,25 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   })
   const exit = useMutation({
     mutationFn: () => post<{ result: string; message: string }>(`/api/me/broker/tb/${instrumentId}/exit`),
-    onSuccess: (r) => { toast(r.message); void qc.invalidateQueries({ queryKey: ['broker-tb'] }); void qc.invalidateQueries({ queryKey: ['broker-instruments'] }) },
+    onSuccess: (r) => { toast(r.message); for (const k of ['broker-tb', 'broker-instruments', 'broker-tb-trades']) void qc.invalidateQueries({ queryKey: [k] }) },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not exit'),
   })
   const set = useMutation({
     mutationFn: (real: boolean) => put<Data>(`/api/me/broker/instruments/${instrumentId}`, { real }),
-    onSuccess: (d, real) => { qc.setQueryData(['broker-instruments'], d); toast(real ? `Real orders armed for ${symbol}` : `${symbol} is on paper`) },
+    onSuccess: (d, real) => { qc.setQueryData(['broker-instruments'], d); void qc.invalidateQueries({ queryKey: ['broker-tb-trades'] }); void qc.invalidateQueries({ queryKey: ['broker-tb'] }); toast(real ? `Real orders armed for ${symbol}` : `${symbol} is on paper`) },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not change the switch'),
   })
   const d = q.data
   const it = d?.instruments.find((i) => i.instrument_id === instrumentId)
+  const mg = useQuery({ queryKey: ['broker-margin', instrumentId], queryFn: () => get<Margin>(`/api/me/broker/tb/${instrumentId}/margin`), enabled: !ds.readOnly && !!d?.real_allowed, refetchInterval: 120_000, retry: false })
   if (ds.readOnly || !d || !it) return null
+  const marginLine = mg.data?.connected ? <MarginLine m={mg.data} /> : null
   if (!d.real_allowed) return (
     <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
       <span className="chip muted">PAPER</span>
       <span className="sub">Real orders for <b>{symbol}</b></span>
       <button className="btn sm" disabled title={d.blockers.join(' ')}>Turn real ON</button>
+      {marginLine}
       <span className="sub" style={{ flexBasis: '100%' }}>Not available yet: {d.blockers.length ? d.blockers.join(' · ') : 'an admin has not allowed real orders for your account'}. <Link to="/settings">Settings</Link></span>
     </div>
   )
@@ -65,9 +68,24 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
           {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
         </button>
       )}
+      {marginLine}
       {!accountReal && <span className="sub">Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link>.</span>}
       {st && <TbStatus st={st} onClear={() => { if (window.confirm('Have you looked at your Angel One orders and positions? Clearing the halt lets the app send orders again.')) clear.mutate() }} clearing={clear.isPending} />}
     </div>
+  )
+}
+
+interface Margin { connected: boolean; error?: string; contract?: string; lots?: number; qty?: number; need_buy?: number | null; need_sell?: number | null; available?: number | null; enough?: boolean | null; short_by?: number | null }
+const rs = (v: number | null | undefined) => (v == null ? '–' : '₹' + Math.round(v).toLocaleString('en-IN'))
+
+/** Angel One's own margin calculator for one real order of this instrument, next to the cash in the account. */
+function MarginLine({ m }: { m: Margin }) {
+  if (m.error) return <span className="sub" style={{ flexBasis: '100%' }}>Margin: {m.error}</span>
+  return (
+    <span className="sub" style={{ flexBasis: '100%' }}>
+      Margin for {m.lots} lot (qty {m.qty}) {m.contract}: <b>BUY {rs(m.need_buy)}</b> · <b>SELL {rs(m.need_sell)}</b> · available <b>{rs(m.available)}</b>{' '}
+      {m.enough == null ? '' : m.enough ? <span className="chip ok">enough</span> : <span className="chip bad">short by {rs(m.short_by)}: entries will be skipped</span>}
+    </span>
   )
 }
 

@@ -62,3 +62,28 @@ async def test_real_trades_are_built_from_angel_one_fills_only(e2e):
     await rt.tick(secs(10))
     [t] = tb_real.RealTB.real_trades(e2e.db, e2e.uid, IID)
     assert t["status"] == "CLOSED" and t["exit_by"] == "stop" and t["pnl_points"] == -502.0 and t["pnl_amount"] == -502.0 * 30
+
+
+@async_test
+async def test_an_expiry_roll_closes_the_old_contract_then_opens_the_same_side_in_the_new_one(e2e):
+    from tests.security.test_real_e2e import INST
+    fa, rt = e2e.fa, e2e.rt
+    e2e.sync(None)
+    rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await rt.tick(MON)
+    fa.fill(fa.open_orders()[0]["orderid"], 50002.5)
+    e2e.sync(PAPER_BUY)
+    await rt.tick(secs(5))
+    NEW = "BANKNIFTY30DEC26FUT"
+    fa.lot_sizes["556"] = 30
+    rt.sync(IID, e2e.uid, "BANKNIFTY", {"instrument": {**INST, "trading_symbol": NEW, "token": "556"}, "ltp": 50001.0, "position": PAPER_BUY}, secs(60))
+    rt.handle([e2e.ev("EXIT", "BUY", now=secs(60), reason="ROLLED_TO_NEXT_CONTRACT", exit_price=50001.0),
+               e2e.ev("ENTRY", "BUY", now=secs(60), contract=NEW)], {}, secs(60))
+    await rt.tick(secs(60))
+    [ex] = [b for b in places(fa, "LIMIT") if b["transactiontype"] == "SELL"]
+    assert ex["tradingsymbol"] == CONTRACT and fa.open_orders("STOPLOSS_LIMIT") == []          # old contract: stop gone, exit sent at once
+    fa.fill(fa.open_orders("LIMIT")[0]["orderid"], 50000.0)
+    await rt.tick(secs(65))
+    await rt.tick(secs(66))
+    new = [b for b in places(fa, "LIMIT") if b["tradingsymbol"] == NEW]
+    assert len(new) == 1 and new[0]["transactiontype"] == "BUY" and new[0]["symboltoken"] == "556"

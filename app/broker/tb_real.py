@@ -252,9 +252,12 @@ class RealTB:
         contract["lots"] = inst.get("lots")
         contract["session"] = inst.get("session", "NSE")
         p = a["position"]
-        if p and p["side"] == e["direction"]:
+        roll = bool(p and p["side"] == e["direction"] and p["contract"] != contract.get("trading_symbol"))
+        if p and p["side"] == e["direction"] and not roll:
             self._ev(a, now, f"ENTRY {e['direction']} ignored: a real position on that side is already open")
             return
+        if roll:                                                                  # expiry roll: close the old contract now, then the same side in the new one
+            a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
         a["pending_entry"] = {"side": e["direction"], "qty": int(e["quantity"]), "strategy_price": float(e["entry_price"]), "strategy_stop": e.get("active_stop"), "contract": contract,
                               "created_at": _s(now), "attempts": 0, "signal_time": e.get("entry_date")}
         if p:
