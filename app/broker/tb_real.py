@@ -483,6 +483,9 @@ class RealTB:
         r = store.row(c, uid)
         if store.effective_mode(r) != "real":
             return "real mode is not in effect: " + "; ".join(store.blockers(r))
+        allowed = store.limits(r)["allowed_symbols"]
+        if a["symbol"] not in allowed:
+            return f"{a['symbol']} is not in the symbols an admin allowed for you ({', '.join(allowed)})"
         if not self._market_open(ct.get("session", "NSE"), now):
             return "market closed"
         lots = ct.get("lots") or 1

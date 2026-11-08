@@ -29,3 +29,17 @@ async def test_exit_now_cancels_the_stop_and_closes_with_a_limit_order(e2e, monk
 
 def test_exit_now_with_nothing_open_says_so(e2e):
     assert e2e.rt.exit_now(e2e.db, e2e.uid, IID, "me") == "nothing"
+
+
+@async_test
+async def test_a_symbol_the_admin_did_not_allow_is_never_traded(e2e):
+    from app.broker import store as st
+    st.grant(e2e.db, e2e.uid, True, 1, None, ["NIFTY"], "admin")
+    st.set_mode(e2e.db, e2e.uid, "real", "e2etrader")
+    st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me")
+    e2e.db.execute("UPDATE user_instrument_real SET changed_at=changed_at-120")
+    e2e.db.commit()
+    e2e.sync(None)
+    e2e.rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await e2e.rt.tick(MON)
+    assert places(e2e.fa) == [] and "not in the symbols" in e2e.state()["missed"][-1]["reason"]
