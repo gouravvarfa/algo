@@ -322,21 +322,28 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
     try:
         b = await tb_real.angel_broker_for(c, uid)
         f = await b.funds()
-        need = {}
-        for side in ("BUY", "SELL"):
-            m = await b.margin([{"exchange": inst.exch_seg, "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
-            need[side] = account._num(m.get("totalMarginRequired"))
-        try:
-            ltp = await b.ltp(inst.exch_seg, inst.trading_symbol, str(inst.token))
-        except Exception:
-            ltp = None
     except Exception as exc:
         orders._drop(uid)
-        return {"connected": True, "error": f"Angel One margin calculator not reachable ({type(exc).__name__})"}
+        return {"connected": True, "error": f"Angel One not reachable: {str(exc)[:160] or type(exc).__name__}"}
+    need, err, ltp = {"BUY": None, "SELL": None}, None, None
+    for side in ("BUY", "SELL"):                                  # one side per call: a BUY+SELL basket would net the margin out
+        try:
+            m = await b.margin([{"exchange": inst.exch_seg, "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
+            need[side] = account._num(m.get("totalMarginRequired"))
+        except Exception as exc:
+            err = f"Angel One margin calculator: {str(exc)[:160] or type(exc).__name__}"
+        await asyncio.sleep(0.6)                                  # Angel One rate-limits the margin API
+    try:
+        ltp = await b.ltp(inst.exch_seg, inst.trading_symbol, str(inst.token))
+    except Exception:
+        ltp = None
     cash = account._num(f.get("availablecash"))
     worst = max((v for v in need.values() if v is not None), default=None)
     out = {"connected": True, "contract": inst.trading_symbol, "lots": lots, "qty": qty, "ltp": ltp, "lot_size": qty // lots if lots else None, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
-           "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time()}
+           "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time(),
+           **({"error": err} if err else {})}
+    if err:
+        return out                                                # not cached: the next look asks again
     _MARGIN[(uid, instrument_id)] = (time.time(), out)
     return out
 

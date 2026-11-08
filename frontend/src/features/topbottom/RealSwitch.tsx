@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { ApiError, get, post, put } from '../../lib/api'
 import { useDataSource } from '../../lib/datasource'
@@ -87,7 +88,7 @@ const rs = (v: number | null | undefined) => (v == null ? '–' : '₹' + Math.r
 
 /** Angel One's own margin calculator for one real order of this instrument, next to the cash in the account. */
 function MarginLine({ m, lots }: { m: Margin; lots: number }) {
-  if (m.error) return <span className="sub" style={{ flexBasis: '100%' }}>Margin: {m.error}</span>
+  if (m.error && m.need_buy == null) return <span className="sub" style={{ flexBasis: "100%" }}>{m.error} · available in Angel One <b>{rs(m.available)}</b></span>
   const k = m.lots ? lots / m.lots : 1                                    // Angel One quoted m.lots lots; futures margin grows with the lots
   const buy = m.need_buy == null ? null : m.need_buy * k, sell = m.need_sell == null ? null : m.need_sell * k
   const worst = Math.max(buy ?? 0, sell ?? 0), short = m.available != null && worst > m.available ? worst - m.available : null
@@ -132,9 +133,9 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
   const short = need != null && m?.available != null && need > m.available ? need - m.available : null
   const qty = lots * lotSize
   const charges = m?.ltp ? estCharges(m.ltp * qty) : null
-  return (
-    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 1000, display: 'grid', placeItems: 'center', padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: 'min(520px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: 0 }}>
+  return createPortal(
+    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'grid', placeItems: 'center', padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: 0, background: 'var(--bg-surface, #fff)', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)', border: '1px solid var(--border)' }}>
         <div className="row" style={{ alignItems: 'center', padding: '18px 20px 6px' }}>
           <div><b style={{ fontSize: 17 }}>{contract || symbol}</b><div className="num">{m?.ltp != null ? m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '–'} <span className="sub">NFO</span></div></div>
           <span className="spacer" />
@@ -176,7 +177,8 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
           <button type="button" className="btn danger" disabled={busy} onClick={onArm} style={{ minWidth: 150 }}>{busy ? 'Arming…' : `Arm real · ${lots} lot${lots > 1 ? 's' : ''}`}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
