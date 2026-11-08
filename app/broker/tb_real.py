@@ -437,30 +437,48 @@ class RealTB:
             a["_clean_stops"] = True
 
     async def _reconcile(self, c, broker, a: dict, now: dt.datetime) -> None:
-        """What Angel One says we hold must equal what we think we hold. If not, stop and let a person look."""
+        """What Angel One says we hold must equal what we think we hold, on top of whatever the person holds in that contract by hand.
+        While this app is flat it only notes the person's own quantity (the baseline); while it holds a position, a difference halts and a person looks."""
         if not (a["position"] or a["pending_entry"] or a["orders"]):
             return
         try:
             pos = await broker.positions()
         except Exception:
             return
-        contracts = {o["contract"] for o in a["orders"] if o.get("contract")} | ({a["position"]["contract"]} if a["position"] else set())
-        net = 0
-        for p in pos:
-            if p.get("tradingsymbol") in contracts:
-                try:
-                    net += int(float(p.get("netqty") or 0))
-                except ValueError:
-                    pass
-        mine = 0
-        if a["position"]:
-            mine = a["position"]["qty"] * (1 if a["position"]["side"] == "BUY" else -1)
-        if net == mine or self._active(a, "entry") or self._active(a, "exit"):
+
+        def net_of(contract: str) -> int:
+            n = 0
+            for p in pos or []:
+                if p.get("tradingsymbol") == contract:
+                    try:
+                        n += int(float(p.get("netqty") or 0))
+                    except ValueError:
+                        pass
+            return n
+
+        live = [o for o in a["orders"] if o["state"] in ACTIVE]
+        if not a["position"] and not live:
+            # flat: remember what the person holds by hand in the contracts we may trade, so a manual position never looks like ours
+            watch = {o["contract"] for o in a["orders"][-10:] if o.get("contract")}
+            if a["pending_entry"]:
+                watch.add(a["pending_entry"]["contract"].get("trading_symbol"))
+            a["baseline"] = {k: net_of(k) for k in watch if k}
+            a.pop("mismatch_since", None)
+            return
+        if self._active(a, "entry") or self._active(a, "exit"):
+            a.pop("mismatch_since", None)
+            return
+        contract = a["position"]["contract"] if a["position"] else live[0]["contract"]
+        base = (a.get("baseline") or {}).get(contract, 0)
+        mine = a["position"]["qty"] * (1 if a["position"]["side"] == "BUY" else -1) if a["position"] else 0
+        net = net_of(contract)
+        if net - base == mine:
             a.pop("mismatch_since", None)
             return
         a.setdefault("mismatch_since", _s(now))
         if _age(a["mismatch_since"], now) >= MISMATCH_HALT_S:                      # positions reports can lag a few seconds behind a fill
-            self._halt(c, a, now, f"Angel One shows a net quantity of {net} in {', '.join(sorted(contracts)) or 'this contract'} but this app holds {mine}.")
+            own = f" ({base} of it held by hand before this app traded)" if base else ""
+            self._halt(c, a, now, f"Angel One shows a net quantity of {net} in {contract}{own} but this app holds {mine}. If you changed your own position in this contract, check it, then clear the halt.")
             a.pop("mismatch_since", None)
 
     # ------------------------------------------------------------------ advancing the position / entry

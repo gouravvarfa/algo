@@ -157,3 +157,36 @@ def test_margin_and_ticket_use_the_rolled_contract_not_the_one_the_instrument_wa
     assert a["trading_symbol"] == "BANKNIFTY23NOV26FUT" and a["token"] == "222" and a["lot_size"] == 30
     eng.snapshots = {}
     assert bapi._active(inst)["trading_symbol"] == "BANKNIFTY27OCT26FUT"              # no snapshot yet: the instrument's own contract
+
+
+@async_test
+async def test_a_position_the_person_holds_by_hand_in_the_same_contract_does_not_halt_the_app(e2e):
+    fa, rt = e2e.fa, e2e.rt
+    fa.orders["m1"] = {"tradingsymbol": CONTRACT, "transactiontype": "BUY", "quantity": "30", "status": "complete", "ordertype": "LIMIT", "variety": "NORMAL",
+                       "orderid": "m1", "averageprice": "54794.4", "filledshares": "30"}          # the manual +30 bought days ago
+    e2e.sync(None)
+    rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await rt.tick(MON)
+    fa.fill([o for o in fa.open_orders() if o["orderid"] != "m1"][0]["orderid"], 50002.5)
+    e2e.sync(PAPER_BUY)
+    for t in (5, 15, 30, 45):
+        await rt.tick(secs(t))
+    assert fa.net(CONTRACT) == 60 and e2e.state()["halted"] is None                       # 30 by hand + 30 by the app: fine
+    assert len(fa.open_orders("STOPLOSS_LIMIT")) == 1 and fa.open_orders("STOPLOSS_LIMIT")[0]["quantity"] == "30"   # the stop covers only the app's 30
+
+
+@async_test
+async def test_a_real_mismatch_still_halts_with_a_manual_position_present(e2e):
+    fa, rt = e2e.fa, e2e.rt
+    fa.orders["m1"] = {"tradingsymbol": CONTRACT, "transactiontype": "BUY", "quantity": "30", "status": "complete", "ordertype": "LIMIT", "variety": "NORMAL",
+                       "orderid": "m1", "averageprice": "54794.4", "filledshares": "30"}
+    e2e.sync(None)
+    rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await rt.tick(MON)
+    fa.fill([o for o in fa.open_orders() if o["orderid"] != "m1"][0]["orderid"], 50002.5)
+    e2e.sync(PAPER_BUY)
+    await rt.tick(secs(5))
+    fa.orders["m2"] = {**fa.orders["m1"], "orderid": "m2", "transactiontype": "SELL", "quantity": "60"}   # somebody sold 60 by hand
+    for t in (10, 40):
+        await rt.tick(secs(t))
+    assert e2e.state()["halted"] and "held by hand" in e2e.state()["halted"]
