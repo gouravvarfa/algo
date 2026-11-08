@@ -36,6 +36,8 @@ hub: live_stream.StreamHub | None = None
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global engine, hub
+    from app.ops import logbuffer
+    logbuffer.install()                   # the developer's Live logs page reads this copy (the server's logs go to the journal)
     provider = AngelOneProvider()
     engine = PaperEngine(provider)
     options_api.provider = provider

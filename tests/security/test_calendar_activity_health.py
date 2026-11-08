@@ -99,3 +99,15 @@ def test_api_health_counts_times_errors_and_rate_limits():
     assert ltp["calls"] == 3 and ltp["p50_ms"] == 120.0 and ltp["rate_limited"] == 1
     assert not any(e["endpoint"] == "getRMS" for e in s["endpoints"])          # older than the window
     api_health.clear()
+
+
+def test_live_logs_come_from_the_apps_own_copy_with_secrets_masked(db, new_client):
+    import logging
+    from app.ops import logbuffer
+    logbuffer.install()
+    logging.getLogger("app.test").warning("login ok token=abc123SECRET for user x")
+    owner = make_owner(db)
+    cl = new_client()
+    assert login(cl, owner).status_code == 200
+    d = cl.get("/api/dev/live-logs?lines=50").json()
+    assert d["available"] and any("login ok" in x for x in d["lines"]) and not any("abc123SECRET" in x for x in d["lines"])

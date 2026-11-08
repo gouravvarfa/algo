@@ -243,14 +243,19 @@ def dev_live_logs(lines: int = 300, level: str = "", _=Depends(require("system.r
     """The tail of the server's error log (data/server.err when started with start.bat / the background launcher). Secrets are masked before sending."""
     import re
     from pathlib import Path
+    from app.ops import logbuffer
+    n = max(10, min(lines, 1000))
     f = Path(__file__).resolve().parents[2] / "data" / "server.err"
-    if not f.exists():
-        return {"available": False, "lines": [], "note": "No log file at data/server.err. On a server read it with: journalctl -u algo-trading -f"}
-    size = f.stat().st_size
-    with f.open("rb") as fh:
-        fh.seek(max(0, size - 200_000))
-        text = fh.read().decode("utf-8", "replace")
-    out = text.splitlines()[-max(10, min(lines, 1000)):]
+    if logbuffer.LINES:                                   # the app's own copy: works on the server, where the logs go to systemd's journal
+        out, size = logbuffer.tail(n), sum(len(x) for x in logbuffer.LINES)
+    elif f.exists():
+        size = f.stat().st_size
+        with f.open("rb") as fh:
+            fh.seek(max(0, size - 200_000))
+            text = fh.read().decode("utf-8", "replace")
+        out = text.splitlines()[-n:]
+    else:
+        return {"available": False, "lines": [], "note": "No log lines yet since the server started."}
     out = [re.sub(r"(?i)(token|password|secret|totp|cookie|authorization)([\"'=: ]+)[^\s,\"']+", r"\1\2***", ln) for ln in out]
     if level:
         out = [ln for ln in out if level.upper() in ln]
