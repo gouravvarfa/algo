@@ -339,6 +339,18 @@ class RealTB:
             return
         await self._update_orders(c, a, book, now)
         real_ok = bool(row and row["real_on"]) and store.instrument_real(c, uid, iid)
+        if a.get("manual_exit") and not a["position"]:
+            a.pop("manual_exit", None)
+        if a.get("manual_exit") and not a["halted"]:                       # the person pressed Exit now: drop any entry, then close with a LIMIT order
+            for o in self._active(a, "entry"):
+                await self._cancel(c, broker, a, o, now, "exit now was pressed")
+            a["pending_entry"], a["released"] = None, False
+            await self._reconcile(c, broker, a, now)
+            if not a["halted"]:
+                p = a["position"]
+                await self._manage_position(c, broker, a, p, self.snaps.get(iid) or {"instrument": {"session": "NSE"}}, now)
+            self._save(c, a)
+            return
         if a.pop("_cancel_entry", False) or not real_ok:
             for o in self._active(a, "entry"):
                 await self._cancel(c, broker, a, o, now, "real orders are off or the strategy dropped this entry" if not real_ok else "the strategy dropped this entry")
@@ -609,6 +621,33 @@ class RealTB:
         self._save(c, a)
         return True
 
+    def exit_now(self, c, user_id: str, inst_id: str, actor: str) -> str:
+        """The person wants out right now: the waiting entry is dropped, the resting stop is cancelled and the position is closed with a LIMIT
+        order at the live price (retried every 30 s like any exit). The caller also turns the instrument's real switch off so nothing re-enters."""
+        a = self.state.get((user_id, inst_id))
+        if a is None:
+            r = c.execute("SELECT state_json FROM real_tb_state WHERE user_id=? AND instrument_id=?", (user_id, inst_id)).fetchone()
+            if r is None:
+                return "nothing"
+            a = json.loads(r["state_json"])
+            self.state[(user_id, inst_id)] = a
+        now = now_ist()
+        if a["halted"]:
+            return "halted"
+        if not a["position"]:
+            if a["pending_entry"] or self._active(a, "entry"):
+                a["pending_entry"], a["_cancel_entry"] = None, True
+                self._ev(a, now, f"exit now by {actor}: the waiting entry is cancelled")
+                self._save(c, a)
+                return "entry_cancelled"
+            return "nothing"
+        a["manual_exit"] = True
+        if not self._active(a, "exit"):
+            a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+        self._ev(a, now, f"EXIT NOW pressed by {actor}: the stop is cancelled and the position is closed with a LIMIT order")
+        self._save(c, a)
+        return "exiting"
+
     def view(self, c, user_id: str | None) -> list[dict]:
         out = []
         q = "SELECT state_json FROM real_tb_state" + (" WHERE user_id=?" if user_id else "")
@@ -616,7 +655,7 @@ class RealTB:
             a = json.loads(r["state_json"])
             live = self.state.get((a["user_id"], a["instrument_id"]), a)
             out.append({"user_id": live["user_id"], "instrument_id": live["instrument_id"], "symbol": live["symbol"], "position": live["position"], "pending_entry": bool(live["pending_entry"]),
-                        "halted": live["halted"], "stop_target": live["stop_target"], "released": live.get("released", False), "missed": live["missed"][-5:], "events": live["events"][-15:],
+                        "halted": live["halted"], "stop_target": live["stop_target"], "released": live.get("released", False), "exiting": bool(live.get("manual_exit")), "missed": live["missed"][-5:], "events": live["events"][-15:],
                         "orders": [{k: o[k] for k in ("id", "role", "side", "qty", "type", "price", "trigger", "state", "why", "contract")} for o in live["orders"][-10:]]})
         return out
 

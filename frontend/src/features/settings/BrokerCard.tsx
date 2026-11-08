@@ -49,7 +49,13 @@ export function BrokerCard() {
     onSuccess: () => { setF({ client_code: '', api_key: '', pin: '', totp_secret: '' }); setOpen(false); setErr(''); refresh() },
     onError: (e) => setErr(msg(e)),
   })
-  const test = useMutation({ mutationFn: () => post<Status>('/api/me/broker/test'), onSuccess: () => { setErr(''); refresh() }, onError: (e) => { setErr(msg(e)); refresh() } })
+  const [ok, setOk] = useState('')
+  const test = useMutation({
+    mutationFn: () => post<Status>('/api/me/broker/test'),
+    onMutate: () => { setOk(''); setErr('') },
+    onSuccess: () => { setOk(`✓ Angel One login worked at ${new Date().toLocaleTimeString('en-IN')}. Your details are correct.`); refresh() },
+    onError: (e) => { setErr(msg(e).startsWith('Please wait') ? msg(e) + ' (Pre-flight / View my account just logged in; try again in a few seconds.)' : '✗ ' + msg(e)); refresh() },
+  })
   const remove = useMutation({ mutationFn: () => del('/api/me/broker'), onSuccess: () => { setErr(''); qc.removeQueries({ queryKey: ['broker-summary'] }); refresh() } })
   const mode = useMutation({
     mutationFn: (v: { mode: string; password?: string }) => put<Status>('/api/me/broker/mode', v),
@@ -65,10 +71,10 @@ export function BrokerCard() {
     <div className="card">
       <div className="card-head" style={{ alignItems: 'center', gap: 10 }}><AngelMark /><h2>Angel One account</h2><span className="spacer" />
         {s && <span className={'chip ' + (s.status === 'connected' ? 'ok' : s.status === 'error' ? 'bad' : 'warn')}>{LABEL[s.status] ?? s.status}</span>}</div>
-      <p className="sub">Connect your own Angel One account so this app can read it for you (funds, positions, orders). This screen is <b>read-only</b>: it cannot place, change or cancel an order, and
-        your account stays in <b>Paper</b> mode.</p>
+      <p className="sub">Connect your own Angel One account so this app can read it for you (funds, positions, orders). The buttons here only <b>read</b>: they never place an order.
+        Real orders happen only after you switch to <b>REAL</b> below and turn real ON for an instrument on the Top-Bottom page.</p>
       {s?.configured && !open && (
-        <dl className="kv">
+        <dl className="kv" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '6px 16px', alignItems: 'center', margin: '8px 0 12px' }}>
           <dt>Client code</dt><dd>{s.client_code}</dd>
           <dt>Mode</dt><dd><span className={'chip ' + (s.effective_mode === 'real' ? 'bad' : 'muted')}>{s.effective_mode === 'real' ? 'REAL' : 'PAPER'}</span>
             {s.mode === 'real' && s.effective_mode !== 'real' && <span className="sub"> &nbsp;you chose real, but it is blocked right now</span>}</dd>
@@ -127,7 +133,8 @@ export function BrokerCard() {
         </div>
       )}
       {s?.configured && !open && s.real_allowed && s.options_orders && <OrderTicket symbols={s.allowed_symbols ?? ['NIFTY']} maxLots={s.max_lots ?? 1} canTrade={s.effective_mode === 'real'} />}
-      {err && <p className="err" role="alert">{err}</p>}
+      {ok && !err && <p role="status" style={{ color: 'var(--success, #16a34a)', fontWeight: 600 }}>{ok}</p>}
+      {err && <p className="err" role="alert" style={{ color: 'var(--danger)' }}>{err}</p>}
       {pre.data && (
         <div style={{ marginTop: 12 }}>
           <b>{pre.data.ok ? 'All checks passed. No order was sent.' : 'Something needs fixing. No order was sent.'}</b>
@@ -143,7 +150,7 @@ export function BrokerCard() {
       )}
       {sum.data && (
         <div style={{ marginTop: 12 }}>
-          <dl className="kv">
+          <dl className="kv" style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '6px 16px', alignItems: 'center', margin: '8px 0 12px' }}>
             <dt>Available cash</dt><dd>{inr(sum.data.funds.available_cash)}</dd>
             <dt>Margin used</dt><dd>SPAN {inr(sum.data.funds.span_margin)} · Exposure {inr(sum.data.funds.exposure_margin)}</dd>
             <dt>Today's P&amp;L</dt><dd>Realised {inr(sum.data.funds.m2m_realised)} · Unrealised {inr(sum.data.funds.m2m_unrealised)}</dd>

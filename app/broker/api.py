@@ -269,6 +269,49 @@ def my_tb_clear_halt(instrument_id: str, request: Request, c=Depends(db)):
     return {"ok": True}
 
 
+@router.post("/api/me/broker/tb/{instrument_id}/exit")
+def my_tb_exit(instrument_id: str, request: Request, c=Depends(db)):
+    """Exit now: the real switch for this instrument goes OFF (no new entry) and the executor closes the open real position with a LIMIT order."""
+    inst = _owned_instrument(request, instrument_id)
+    rt = _executor()
+    u = getattr(request.state, "user", None)
+    uid = user_id_of(request)
+    actor = u["username"] if u else "local"
+    try:
+        store.instrument_set(c, uid, instrument_id, inst.symbol, False, actor)
+    except store.BrokerError:
+        pass
+    out = rt.exit_now(c, uid, instrument_id, actor) if rt is not None else "nothing"
+    audit.append(c, "broker.tb.exit_now", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid, detail={"instrument_id": instrument_id, "result": out})
+    msg = {"exiting": "Exiting: the stop is cancelled and a LIMIT exit order goes to Angel One now (or when the market opens).", "entry_cancelled": "The waiting entry is cancelled. Real is off for this instrument.",
+           "halted": "This instrument is halted: check Angel One, clear the halt, then press Exit again (or square off at Angel One).", "nothing": "No real position to exit. Real is off for this instrument."}[out]
+    return {"result": out, "message": msg}
+
+
+_FUNDS: dict[str, tuple[float, dict]] = {}
+
+
+@router.get("/api/me/broker/funds")
+async def my_funds(request: Request, c=Depends(db)):
+    """Margin of the connected Angel One account for the header. Read-only, kept for 60 s, and it reuses the app's session (no fresh login per page)."""
+    from app.broker import tb_real
+    uid = user_id_of(request)
+    r = store.row(c, uid)
+    if r is None or r["status"] != "connected":
+        return {"connected": False}
+    hit = _FUNDS.get(uid)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    try:
+        f = await (await tb_real.angel_broker_for(c, uid)).funds()
+    except Exception:
+        orders._drop(uid)
+        return {"connected": True, "error": "Angel One not reachable right now"}
+    out = {"connected": True, **account._funds(f), "mode": store.effective_mode(r), "at": time.time()}
+    _FUNDS[uid] = (time.time(), out)
+    return out
+
+
 @router.get("/api/admin/broker/tb")
 def admin_tb(limit: int = 100, actor=Depends(require("users.read")), c=Depends(db)):
     rt = _executor()

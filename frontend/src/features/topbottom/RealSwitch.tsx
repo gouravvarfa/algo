@@ -7,7 +7,7 @@ import { useToast } from '../../lib/toast'
 interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean }
 interface TbState {
   instrument_id: string; position: { side: string; qty: number; contract: string; entry_price: number | null } | null; pending_entry: boolean; halted: string | null; stop_target: number | null
-  released: boolean; missed: { at: string; reason: string }[]; events: { at: string; text: string }[]; orders: { id: string; role: string; side: string; qty: number; type: string; price: number | null; trigger: number | null; state: string }[]
+  released: boolean; exiting?: boolean; missed: { at: string; reason: string }[]; events: { at: string; text: string }[]; orders: { id: string; role: string; side: string; qty: number; type: string; price: number | null; trigger: number | null; state: string }[]
 }
 interface Data { account_mode: string; real_allowed: boolean; blockers: string[]; instruments: Item[] }
 
@@ -23,6 +23,11 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
     mutationFn: () => post(`/api/me/broker/tb/${instrumentId}/clear-halt`),
     onSuccess: () => { toast('Halt cleared. Orders can go out again.'); void qc.invalidateQueries({ queryKey: ['broker-tb'] }) },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not clear the halt'),
+  })
+  const exit = useMutation({
+    mutationFn: () => post<{ result: string; message: string }>(`/api/me/broker/tb/${instrumentId}/exit`),
+    onSuccess: (r) => { toast(r.message); void qc.invalidateQueries({ queryKey: ['broker-tb'] }); void qc.invalidateQueries({ queryKey: ['broker-instruments'] }) },
+    onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not exit'),
   })
   const set = useMutation({
     mutationFn: (real: boolean) => put<Data>(`/api/me/broker/instruments/${instrumentId}`, { real }),
@@ -51,6 +56,13 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
           if (on) set.mutate(false)
           else if (window.confirm(`Turn REAL orders ON for ${symbol}?\n\nThis instrument will trade real money in your Angel One account, within the limits an admin set for you. You can turn it off here at any time.`)) set.mutate(true)
         }}>{on ? 'Switch to paper' : 'Turn real ON'}</button>
+      {(on || st?.position || st?.pending_entry) && (
+        <button className="btn sm danger" disabled={exit.isPending || st?.exiting}
+          title="Turns real OFF for this instrument and closes the real position at Angel One now with a LIMIT order"
+          onClick={() => { if (window.confirm(`EXIT NOW for ${symbol}?\n\nReal orders go OFF for this instrument, the stop is cancelled and the open real position is closed at Angel One with a LIMIT order at the live price.`)) exit.mutate() }}>
+          {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
+        </button>
+      )}
       {!accountReal && <span className="sub">Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link>.</span>}
       {st && <TbStatus st={st} onClear={() => { if (window.confirm('Have you looked at your Angel One orders and positions? Clearing the halt lets the app send orders again.')) clear.mutate() }} clearing={clear.isPending} />}
     </div>

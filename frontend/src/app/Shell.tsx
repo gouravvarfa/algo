@@ -94,6 +94,11 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
   const open = ov.data?.market_open
   const br = useQuery({ queryKey: ['broker'], queryFn: () => get<{ effective_mode: string }>('/api/me/broker'), refetchInterval: 60_000, retry: false })
   const real = br.data?.effective_mode === 'real'
+  const connected = (br.data as { status?: string } | undefined)?.status === 'connected'
+  const fu = useQuery({ queryKey: ['broker-funds'], queryFn: () => get<{ connected: boolean; available_cash?: number | null; span_margin?: number | null; exposure_margin?: number | null; error?: string }>('/api/me/broker/funds'),
+    enabled: connected, refetchInterval: 60_000, retry: false })
+  const f = fu.data
+  const rs = (v: number | null | undefined) => (v == null ? '–' : '₹' + Math.round(v).toLocaleString('en-IN'))
   return (
     <header className="topbar">
       <Hamburger open={navOpen} onClick={onNav} />
@@ -102,6 +107,11 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
       <span className={'pill' + (open ? ' open' : '')} title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected.">
         <i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}
       </span>
+      {connected && f?.connected && (
+        <Link to="/settings" className="pill" title={f.error ?? `Angel One margin available. Used: SPAN ${rs(f.span_margin)} · Exposure ${rs(f.exposure_margin)}. Updated every minute.`}>
+          <b>Angel One</b>&nbsp;{f.error ? 'not reachable' : `margin ${rs(f.available_cash)}`}
+        </Link>
+      )}
       {real ? (
         <Link to="/settings" className="pill real" title="Real mode is switched on for your Angel One account. Click to see your limits."><b>REAL</b>&nbsp;armed</Link>
       ) : (
