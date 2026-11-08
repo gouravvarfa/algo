@@ -18,8 +18,9 @@ def main() -> None:
     ap.add_argument("--src", default=str(ROOT / "data" / "intraday" / "dhan_options_1m.db"))
     ap.add_argument("--dst", default=str(intraday.REPLAY_DB))
     ap.add_argument("--after", default=None)
+    ap.add_argument("--symbol", default="NIFTY")
     a = ap.parse_args()
-    out = dhan_replay.build(Path(a.src), Path(a.dst), only_after=a.after)
+    out = dhan_replay.build(Path(a.src), Path(a.dst), symbol=a.symbol.upper(), only_after=a.after)
     print("done:", out)
 
 

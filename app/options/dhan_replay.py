@@ -42,6 +42,70 @@ def weekly_expiries(trading_days: list[str]) -> list[dt.date]:
     return sorted(out)
 
 
+BN_WED_FROM = dt.date(2023, 9, 1)          # BANKNIFTY weeklies moved Thursday -> Wednesday (the monthly stayed on the last Thursday until Feb 2024)
+BN_MONTHLY_WED_FROM = dt.date(2024, 3, 1)  # the BANKNIFTY monthly moved to the last Wednesday
+BN_LAST_WEEKLY = dt.date(2024, 11, 13)     # BANKNIFTY weeklies were discontinued after this one; monthly only from here
+BN_MONTHLY_THU_FROM = dt.date(2025, 1, 1)  # monthly on the last Thursday (SEBI's one-weekday rule) ...
+BN_MONTHLY_TUE_FROM = dt.date(2025, 9, 1)  # ... then the last Tuesday
+
+
+def _last_weekday(year: int, month: int, wd: int) -> dt.date:
+    d = (dt.date(year + (month == 12), month % 12 + 1, 1) - dt.timedelta(days=1))
+    while d.weekday() != wd:
+        d -= dt.timedelta(days=1)
+    return d
+
+
+def _shift_to_session(x: dt.date, ts: set, first: dt.date, last: dt.date) -> dt.date:
+    if not (first <= x <= last):
+        return x
+    e = x
+    for _ in range(6):
+        if e in ts:
+            return e
+        e -= dt.timedelta(days=1)                                     # an exchange holiday: the previous session
+    return x
+
+
+def banknifty_expiries(trading_days: list[str]) -> list[dt.date]:
+    """The NEAREST BANKNIFTY expiry dates by the exchange calendar: weeklies (Thursday, then Wednesday from Sep 2023) until 13 Nov 2024, monthly after.
+    Monthly: last Thursday until Feb 2024, last Wednesday to Dec 2024, last Thursday Jan-Aug 2025, last Tuesday from Sep 2025. Holidays move to the previous session."""
+    ts = {dt.date.fromisoformat(d) for d in trading_days}
+    first, last = min(ts), max(ts)
+    out: set[dt.date] = set()
+    y, m = (first - dt.timedelta(days=40)).year, (first - dt.timedelta(days=40)).month
+    end = last + dt.timedelta(days=70)
+    while dt.date(y, m, 1) <= end:
+        som = dt.date(y, m, 1)
+        if som < BN_MONTHLY_WED_FROM:
+            monthly = _last_weekday(y, m, 3)
+        elif som < BN_MONTHLY_THU_FROM:
+            monthly = _last_weekday(y, m, 2)
+        elif som < BN_MONTHLY_TUE_FROM:
+            monthly = _last_weekday(y, m, 3)
+        else:
+            monthly = _last_weekday(y, m, 1)
+        out.add(monthly)
+        x = som
+        while x.month == m:
+            if x <= BN_LAST_WEEKLY:
+                wd = 3 if x < BN_WED_FROM else 2
+                if x.weekday() == wd and not (0 <= (monthly - x).days < 7):     # the monthly expiry week has the monthly instead
+                    out.add(x)
+            x += dt.timedelta(days=1)
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return sorted(_shift_to_session(x, ts, first, last) for x in out)
+
+
+def expiries_for(symbol: str, trading_days: list[str]) -> list[dt.date]:
+    return banknifty_expiries(trading_days) if symbol == "BANKNIFTY" else weekly_expiries(trading_days)
+
+
+def flag_for(symbol: str, day: str) -> str:
+    """Which Dhan series holds the NEAREST expiry on `day`: NIFTY always the weekly; BANKNIFTY the weekly while weeklies existed, the monthly after (the download switched on 21 Nov 2024)."""
+    return "MONTH" if symbol == "BANKNIFTY" and day >= "2024-11-21" else "WEEK"
+
+
 def next_expiry(day: str, expiries: list[dt.date]) -> dt.date | None:
     i = bisect.bisect_left(expiries, dt.date.fromisoformat(day))
     return expiries[i] if i < len(expiries) else None
@@ -60,8 +124,8 @@ def build(src: Path, dst: Path, symbol: str = "NIFTY", log=print, only_after: st
     s = sqlite3.connect(src, timeout=60)
     s.execute("CREATE INDEX IF NOT EXISTS candles_ts ON candles(ts)")
     s.commit()
-    days = [r[0] for r in s.execute("SELECT DISTINCT substr(ts,1,10) FROM candles WHERE symbol=? AND flag='WEEK' AND code=1 ORDER BY 1", (symbol,))]
-    expiries = weekly_expiries(days)
+    days = [r[0] for r in s.execute("SELECT DISTINCT substr(ts,1,10) FROM candles WHERE symbol=? AND code=1 ORDER BY 1", (symbol,))]
+    expiries = expiries_for(symbol, days)
     d = intraday.connect(dst)
     d.executescript(META)
     done = rows_total = 0
@@ -72,8 +136,9 @@ def build(src: Path, dst: Path, symbol: str = "NIFTY", log=print, only_after: st
         if e is None:
             continue
         lo, hi = f"{day} {OPEN}", f"{day} {LAST}"
-        opts = s.execute("SELECT opt, ts, strike, open, high, low, close, volume FROM candles WHERE symbol=? AND flag='WEEK' AND code=1 AND ts>=? AND ts<=?", (symbol, lo, hi)).fetchall()
-        idx = s.execute("SELECT ts, spot FROM candles WHERE symbol=? AND flag='WEEK' AND code=1 AND opt='CE' AND rel=0 AND ts>=? AND ts<=? AND spot IS NOT NULL ORDER BY ts", (symbol, lo, hi)).fetchall()
+        flag = flag_for(symbol, day)
+        opts = s.execute("SELECT opt, ts, strike, open, high, low, close, volume FROM candles WHERE symbol=? AND flag=? AND code=1 AND ts>=? AND ts<=?", (symbol, flag, lo, hi)).fetchall()
+        idx = s.execute("SELECT ts, spot FROM candles WHERE symbol=? AND flag=? AND code=1 AND opt='CE' AND rel=0 AND ts>=? AND ts<=? AND spot IS NOT NULL ORDER BY ts", (symbol, flag, lo, hi)).fetchall()
         if not opts or not idx:
             continue
         d.execute("DELETE FROM candles WHERE symbol=? AND ts>=? AND ts<=?", (symbol, day + " 00:00", day + " 23:59"))
