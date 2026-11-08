@@ -137,12 +137,11 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
     <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'grid', placeItems: 'center', padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: 0, background: 'var(--bg-surface, #fff)', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)', border: '1px solid var(--border)' }}>
         <div className="row" style={{ alignItems: 'center', padding: '18px 20px 6px' }}>
-          <div><b style={{ fontSize: 17 }}>{contract || symbol}</b><div className="num">{m?.ltp != null ? m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '–'} <span className="sub">NFO</span></div></div>
+          <div><b style={{ fontSize: 17 }}>{contract || symbol}</b>{m?.ltp != null && <div className="num">{m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })} <span className="sub">NFO</span></div>}</div>
           <span className="spacer" />
           <span className="chip" title="The strategy decides BUY or SELL at the next System Point">BUY / SELL by strategy</span>
         </div>
         <div style={{ padding: '0 20px' }}>
-          <div style={{ margin: '8px 0' }}><Seg items={[['Normal', true, 'Carry-forward: Top-Bottom holds positions for days'], ['Intraday', false, 'Not used: Angel One would square it off the same day']]} /></div>
           <TRow label="Quantity">
             <span className="row" style={{ alignItems: 'center', gap: 6, border: '1px solid var(--border)', borderRadius: 999, padding: '2px 6px' }}>
               <button type="button" className="btn sm" aria-label="one lot less" disabled={lots <= 1} onClick={() => setLots(lots - 1)}>−</button>
@@ -150,9 +149,7 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
               <button type="button" className="btn sm" aria-label="one lot more" disabled={lots >= maxLots} onClick={() => setLots(lots + 1)}>+</button>
             </span>
           </TRow>
-          <TRow label="Order type"><Seg items={[['Market', false, 'Never used for real orders'], ['Limit', true, 'Entry within 0.5% of the strategy price; never chased'], ['Trigger', false, '']]} /></TRow>
-          <TRow label="Price"><span className="sub" style={{ textAlign: 'right' }}>set at the System Point<br />(live price, at most 0.5% from the strategy)</span></TRow>
-          <TRow label="Validity"><Seg items={[['Day', true, ''], ['GTT', false, '']]} /></TRow>
+          <TRow label="Order"><span style={{ textAlign: 'right' }}><b>Limit · Normal (carry forward) · Day</b><br /><span className="sub">price set at the System Point, at most 0.5% from the strategy</span></span></TRow>
           <div className="card" style={{ margin: '12px 0', padding: 12 }}>
             <div className="row" style={{ alignItems: 'center' }}><span className="chip bad">SL</span>&nbsp;<b>Stop Loss</b><span className="spacer" /><span className="chip ok">ON · automatic</span></div>
             <div className="sub" style={{ marginTop: 4 }}>Placed at Angel One right after the entry fills, at the strategy&apos;s stop, and moved whenever the strategy moves it.</div>
@@ -169,8 +166,8 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
         <div className="row" style={{ padding: '14px 20px', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div className="sub" style={{ lineHeight: 1.6 }}>
             Est. balance: <b>{rs(m?.available)}</b><br />
-            <span style={{ color: short != null ? 'var(--danger)' : undefined }}>Req margin: <b>{rs(need)}</b></span>{buy != null && sell != null && <span title="BUY / SELL"> ({rs(buy)} / {rs(sell)})</span>}<br />
-            Charges ≈ <b>{charges == null ? '–' : rs(charges)}</b> <span title="Estimate for one entry order: brokerage ₹20, exchange, SEBI, stamp duty and GST. The exit costs about the same plus STT.">ⓘ</span>
+            {need != null && <><span style={{ color: short != null ? 'var(--danger)' : undefined }}>Req margin: <b>{rs(need)}</b></span>{buy != null && sell != null && <span title="BUY / SELL"> ({rs(buy)} / {rs(sell)})</span>}<br /></>}
+            {charges != null && <>Charges ≈ <b>{rs(charges)}</b> <span title="Estimate for one entry order: brokerage ₹20, exchange, SEBI, stamp duty and GST. The exit costs about the same plus STT.">ⓘ</span></>}
           </div>
           <span className="spacer" />
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
@@ -186,9 +183,6 @@ function TRow({ label, children }: { label: string; children: ReactNode }) {
   return <div className="row" style={{ alignItems: 'center', minHeight: 44, borderBottom: '1px solid var(--border)' }}><span>{label}</span><span className="spacer" />{children}</div>
 }
 
-function Seg({ items }: { items: [string, boolean, string][] }) {
-  return <span className="seg">{items.map(([t, on, tip]) => <button key={t} type="button" className={on ? 'on' : ''} disabled={!on} title={tip || undefined}>{t}</button>)}</span>
-}
 
 /** Rough cost of one futures entry order at Angel One: ₹20 brokerage, NSE transaction 0.00173%, SEBI ₹10 per crore, stamp 0.002% (buy side), GST 18% on brokerage + fees. */
 export function estCharges(turnover: number): number {

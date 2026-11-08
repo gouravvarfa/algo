@@ -144,3 +144,16 @@ def test_positions_list_marks_what_the_app_manages(db, new_client, monkeypatch):
     fut, eq = d["positions"]
     assert fut["app"] and fut["instrument_id"] == "i-bank" and fut["stop"] == 49500.0
     assert not eq["app"] and eq["instrument_id"] is None                                  # a manual stock position is shown, never managed
+
+
+def test_margin_and_ticket_use_the_rolled_contract_not_the_one_the_instrument_was_created_with(monkeypatch):
+    import types
+    from app import main as appmain
+    from app.broker import api as bapi
+    inst = types.SimpleNamespace(id="i-bank", trading_symbol="BANKNIFTY27OCT26FUT", token="111", exch_seg="NFO", lot_size=30, lots=1, quantity=30)
+    eng = types.SimpleNamespace(snapshots={"i-bank": {"instrument": {"trading_symbol": "BANKNIFTY23NOV26FUT", "token": "222", "exch_seg": "NFO", "lot_size": 30}}})
+    monkeypatch.setattr(appmain, "engine", eng, raising=False)
+    a = bapi._active(inst)
+    assert a["trading_symbol"] == "BANKNIFTY23NOV26FUT" and a["token"] == "222" and a["lot_size"] == 30
+    eng.snapshots = {}
+    assert bapi._active(inst)["trading_symbol"] == "BANKNIFTY27OCT26FUT"              # no snapshot yet: the instrument's own contract

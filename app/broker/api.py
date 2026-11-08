@@ -228,7 +228,7 @@ def my_instruments(request: Request, c=Depends(db)):
     r = store.row(c, uid)
     mode = store.effective_mode(r)
     items = [{"instrument_id": i.id, "symbol": i.symbol, "trading_symbol": i.trading_symbol, "real_on": sw.get(i.id, False), "real_effective": sw.get(i.id, False) and mode == "real",
-              "real_lots": store.instrument_lots(c, uid, i.id), "lot_size": getattr(i, "lot_size", None) or (getattr(i, "quantity", 0) // (getattr(i, "lots", None) or 1)) or 1, "paper_lots": getattr(i, "lots", None) or 1}
+              "real_lots": store.instrument_lots(c, uid, i.id), "lot_size": _active(i)["lot_size"], "contract": _active(i)["trading_symbol"], "paper_lots": getattr(i, "lots", None) or 1}
              for i in appmain.engine.instruments.values() if i.owner == owner]
     return {"account_mode": mode, "real_allowed": bool(r and r["real_allowed"]), "max_lots": store.MAX_REAL_LOTS, "blockers": store.blockers(r), "instruments": items}
 
@@ -248,6 +248,15 @@ def set_my_instrument(instrument_id: str, body: InstrumentSwitch, request: Reque
 
 
 # ---- Top-Bottom real orders: what the executor holds and has done ---------------------------------------------------------------------------
+def _active(inst) -> dict:
+    """The contract the strategy trades NOW (after any expiry roll), from the engine's latest snapshot; the instrument record keeps the contract it was created with."""
+    from app import main as appmain
+    act = ((getattr(appmain.engine, "snapshots", None) or {}).get(inst.id) or {}).get("instrument") or {}
+    lots = getattr(inst, "lots", None) or 1
+    return {"trading_symbol": act.get("trading_symbol") or getattr(inst, "trading_symbol", None), "token": str(act.get("token") or getattr(inst, "token", "")), "exch_seg": act.get("exch_seg") or getattr(inst, "exch_seg", "NFO"),
+            "lot_size": act.get("lot_size") or getattr(inst, "lot_size", None) or (getattr(inst, "quantity", 0) // lots) or 1}
+
+
 def _executor():
     from app import main as appmain
     return getattr(appmain.engine, "real", None) if appmain.engine is not None else None
@@ -318,7 +327,8 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
     if hit and time.time() - hit[0] < 120:
         return hit[1]
     lots = store.instrument_lots(c, uid, instrument_id)
-    qty = lots * (inst.lot_size or (inst.quantity // (inst.lots or 1)))
+    ac = _active(inst)
+    qty = lots * ac["lot_size"]
     try:
         b = await tb_real.angel_broker_for(c, uid)
         f = await b.funds()
@@ -328,18 +338,18 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
     need, err, ltp = {"BUY": None, "SELL": None}, None, None
     for side in ("BUY", "SELL"):                                  # one side per call: a BUY+SELL basket would net the margin out
         try:
-            m = await b.margin([{"exchange": inst.exch_seg, "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
+            m = await b.margin([{"exchange": ac["exch_seg"], "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": ac["token"], "tradeType": side, "orderType": "MARKET"}])
             need[side] = account._num(m.get("totalMarginRequired"))
         except Exception as exc:
             err = f"Angel One margin calculator: {str(exc)[:160] or type(exc).__name__}"
         await asyncio.sleep(0.6)                                  # Angel One rate-limits the margin API
     try:
-        ltp = await b.ltp(inst.exch_seg, inst.trading_symbol, str(inst.token))
+        ltp = await b.ltp(ac["exch_seg"], ac["trading_symbol"], ac["token"])
     except Exception:
         ltp = None
     cash = account._num(f.get("availablecash"))
     worst = max((v for v in need.values() if v is not None), default=None)
-    out = {"connected": True, "contract": inst.trading_symbol, "lots": lots, "qty": qty, "ltp": ltp, "lot_size": qty // lots if lots else None, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
+    out = {"connected": True, "contract": ac["trading_symbol"], "lots": lots, "qty": qty, "ltp": ltp, "lot_size": qty // lots if lots else None, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
            "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time(),
            **({"error": err} if err else {})}
     if err:
