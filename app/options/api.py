@@ -25,10 +25,55 @@ CACHE_TTL = 600.0      # seconds: loaded history changes only when a loader runs
 _REFRESHING: set = set()
 
 
+_PERSIST_KEYS = ("intraday_days", "sim_dates", "bhav_summary")   # small, slow-to-compute answers kept on disk so a restart (every deploy) starts warm
+_persist_loaded = False
+
+
+def _persist_path():
+    import sys as _sys
+    if "pytest" in _sys.modules:
+        return None                                                  # tests never read or write the disk copy
+    return Path(__file__).resolve().parents[2] / "data" / "api_cache.json"
+
+
+def _persist_load() -> None:
+    """Fill the cache from the disk copy, marked old so each entry is served at once and refreshed in the background."""
+    global _persist_loaded
+    if _persist_loaded:
+        return
+    _persist_loaded = True
+    p = _persist_path()
+    if p is None or not p.exists():
+        return
+    try:
+        import json as _j
+        for k, v in _j.loads(p.read_text(encoding="utf-8")).items():
+            key = tuple(_j.loads(k))
+            _CACHE.setdefault(key, (0.0, v))
+    except Exception:
+        pass                                                         # a damaged copy is ignored, never fatal
+
+
+def _persist_save() -> None:
+    p = _persist_path()
+    if p is None:
+        return
+    try:
+        import json as _j
+        keep = {_j.dumps(list(k)): v for k, (t, v) in _CACHE.items() if isinstance(k, tuple) and k and k[0] in _PERSIST_KEYS and t}
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(_j.dumps(keep), encoding="utf-8")
+        tmp.replace(p)
+    except Exception:
+        pass
+
+
 async def _cached(key, fn):
     """Run a slow read-only DB query in a worker thread (it must not block the event loop). Stale-while-revalidate: once a key has ever been
-    answered, every call returns that answer at once, and an answer older than CACHE_TTL is refreshed in the background, so nobody waits for the slow query twice."""
+    answered, every call returns that answer at once, and an answer older than CACHE_TTL is refreshed in the background, so nobody waits for the slow query twice.
+    The few slow list answers are also kept on disk, so even the first page after a restart is instant."""
     import time as _t
+    _persist_load()
     hit = _CACHE.get(key)
     if hit:
         if _t.time() - hit[0] >= CACHE_TTL and key not in _REFRESHING:
@@ -37,6 +82,8 @@ async def _cached(key, fn):
             async def refresh():
                 try:
                     _CACHE[key] = (_t.time(), await asyncio.to_thread(fn))
+                    if key[0] in _PERSIST_KEYS:
+                        _persist_save()
                 except Exception:
                     pass
                 finally:
@@ -45,6 +92,8 @@ async def _cached(key, fn):
         return hit[1]
     val = await asyncio.to_thread(fn)
     _CACHE[key] = (_t.time(), val)
+    if isinstance(key, tuple) and key and key[0] in _PERSIST_KEYS:
+        _persist_save()
     return val
 
 
@@ -116,7 +165,7 @@ async def bhav_summary():
                              "FROM options_eod GROUP BY symbol").fetchall()
         return {"days": [{"date": d, "status": s, "rows": r, "rejected": j} for d, s, r, j in days],
                 "symbols": [{"symbol": s, "rows": n, "days": d, "expiries": e, "from": a, "to": b} for s, n, d, e, a, b in syms]}
-    return await _cached("bhav_summary", q)
+    return await _cached(("bhav_summary",), q)
 
 
 @router.get("/bhavcopy/expiries")
