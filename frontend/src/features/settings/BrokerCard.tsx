@@ -24,9 +24,12 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wr
 export function AngelMark({ size = 32 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" role="img" aria-label="Angel One" style={{ flex: 'none' }}>
-      <rect width="32" height="32" rx="8" fill="#1C3D8F" />
-      <path d="M16 6 L25 25 H20.6 L16 14.6 L11.4 25 H7 Z" fill="#FF7A00" />
-      <circle cx="16" cy="21" r="2.2" fill="#fff" />
+      <rect width="32" height="32" rx="7" fill="#fff" />
+      <path d="M17.6 4 L19.6 3 L29.5 28.5 L26.4 29 Z" fill="#17A84B" strokeLinejoin="round" />
+      {[0, 1, 2, 3].flatMap((r) => Array.from({ length: r + 1 }, (_, i) => {
+        const x = 13.5 - r * 3 + i * 6, y = 9 + r * 5
+        return <path key={`${r}-${i}`} d={`M${x} ${y} H${x + 5} L${x + 2.5} ${y + 4.3} Z`} fill="#F47B20" />
+      }))}
     </svg>
   )
 }
