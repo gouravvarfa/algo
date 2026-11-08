@@ -337,6 +337,39 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
     return out
 
 
+_POS: dict[str, tuple[float, dict]] = {}
+
+
+@router.get("/api/me/broker/positions")
+async def my_positions(request: Request, c=Depends(db)):
+    """Today's positions in the connected Angel One account with P&L (Angel One's own numbers), each marked when this app manages it. Read-only, kept 10 s."""
+    from app.broker import tb_real
+    uid = user_id_of(request)
+    r = store.row(c, uid)
+    if r is None or r["status"] != "connected":
+        return {"connected": False}
+    hit = _POS.get(uid)
+    if hit and time.time() - hit[0] < 10:
+        return hit[1]
+    try:
+        b = await tb_real.angel_broker_for(c, uid)
+        rows = await b.positions()
+    except Exception as exc:
+        orders._drop(uid)
+        return {"connected": True, "error": f"Angel One not reachable ({type(exc).__name__})"}
+    rt = _executor()
+    managed = {x["position"]["contract"]: x for x in (rt.view(c, uid) if rt is not None else []) if x["position"]}
+    pos = []
+    for p in rows or []:
+        q = account._position(p)
+        m = managed.get(q["symbol"])
+        pos.append({**q, "app": bool(m), "instrument_id": m["instrument_id"] if m else None, "stop": m["stop_target"] if m else None})
+    pos.sort(key=lambda x: (x["net_qty"] in (0, None), x["symbol"] or ""))
+    out = {"connected": True, "positions": pos, "open": sum(1 for x in pos if x["net_qty"]), "total_pnl": round(sum(x["pnl"] or 0 for x in pos), 2), "at": time.time()}
+    _POS[uid] = (time.time(), out)
+    return out
+
+
 _FUNDS: dict[str, tuple[float, dict]] = {}
 
 

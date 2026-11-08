@@ -110,3 +110,37 @@ def test_the_person_picks_the_lots_and_only_a_typo_is_refused(e2e):
     st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me", lots=5)          # the person decides; no admin lot limit
     with pytest.raises(st.BrokerError):
         st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me", lots=51)   # only a typo guard
+
+
+def test_positions_list_marks_what_the_app_manages(db, new_client, monkeypatch):
+    from app.broker import api as bapi, store as st
+    from tests.security.helpers import make_user
+    u = make_user(db, "posuser", "user")
+    st.save(db, u.id, "A123456", "KEY12345", "1234", "JBSWY3DPEHPK3PXP", u.id)
+    db.execute("UPDATE user_broker SET status='connected' WHERE user_id=?", (u.id,))
+    db.commit()
+
+    class B:
+        async def positions(self):
+            return [{"tradingsymbol": "BANKNIFTY25NOV26FUT", "exchange": "NFO", "producttype": "CARRYFORWARD", "netqty": "30", "netprice": "50000", "ltp": "50100", "pnl": "3000"},
+                    {"tradingsymbol": "SBIN-EQ", "exchange": "NSE", "producttype": "DELIVERY", "netqty": "5", "netprice": "800", "ltp": "790", "pnl": "-50"}]
+
+    async def bf(c, uid):
+        return B()
+
+    class RT:
+        def view(self, c, uid):
+            return [{"instrument_id": "i-bank", "position": {"contract": "BANKNIFTY25NOV26FUT"}, "stop_target": 49500.0}]
+
+    from app.broker import tb_real
+    monkeypatch.setattr(tb_real, "angel_broker_for", bf)
+    monkeypatch.setattr(bapi, "_executor", lambda: RT())
+    bapi._POS.clear()
+    from tests.security.helpers import login
+    cl = new_client()
+    assert login(cl, u).status_code == 200
+    d = cl.get("/api/me/broker/positions").json()
+    assert d["total_pnl"] == 2950 and d["open"] == 2
+    fut, eq = d["positions"]
+    assert fut["app"] and fut["instrument_id"] == "i-bank" and fut["stop"] == 49500.0
+    assert not eq["app"] and eq["instrument_id"] is None                                  # a manual stock position is shown, never managed
