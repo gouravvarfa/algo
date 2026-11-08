@@ -250,7 +250,7 @@ async def test_a_price_that_ran_away_is_not_chased(env):
 
 
 @async_test
-@pytest.mark.parametrize("what,reason", [("margin", "margin needed"), ("cash", "margin needed"), ("loss", "daily cap"), ("lots", "above your limit")])
+@pytest.mark.parametrize("what,reason", [("margin", "margin needed"), ("cash", "margin needed"), ("loss", "daily cap")])
 async def test_each_entry_guard_blocks_the_entry(env, what, reason):
     env.sync(None)
     if what == "margin":

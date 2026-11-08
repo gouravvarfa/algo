@@ -272,7 +272,11 @@ CREATE TABLE real_tb_orders (         -- every real order the executor sent for 
 CREATE INDEX idx_real_tb_orders_user ON real_tb_orders (user_id, created_at);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10)]
+_V11 = """
+ALTER TABLE user_instrument_real ADD COLUMN real_lots INTEGER NOT NULL DEFAULT 1;   -- how many lots each real order of this instrument uses (1..the admin's max lots)
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10), (11, _V11)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

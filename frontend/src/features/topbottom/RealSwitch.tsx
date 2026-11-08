@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, get, post, put } from '../../lib/api'
 import { useDataSource } from '../../lib/datasource'
 import { useToast } from '../../lib/toast'
 
-interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean }
+interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean; real_lots: number; lot_size: number; paper_lots: number }
 interface TbState {
   instrument_id: string; position: { side: string; qty: number; contract: string; entry_price: number | null } | null; pending_entry: boolean; halted: string | null; stop_target: number | null
   released: boolean; exiting?: boolean; missed: { at: string; reason: string }[]; events: { at: string; text: string }[]; orders: { id: string; role: string; side: string; qty: number; type: string; price: number | null; trigger: number | null; state: string }[]
 }
-interface Data { account_mode: string; real_allowed: boolean; blockers: string[]; instruments: Item[] }
+interface Data { account_mode: string; real_allowed: boolean; max_lots: number; blockers: string[]; instruments: Item[] }
 
 /** The person's own Real/Paper switch for ONE Top-Bottom instrument. Shown only to accounts an admin allowed for real orders, never in an admin's "view as" screen.
  * Off by default; it can be turned on only while the whole account is in REAL mode, and it turns itself off whenever the account leaves REAL. */
@@ -30,15 +31,17 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not exit'),
   })
   const set = useMutation({
-    mutationFn: (real: boolean) => put<Data>(`/api/me/broker/instruments/${instrumentId}`, { real }),
-    onSuccess: (d, real) => { qc.setQueryData(['broker-instruments'], d); void qc.invalidateQueries({ queryKey: ['broker-tb-trades'] }); void qc.invalidateQueries({ queryKey: ['broker-tb'] }); toast(real ? `Real orders armed for ${symbol}` : `${symbol} is on paper`) },
+    mutationFn: (real: boolean) => put<Data>(`/api/me/broker/instruments/${instrumentId}`, real ? { real, lots } : { real }),
+    onSuccess: (d, real) => { qc.setQueryData(['broker-instruments'], d); void qc.invalidateQueries({ queryKey: ['broker-tb-trades'] }); void qc.invalidateQueries({ queryKey: ['broker-tb'] }); void qc.invalidateQueries({ queryKey: ['broker-margin'] }); toast(real ? `Real orders armed for ${symbol}: ${lots} lot${lots > 1 ? 's' : ''}` : `${symbol} is on paper`) },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not change the switch'),
   })
   const d = q.data
+  const [pickLots, setPickLots] = useState<number | null>(null)
   const it = d?.instruments.find((i) => i.instrument_id === instrumentId)
   const mg = useQuery({ queryKey: ['broker-margin', instrumentId], queryFn: () => get<Margin>(`/api/me/broker/tb/${instrumentId}/margin`), enabled: !ds.readOnly && !!d?.real_allowed, refetchInterval: 120_000, retry: false })
+  const lots = pickLots ?? it?.real_lots ?? 1
   if (ds.readOnly || !d || !it) return null
-  const marginLine = mg.data?.connected ? <MarginLine m={mg.data} /> : null
+  const marginLine = mg.data?.connected ? <MarginLine m={mg.data} lots={lots} /> : null
   if (!d.real_allowed) return (
     <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
       <span className="chip muted">PAPER</span>
@@ -55,11 +58,19 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
     <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
       <span className={'chip ' + (on ? 'bad' : 'muted')}>{on ? 'REAL' : 'PAPER'}</span>
       <span className="sub">Real orders for <b>{symbol}</b></span>
+      {on ? <span className="sub"><b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> · qty {it.real_lots * it.lot_size}</span> : (
+        <label className="sub" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Lots
+          <select value={lots} onChange={(e) => setPickLots(Number(e.target.value))} disabled={!accountReal}>
+            {Array.from({ length: Math.max(1, d.max_lots) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <span>= qty <b>{lots * it.lot_size}</b> ({it.lot_size} per lot · max {d.max_lots})</span>
+        </label>
+      )}
       <button className={'btn sm' + (on ? '' : ' danger')} disabled={set.isPending || (!on && !accountReal)}
         title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
         onClick={() => {
           if (on) set.mutate(false)
-          else if (window.confirm(`Turn REAL orders ON for ${symbol}?\n\nThis instrument will trade real money in your Angel One account, within the limits an admin set for you. You can turn it off here at any time.`)) set.mutate(true)
+          else if (window.confirm(`Turn REAL orders ON for ${symbol}?\n\n${lots} lot${lots > 1 ? 's' : ''} = quantity ${lots * it.lot_size} per order${mg.data?.need_buy != null && mg.data.lots ? `, margin about ₹${Math.round(Math.max(mg.data.need_buy, mg.data.need_sell ?? 0) / mg.data.lots * lots).toLocaleString('en-IN')}` : ''}.\nThe first order goes out at the next new System Point, not now. You can turn it off or Exit at any time.`)) set.mutate(true)
         }}>{on ? 'Switch to paper' : 'Turn real ON'}</button>
       {(on || st?.position || st?.pending_entry) && (
         <button className="btn sm danger" disabled={exit.isPending || st?.exiting}
@@ -79,12 +90,16 @@ interface Margin { connected: boolean; error?: string; contract?: string; lots?:
 const rs = (v: number | null | undefined) => (v == null ? '–' : '₹' + Math.round(v).toLocaleString('en-IN'))
 
 /** Angel One's own margin calculator for one real order of this instrument, next to the cash in the account. */
-function MarginLine({ m }: { m: Margin }) {
+function MarginLine({ m, lots }: { m: Margin; lots: number }) {
   if (m.error) return <span className="sub" style={{ flexBasis: '100%' }}>Margin: {m.error}</span>
+  const k = m.lots ? lots / m.lots : 1                                    // Angel One quoted m.lots lots; futures margin grows with the lots
+  const buy = m.need_buy == null ? null : m.need_buy * k, sell = m.need_sell == null ? null : m.need_sell * k
+  const worst = Math.max(buy ?? 0, sell ?? 0), short = m.available != null && worst > m.available ? worst - m.available : null
   return (
     <span className="sub" style={{ flexBasis: '100%' }}>
-      Margin for {m.lots} lot (qty {m.qty}) {m.contract}: <b>BUY {rs(m.need_buy)}</b> · <b>SELL {rs(m.need_sell)}</b> · available <b>{rs(m.available)}</b>{' '}
-      {m.enough == null ? '' : m.enough ? <span className="chip ok">enough</span> : <span className="chip bad">short by {rs(m.short_by)}: entries will be skipped</span>}
+      Margin for <b>{lots} lot{lots > 1 ? 's' : ''}</b> {m.contract}: BUY <b>{rs(buy)}</b> · SELL <b>{rs(sell)}</b> · available in Angel One <b>{rs(m.available)}</b>{' '}
+      {m.available == null || !worst ? '' : short == null ? <span className="chip ok">enough</span> : <span className="chip bad">short by {rs(short)}: entries will be skipped</span>}
+      <span title="From Angel One's margin calculator, refreshed every 2 minutes"> ⓘ</span>
     </span>
   )
 }

@@ -206,6 +206,7 @@ def admin_master(body: MasterBody, actor=Depends(require("users.manage")), c=Dep
 # ---- Top-Bottom: the person's real-order switch for each instrument ------------------------------------------------------------------------
 class InstrumentSwitch(BaseModel):
     real: bool
+    lots: int | None = Field(default=None, ge=1, le=50)
 
 
 def _owned_instrument(request: Request, instrument_id: str):
@@ -226,9 +227,10 @@ def my_instruments(request: Request, c=Depends(db)):
     sw = store.instrument_switches(c, uid)
     r = store.row(c, uid)
     mode = store.effective_mode(r)
-    items = [{"instrument_id": i.id, "symbol": i.symbol, "trading_symbol": i.trading_symbol, "real_on": sw.get(i.id, False), "real_effective": sw.get(i.id, False) and mode == "real"}
+    items = [{"instrument_id": i.id, "symbol": i.symbol, "trading_symbol": i.trading_symbol, "real_on": sw.get(i.id, False), "real_effective": sw.get(i.id, False) and mode == "real",
+              "real_lots": store.instrument_lots(c, uid, i.id), "lot_size": getattr(i, "lot_size", None) or (getattr(i, "quantity", 0) // (getattr(i, "lots", None) or 1)) or 1, "paper_lots": getattr(i, "lots", None) or 1}
              for i in appmain.engine.instruments.values() if i.owner == owner]
-    return {"account_mode": mode, "real_allowed": bool(r and r["real_allowed"]), "blockers": store.blockers(r), "instruments": items}
+    return {"account_mode": mode, "real_allowed": bool(r and r["real_allowed"]), "max_lots": store.MAX_REAL_LOTS, "blockers": store.blockers(r), "instruments": items}
 
 
 @router.put("/api/me/broker/instruments/{instrument_id}")
@@ -237,11 +239,11 @@ def set_my_instrument(instrument_id: str, body: InstrumentSwitch, request: Reque
     u = getattr(request.state, "user", None)
     uid = user_id_of(request)
     try:
-        store.instrument_set(c, uid, instrument_id, inst.symbol, body.real, u["username"] if u else "local")
+        store.instrument_set(c, uid, instrument_id, inst.symbol, body.real, u["username"] if u else "local", body.lots)
     except store.BrokerError as e:
         raise AuthError(e.status, e.code, e.message)
     audit.append(c, "broker.instrument", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid,
-                 detail={"instrument": inst.symbol, "instrument_id": instrument_id, "real": body.real})
+                 detail={"instrument": inst.symbol, "instrument_id": instrument_id, "real": body.real, "lots": body.lots})
     return my_instruments(request, c)
 
 
@@ -315,19 +317,21 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
     hit = _MARGIN.get((uid, instrument_id))
     if hit and time.time() - hit[0] < 120:
         return hit[1]
+    lots = store.instrument_lots(c, uid, instrument_id)
+    qty = lots * (inst.lot_size or (inst.quantity // (inst.lots or 1)))
     try:
         b = await tb_real.angel_broker_for(c, uid)
         f = await b.funds()
         need = {}
         for side in ("BUY", "SELL"):
-            m = await b.margin([{"exchange": inst.exch_seg, "qty": inst.quantity, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
+            m = await b.margin([{"exchange": inst.exch_seg, "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
             need[side] = account._num(m.get("totalMarginRequired"))
     except Exception as exc:
         orders._drop(uid)
         return {"connected": True, "error": f"Angel One margin calculator not reachable ({type(exc).__name__})"}
     cash = account._num(f.get("availablecash"))
     worst = max((v for v in need.values() if v is not None), default=None)
-    out = {"connected": True, "contract": inst.trading_symbol, "lots": inst.lots or 1, "qty": inst.quantity, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
+    out = {"connected": True, "contract": inst.trading_symbol, "lots": lots, "qty": qty, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
            "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time()}
     _MARGIN[(uid, instrument_id)] = (time.time(), out)
     return out

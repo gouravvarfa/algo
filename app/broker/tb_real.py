@@ -249,8 +249,14 @@ class RealTB:
             contract["tick_size"] = REAL_TICK_FALLBACK
         inst = snap.get("instrument") or {}
         contract["lot_size"] = contract.get("lot_size") or inst.get("lot_size")
-        contract["lots"] = inst.get("lots")
+        lots = store.instrument_lots(c, a["user_id"], a["instrument_id"])                # the person's chosen lots, not the paper quantity
+        contract["lots"] = lots
         contract["session"] = inst.get("session", "NSE")
+        lot_size = contract.get("lot_size")
+        if not lot_size:
+            self._miss(a, now, "lot size of the contract unknown, cannot size the real order", e)
+            return
+        qty = int(lots) * int(lot_size)
         p = a["position"]
         roll = bool(p and p["side"] == e["direction"] and p["contract"] != contract.get("trading_symbol"))
         if p and p["side"] == e["direction"] and not roll:
@@ -258,7 +264,7 @@ class RealTB:
             return
         if roll:                                                                  # expiry roll: close the old contract now, then the same side in the new one
             a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
-        a["pending_entry"] = {"side": e["direction"], "qty": int(e["quantity"]), "strategy_price": float(e["entry_price"]), "strategy_stop": e.get("active_stop"), "contract": contract,
+        a["pending_entry"] = {"side": e["direction"], "qty": qty, "strategy_price": float(e["entry_price"]), "strategy_stop": e.get("active_stop"), "contract": contract,
                               "created_at": _s(now), "attempts": 0, "signal_time": e.get("entry_date")}
         if p:
             if a["exit_since"] is None:
@@ -491,9 +497,8 @@ class RealTB:
             return f"{a['symbol']} is not in the symbols an admin allowed for you ({', '.join(allowed)})"
         if not self._market_open(ct.get("session", "NSE"), now):
             return "market closed"
-        lots = ct.get("lots") or 1
-        if lots > r["max_lots"]:
-            return f"{lots} lot(s) is above your limit of {r['max_lots']}"
+        if (ct.get("lots") or 1) > store.MAX_REAL_LOTS:
+            return f"more than {store.MAX_REAL_LOTS} lots"
         try:
             funds = await broker.funds()
             cash = float(funds.get("availablecash"))

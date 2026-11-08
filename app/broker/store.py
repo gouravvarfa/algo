@@ -16,6 +16,7 @@ from app.security import crypto
 
 SYMBOLS = ("NIFTY", "BANKNIFTY")
 CODE_RE = re.compile(r"^[A-Za-z0-9]{3,20}$")
+MAX_REAL_LOTS = 50                     # the person chooses the lots per instrument; this only stops a typo like 500
 MIN_GAP_S = 15.0                       # at most one live Angel One login per user per this many seconds (their login limit is strict)
 _last_call: dict[str, float] = {}
 
@@ -165,16 +166,25 @@ def instrument_switches(c, user_id: str) -> dict[str, bool]:
     return {r["instrument_id"]: bool(r["real_on"]) for r in c.execute("SELECT instrument_id, real_on FROM user_instrument_real WHERE user_id=?", (user_id,))}
 
 
-def instrument_set(c, user_id: str, instrument_id: str, symbol: str, on: bool, actor: str) -> None:
+def instrument_set(c, user_id: str, instrument_id: str, symbol: str, on: bool, actor: str, lots: int | None = None) -> None:
     """The person's real-order switch for one instrument. OFF is always allowed; ON only while the whole account is in effective real mode."""
     if on:
         r = row(c, user_id)
         if effective_mode(r) != "real":
             raise BrokerError(403, "REAL_BLOCKED", "Real orders cannot be switched on for an instrument: " + (" ".join(blockers(r)) or "your account is on paper. Switch the account to REAL in Settings first."))
+        if lots is not None and not (1 <= int(lots) <= MAX_REAL_LOTS):
+            raise BrokerError(400, "LOTS", f"Lots must be between 1 and {MAX_REAL_LOTS}.")
     c.execute("INSERT INTO user_instrument_real (user_id, instrument_id, symbol, real_on, changed_at, changed_by) VALUES (?,?,?,?,?,?) "
               "ON CONFLICT(user_id, instrument_id) DO UPDATE SET real_on=excluded.real_on, symbol=excluded.symbol, changed_at=excluded.changed_at, changed_by=excluded.changed_by",
               (user_id, instrument_id, symbol, 1 if on else 0, time.time(), actor))
+    if on and lots is not None:
+        c.execute("UPDATE user_instrument_real SET real_lots=? WHERE user_id=? AND instrument_id=?", (int(lots), user_id, instrument_id))
     c.commit()
+
+
+def instrument_lots(c, user_id: str, instrument_id: str) -> int:
+    r = c.execute("SELECT real_lots FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (user_id, instrument_id)).fetchone()
+    return int(r["real_lots"]) if r and r["real_lots"] else 1
 
 
 def instrument_real(c, user_id: str, instrument_id: str) -> bool:

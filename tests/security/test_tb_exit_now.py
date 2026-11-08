@@ -1,4 +1,5 @@
 """Exit now on the Top-Bottom page, end to end over HTTP against the fake Angel One: real goes off, the stop is cancelled, a LIMIT exit closes the position."""
+import pytest
 from app.broker import store
 from tests.security.test_real_e2e import CONTRACT, IID, MON, PAPER_BUY, async_test, e2e, places, secs  # noqa: F401
 
@@ -87,3 +88,25 @@ async def test_an_expiry_roll_closes_the_old_contract_then_opens_the_same_side_i
     await rt.tick(secs(66))
     new = [b for b in places(fa, "LIMIT") if b["tradingsymbol"] == NEW]
     assert len(new) == 1 and new[0]["transactiontype"] == "BUY" and new[0]["symboltoken"] == "556"
+
+
+@async_test
+async def test_the_real_order_uses_the_lots_the_person_chose_not_the_paper_quantity(e2e):
+    from app.broker import store as st
+    st.grant(e2e.db, e2e.uid, True, 3, None, None, "admin")
+    st.set_mode(e2e.db, e2e.uid, "real", "e2etrader")
+    st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me", lots=2)
+    e2e.db.execute("UPDATE user_instrument_real SET changed_at=changed_at-120")
+    e2e.db.commit()
+    e2e.sync(None)
+    e2e.rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)                        # the paper event says quantity 30 (1 lot)
+    await e2e.rt.tick(MON)
+    [o] = places(e2e.fa)
+    assert o["quantity"] == "60"
+
+
+def test_the_person_picks_the_lots_and_only_a_typo_is_refused(e2e):
+    from app.broker import store as st
+    st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me", lots=5)          # the person decides; no admin lot limit
+    with pytest.raises(st.BrokerError):
+        st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me", lots=51)   # only a typo guard

@@ -23,7 +23,7 @@ function Editor({ a, onDone }: { a: Acct; onDone: () => void }) {
   const qc = useQueryClient()
   const toast = useToast()
   const [allowed, setAllowed] = useState(a.real_allowed)
-  const [lots, setLots] = useState(String(a.max_lots))
+  const lots = String(a.max_lots)                                            // kept for the API; the person picks lots per instrument
   const [loss, setLoss] = useState(a.max_daily_loss == null ? '' : String(a.max_daily_loss))
   const [syms, setSyms] = useState<string[]>(a.allowed_symbols)
   const save = useMutation({
@@ -36,7 +36,6 @@ function Editor({ a, onDone }: { a: Acct; onDone: () => void }) {
     <form className="stack" style={{ padding: 12, background: 'var(--bg-hover)', borderRadius: 10, gap: 10 }} onSubmit={(e) => { e.preventDefault(); if (!bad) save.mutate() }}>
       <label className="inline"><input type="checkbox" checked={allowed} onChange={(e) => setAllowed(e.target.checked)} /> <b>Allow real orders</b> for {a.name ?? a.username}</label>
       <div className="row" style={{ gap: 14, flexWrap: 'wrap', opacity: allowed ? 1 : 0.5 }}>
-        <label className="field" style={{ minWidth: 120 }}>Max lots<input type="number" min={1} max={50} value={lots} onChange={(e) => setLots(e.target.value)} disabled={!allowed} /></label>
         <label className="field" style={{ minWidth: 170 }}>Daily loss limit (₹)<input type="number" min={1} value={loss} placeholder="no cap" onChange={(e) => setLoss(e.target.value)} disabled={!allowed} /></label>
         <div className="field">Symbols<div className="row" style={{ gap: 12, minHeight: 34, alignItems: 'center' }}>
           {SYMS.map((s) => (<label key={s} className="inline"><input type="checkbox" disabled={!allowed} checked={syms.includes(s)} onChange={(e) => setSyms(e.target.checked ? [...syms, s] : syms.filter((x) => x !== s))} /> {s}</label>))}</div></div>
@@ -113,7 +112,7 @@ export default function BrokerAdminPage() {
                             {a.mode === 'real' && a.effective_mode !== 'real' && <div className="sub" title={a.real_blockers.join(' ')}>chose real, blocked</div>}
                             {a.mode_changed_at ? <div className="sub">{when(a.mode_changed_at)}</div> : null}</td>
                           <td>{a.real_allowed ? <span className="chip warn">Allowed</span> : <span className="chip muted">Not allowed</span>}</td>
-                          <td className="sub">{a.real_allowed ? <>{a.max_lots} lot{a.max_lots > 1 ? 's' : ''} · {a.max_daily_loss == null ? 'no loss cap' : `₹${a.max_daily_loss.toLocaleString('en-IN')} / day`}<br />{a.allowed_symbols.join(', ')}</> : '–'}</td>
+                          <td className="sub">{a.real_allowed ? <>lots: the person chooses · {a.max_daily_loss == null ? 'no loss cap' : `₹${a.max_daily_loss.toLocaleString('en-IN')} / day`}<br />{a.allowed_symbols.join(', ')}</> : '–'}</td>
                           <td style={{ whiteSpace: 'nowrap' }}>
                             <button className="btn sm" onClick={() => setEdit(edit === a.user_id ? null : a.user_id)}>Real access…</button>{' '}
                             <button className="btn sm danger" onClick={() => { if (confirm(`Remove ${a.name ?? a.username}'s Angel One details? They must enter them again.`)) remove.mutate(a.user_id) }}>Remove</button>

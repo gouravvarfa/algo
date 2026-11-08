@@ -78,7 +78,7 @@ export function BrokerCard() {
           <dt>Client code</dt><dd>{s.client_code}</dd>
           <dt>Mode</dt><dd><span className={'chip ' + (s.effective_mode === 'real' ? 'bad' : 'muted')}>{s.effective_mode === 'real' ? 'REAL' : 'PAPER'}</span>
             {s.mode === 'real' && s.effective_mode !== 'real' && <span className="sub"> &nbsp;you chose real, but it is blocked right now</span>}</dd>
-          {s.real_allowed && <><dt>Your real limits</dt><dd>{s.max_lots} lot{(s.max_lots ?? 1) > 1 ? 's' : ''} · {s.max_daily_loss == null ? 'no daily loss cap' : `₹${s.max_daily_loss.toLocaleString('en-IN')} daily loss`} · {s.allowed_symbols?.join(', ')}</dd></>}
+          {s.real_allowed && <><dt>Your real limits</dt><dd>lots: you choose on Top-Bottom · {s.max_daily_loss == null ? 'no daily loss cap' : `₹${s.max_daily_loss.toLocaleString('en-IN')} daily loss`} · {s.allowed_symbols?.join(', ')}</dd></>}
           {s.status_message && <><dt>Last problem</dt><dd className="err">{s.status_message}</dd></>}
         </dl>
       )}
