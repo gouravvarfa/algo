@@ -502,9 +502,26 @@ async def test_nothing_is_asked_of_angel_one_when_there_is_nothing_to_do(env):
 
 
 @async_test
-async def test_mcx_contracts_are_not_traded_for_real_yet(env):
-    mcx = {"trading_symbol": "GOLDM05DEC26FUT", "token": "777", "exch_seg": "MCX", "lot_size": 1, "lots": 1, "quantity": 1, "session": "MCX"}
-    env.rt.sync(IID, env.uid, SYM, {"instrument": mcx, "ltp": 50001.0, "position": None}, MON)
-    await go(env, env.ev("ENTRY", "BUY", contract="GOLDM05DEC26FUT", quantity=1))
-    a = env.state()
-    assert env.fb.n == 0 and "MCX" in a["missed"][-1]["reason"]
+async def test_an_mcx_future_is_ordered_in_lots_x_lotsize_on_the_rupee_grid(env):
+    mcx = {"trading_symbol": "GOLDM04DEC26FUT", "token": "777", "exch_seg": "MCX", "lot_size": 100, "lots": 1, "quantity": 100, "session": "MCX", "tick_size": 1.0}
+    env.fb.ltp_value = 125010.0
+    env.rt.sync(IID, env.uid, SYM, {"instrument": mcx, "ltp": 125010.0, "position": None}, MON)
+    await go(env, env.ev("ENTRY", "BUY", contract="GOLDM04DEC26FUT", quantity=100, entry_price=125000.0, active_stop=124000.0))
+    [(_, p)] = [c for c in env.fb.calls if c[0] == "place"]
+    assert p["exchange"] == "MCX" and p["quantity"] == "100" and p["ordertype"] == "LIMIT"     # 1 lot of GOLDM = 100 (grams) in Angel One's own unit
+    price = float(p["price"])
+    assert price == int(price) and price == 125073.0                        # whole rupees, a buffer of about Rs 62, inside the 0.5% band
+    oid, _ = env.fb.last("entry")
+    env.fb.fill(oid, price)
+    await go(env, now=secs(5), position={"direction": "BUY", "entry_price": 125000.0, "active_stop": 124000.0})
+    _, stop = env.fb.last("stop")
+    sp = stop["p"]
+    assert float(sp["triggerprice"]) == 124000.0 and float(sp["price"]) == 124000.0 - 248.0 and sp["quantity"] == "100"   # the stop's limit ~0.2% past the trigger
+
+
+@async_test
+async def test_an_mcx_contract_without_a_known_tick_is_not_traded(env):
+    mcx = {"trading_symbol": "GOLDM04DEC26FUT", "token": "777", "exch_seg": "MCX", "lot_size": 100, "lots": 1, "quantity": 100, "session": "MCX"}
+    env.rt.sync(IID, env.uid, SYM, {"instrument": mcx, "ltp": 125010.0, "position": None}, MON)
+    await go(env, env.ev("ENTRY", "BUY", contract="GOLDM04DEC26FUT", quantity=100, entry_price=125000.0))
+    assert env.fb.n == 0 and "tick size" in env.state()["missed"][-1]["reason"]

@@ -190,3 +190,11 @@ async def test_a_real_mismatch_still_halts_with_a_manual_position_present(e2e):
     for t in (10, 40):
         await rt.tick(secs(t))
     assert e2e.state()["halted"] and "held by hand" in e2e.state()["halted"]
+
+
+def test_symbol_groups_for_real_orders():
+    from app.broker import store as st
+    assert st.symbol_allowed("BANKNIFTY", ["BANKNIFTY"]) and not st.symbol_allowed("NIFTY", ["BANKNIFTY"])
+    assert st.symbol_allowed("GOLDM", ["MCX"]) and not st.symbol_allowed("GOLDM", ["STOCKS", "NIFTY"])
+    assert st.symbol_allowed("RELIANCE", ["STOCKS"]) and not st.symbol_allowed("RELIANCE", ["MCX"])
+    assert not st.symbol_allowed("NIFTY", ["STOCKS"])                                    # the index futures are only ever allowed by name

@@ -38,7 +38,7 @@ ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
 IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
 REAL_TICK_FALLBACK = 0.10          # price grid when the contract's tick is unknown: a multiple of 0.10 is also a multiple of 0.05, so it is valid on either NSE grid
-EXCHANGES = ("NFO",)               # MCX (gold / silver) quantity units at Angel One are not verified yet: no real MCX order until they are
+EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
 TICK_S = 5.0
 KEEP_EVENTS = 80
@@ -246,7 +246,13 @@ class RealTB:
             return
         contract = dict(contract)
         if not contract.get("tick_size"):
-            contract["tick_size"] = REAL_TICK_FALLBACK
+            known = dryrun.resolve_contract(e["symbol"], contract.get("trading_symbol") or "") or {}
+            contract["tick_size"] = known.get("tick_size") or 0
+        if not contract.get("tick_size"):
+            if contract.get("exch_seg") == "MCX":
+                self._miss(a, now, "tick size of the MCX contract unknown: no price can be put on the exchange grid safely", e)
+                return
+            contract["tick_size"] = REAL_TICK_FALLBACK                                   # NSE: 0.10 is valid on both the 0.05 and 0.10 grids
         inst = snap.get("instrument") or {}
         contract["lot_size"] = contract.get("lot_size") or inst.get("lot_size")
         lots = store.instrument_lots(c, a["user_id"], a["instrument_id"])                # the person's chosen lots, not the paper quantity
@@ -511,7 +517,7 @@ class RealTB:
         if store.effective_mode(r) != "real":
             return "real mode is not in effect: " + "; ".join(store.blockers(r))
         allowed = store.limits(r)["allowed_symbols"]
-        if a["symbol"] not in allowed:
+        if not store.symbol_allowed(a["symbol"], allowed):
             return f"{a['symbol']} is not in the symbols an admin allowed for you ({', '.join(allowed)})"
         if not self._market_open(ct.get("session", "NSE"), now):
             return "market closed"
@@ -563,7 +569,7 @@ class RealTB:
                 return                                              # wait for the session
             return self._miss(a, now, reason)
         side, P = pe["side"], pe["strategy_price"]
-        band, buf = P * ENTRY_BAND_PCT, dryrun.entry_buffer(a["symbol"])
+        band, buf = P * ENTRY_BAND_PCT, dryrun.entry_buffer(a["symbol"], P, ct.get("exch_seg"))
         tick = dryrun._tick(ct)[0]
         if side == "BUY":
             if ltp > P + band:

@@ -137,7 +137,7 @@ function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy
     <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 10000, display: 'grid', placeItems: 'center', padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: 0, background: 'var(--bg-surface, #fff)', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,.35)', border: '1px solid var(--border)' }}>
         <div className="row" style={{ alignItems: 'center', padding: '18px 20px 6px' }}>
-          <div><b style={{ fontSize: 17 }}>{contract || symbol}</b>{m?.ltp != null && <div className="num">{m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })} <span className="sub">NFO</span></div>}</div>
+          <div><b style={{ fontSize: 17 }}>{contract || symbol}</b>{m?.ltp != null && <div className="num">{m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>}</div>
           <span className="spacer" />
           <span className="chip" title="The strategy decides BUY or SELL at the next System Point">BUY / SELL by strategy</span>
         </div>

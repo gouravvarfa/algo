@@ -15,6 +15,17 @@ from app.ops import flags
 from app.security import crypto
 
 SYMBOLS = ("NIFTY", "BANKNIFTY")
+GROUPS = ("MCX", "STOCKS")              # an admin may also allow every MCX gold / silver future, or every stock future, for Top-Bottom real orders
+
+
+def symbol_allowed(symbol: str, allowed: list[str]) -> bool:
+    """Top-Bottom real orders: NIFTY / BANKNIFTY by name, gold / silver through "MCX", any other stock future through "STOCKS"."""
+    from app.providers.commodities import is_commodity
+    if symbol in allowed:
+        return True
+    if is_commodity(symbol):
+        return "MCX" in allowed
+    return "STOCKS" in allowed and symbol not in SYMBOLS
 CODE_RE = re.compile(r"^[A-Za-z0-9]{3,20}$")
 MAX_REAL_LOTS = 50                     # the person chooses the lots per instrument; this only stops a typo like 500
 MIN_GAP_S = 15.0                       # at most one live Angel One login per user per this many seconds (their login limit is strict)
@@ -138,8 +149,8 @@ def grant(c, user_id: str, allowed: bool, max_lots: int, max_daily_loss: float |
     if r is None:
         raise BrokerError(404, "NOT_SET", "This user has not connected an Angel One account.")
     syms = [x.upper() for x in symbols] if symbols is not None else None
-    if syms is not None and (not syms or any(x not in SYMBOLS for x in syms)):
-        raise BrokerError(400, "BAD_SYMBOL", f"symbols must be among {list(SYMBOLS)}")
+    if syms is not None and (not syms or any(x not in SYMBOLS + GROUPS for x in syms)):
+        raise BrokerError(400, "BAD_SYMBOL", f"symbols must be among {list(SYMBOLS + GROUPS)}")
     if not 1 <= max_lots <= 50:
         raise BrokerError(400, "BAD_LOTS", "Max lots must be between 1 and 50.")
     if max_daily_loss is not None and max_daily_loss <= 0:

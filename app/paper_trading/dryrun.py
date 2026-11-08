@@ -37,11 +37,25 @@ def now_ist() -> dt.datetime:
     return dt.datetime.now(IST).replace(tzinfo=None)
 
 
-def entry_buffer(symbol: str) -> float:
+# MCX gold / silver trade at tens of thousands of rupees with a Rs 1 tick, so a point allowance makes no sense there: a share of the price instead.
+COMMODITY_ENTRY_BUFFER_PCT = 0.0005   # GOLD near 1,25,000 -> about Rs 62
+COMMODITY_STOP_LIMIT_PCT = 0.002      # the stop's limit sits about Rs 250 past the trigger on GOLD
+
+
+def _commodity(symbol: str, exch: str | None = None) -> bool:
+    from app.providers.commodities import is_commodity
+    return exch == "MCX" or is_commodity(symbol)
+
+
+def entry_buffer(symbol: str, price: float | None = None, exch: str | None = None) -> float:
+    if price and _commodity(symbol, exch):
+        return max(1.0, price * COMMODITY_ENTRY_BUFFER_PCT)
     return ENTRY_BUFFER_POINTS.get(symbol, DEFAULT_ENTRY_BUFFER_POINTS)
 
 
-def stop_limit_points(symbol: str) -> float:
+def stop_limit_points(symbol: str, price: float | None = None, exch: str | None = None) -> float:
+    if price and _commodity(symbol, exch):
+        return max(1.0, price * COMMODITY_STOP_LIMIT_PCT)
     return STOP_LIMIT_POINTS.get(symbol, DEFAULT_STOP_LIMIT_POINTS)
 
 
@@ -104,7 +118,7 @@ def _payload(contract: dict, side: str, qty: int, ordertype: str, price: float |
 def _limit(contract: dict, symbol: str, side: str, ref: float) -> float:
     """An entry / exit LIMIT price: the last price plus the allowance in points, on the aggressive side, on the price grid."""
     tick, _ = _tick(contract)
-    buf = entry_buffer(symbol)
+    buf = entry_buffer(symbol, ref, contract.get("exch_seg"))
     return rnd(ref + buf, tick, "up") if side == "BUY" else rnd(ref - buf, tick, "down")
 
 
@@ -112,7 +126,8 @@ def _stop_order(contract: dict, symbol: str, direction: str, qty: int, stop: flo
     tick, _ = _tick(contract)
     side = _side(direction, closing=True)
     trigger = rnd(stop, tick)
-    limit = rnd(trigger - stop_limit_points(symbol), tick, "down") if side == "SELL" else rnd(trigger + stop_limit_points(symbol), tick, "up")
+    pts = stop_limit_points(symbol, trigger, contract.get("exch_seg"))
+    limit = rnd(trigger - pts, tick, "down") if side == "SELL" else rnd(trigger + pts, tick, "up")
     return _payload(contract, side, qty, "STOPLOSS_LIMIT", price=limit, trigger=trigger)
 
 

@@ -14,7 +14,7 @@ interface TbRow { user_id: string; username: string | null; name: string | null;
 interface TbOrder { id: string; username: string | null; name: string | null; symbol: string; contract: string; role: string; side: string; qty: number; order_type: string; price: number | null; trigger_price: number | null; status: string; message: string | null; created_at: number }
 interface Overview { master_on: boolean; can_turn_on: boolean; accounts: Acct[]; counts: { connected: number; allowed: number; real_now: number; total: number } }
 
-const SYMS = ['NIFTY', 'BANKNIFTY']
+const SYMS = ['NIFTY', 'BANKNIFTY', 'MCX', 'STOCKS']
 const STATUS: Record<string, string> = { connected: 'Connected', error: 'Login failed', untested: 'Not checked' }
 const when = (t: number | null | undefined) => (t ? new Date(t * 1000).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '–')
 const errMsg = (e: unknown) => (e instanceof ApiError ? e.message : 'Something went wrong')
@@ -38,7 +38,7 @@ function Editor({ a, onDone }: { a: Acct; onDone: () => void }) {
       <div className="row" style={{ gap: 14, flexWrap: 'wrap', opacity: allowed ? 1 : 0.5 }}>
         <label className="field" style={{ minWidth: 170 }}>Daily loss limit (₹)<input type="number" min={1} value={loss} placeholder="no cap" onChange={(e) => setLoss(e.target.value)} disabled={!allowed} /></label>
         <div className="field">Symbols<div className="row" style={{ gap: 12, minHeight: 34, alignItems: 'center' }}>
-          {SYMS.map((s) => (<label key={s} className="inline"><input type="checkbox" disabled={!allowed} checked={syms.includes(s)} onChange={(e) => setSyms(e.target.checked ? [...syms, s] : syms.filter((x) => x !== s))} /> {s}</label>))}</div></div>
+          {SYMS.map((s) => (<label key={s} className="inline"><input type="checkbox" disabled={!allowed} checked={syms.includes(s)} onChange={(e) => setSyms(e.target.checked ? [...syms, s] : syms.filter((x) => x !== s))} /> {({ MCX: 'MCX gold / silver', STOCKS: 'Stock futures' } as Record<string, string>)[s] ?? s}</label>))}</div></div>
       </div>
       <p className="note">Even when allowed, this person must connect and verify Angel One, and confirm with their own password, before real mode turns on. Withdrawing puts the account on paper at once.</p>
       <div className="row" style={{ gap: 8 }}><button className="btn primary" disabled={bad || save.isPending}>{save.isPending ? 'Saving…' : 'Save'}</button><button type="button" className="btn" onClick={onDone}>Cancel</button></div>
