@@ -116,7 +116,37 @@ export function UserDrawer({ user, onClose, canManage, isSelf = false }: { user:
           {(notes.data?.notes ?? []).map((n) => <li key={n.id}><span>{n.note}</span><small>{n.author_name} · {dt(new Date(n.created_at * 1000).toISOString())}</small></li>)}
           {!notes.data?.notes.length && <li className="sub">No notes yet.</li>}
         </ul>
+
+        <h3>Activity <span className="sub">(real orders, halts and every broker / settings change)</span></h3>
+        <UserActivity userId={user.id} />
       </aside>
+    </div>
+  )
+}
+
+interface Act { at: number; type: string; status: string | null; title: string; detail: string }
+
+/** One person's real-money trail, newest first: Top-Bottom and option orders, current halts, and audit entries (connect, test, mode, switches, lots, grants, exits). */
+function UserActivity({ userId }: { userId: string }) {
+  const q = useQuery({ queryKey: ['admin', 'activity', userId], queryFn: () => get<{ items: Act[] }>(`/api/admin/users/${userId}/activity?limit=200`), refetchInterval: 30_000 })
+  const [kind, setKind] = useState('all')
+  const items = (q.data?.items ?? []).filter((x) => kind === 'all' || x.type === kind)
+  const color = (x: Act) => (x.type === 'halt' || x.status === 'rejected' || x.status === 'unknown' ? 'bad' : x.status === 'filled' ? 'ok' : x.type === 'order' ? '' : 'muted')
+  return (
+    <div>
+      <div className="btnrow" style={{ justifyContent: 'flex-start', marginBottom: 6 }}>
+        {[['all', 'All'], ['order', 'Orders'], ['halt', 'Halts'], ['change', 'Changes']].map(([k, l]) => <button key={k} type="button" className={'btn sm' + (kind === k ? ' primary' : '')} onClick={() => setKind(k)}>{l}</button>)}
+      </div>
+      {q.isLoading && <p className="sub">Loading…</p>}
+      {!q.isLoading && items.length === 0 && <p className="sub">Nothing yet.</p>}
+      <ul className="notes" style={{ maxHeight: 360, overflowY: 'auto' }}>
+        {items.map((x, i) => (
+          <li key={i}>
+            <span><span className={'chip ' + color(x)} style={{ marginRight: 6 }}>{x.type === 'change' ? 'change' : x.status ?? x.type}</span><b>{x.title}</b><div className="sub">{x.detail}</div></span>
+            <small>{dt(new Date(x.at * 1000).toISOString())}</small>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

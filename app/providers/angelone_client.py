@@ -21,7 +21,7 @@ import pyotp
 
 from app.ops import circuit, incidents
 from app.ops.stats import tracked
-from app.providers import call_metrics
+from app.providers import api_health, call_metrics
 
 logger = logging.getLogger("scanner.angelone_client")
 
@@ -133,7 +133,7 @@ async def _retry_async(
 async def login(api_key: str, client_code: str, pin: str, totp_secret: str) -> AngelOneSession:
     async def _attempt() -> AngelOneSession:
         totp = generate_totp(totp_secret)  # regenerated each attempt: a stale 30s-window code would just fail again
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, transport=api_health.transport()) as client:
             try:
                 response = await client.post(
                     BASE_URL + ROUTES["login"],
@@ -162,7 +162,7 @@ async def login(api_key: str, client_code: str, pin: str, totp_secret: str) -> A
 
 async def logout(session: AngelOneSession) -> None:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, transport=api_health.transport()) as client:
             await client.post(
                 BASE_URL + ROUTES["logout"],
                 headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"},
@@ -198,7 +198,7 @@ async def get_candle_data(
 
     async def _attempt() -> list[list[Any]]:
         call_metrics.record_angelone_call()
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, transport=api_health.transport()) as client:
             try:
                 response = await client.post(
                     BASE_URL + ROUTES["candle_data"],
@@ -232,7 +232,7 @@ async def get_margin(session: AngelOneSession, positions: list[dict[str, Any]]) 
 
     async def _attempt() -> dict[str, Any]:
         call_metrics.record_angelone_call()
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, transport=api_health.transport()) as client:
             try:
                 response = await client.post(
                     BASE_URL + ROUTES["margin"],
@@ -253,7 +253,7 @@ async def _read(session: AngelOneSession, route: str) -> Any:
     """GET one read-only account view. Nothing here can place, change or cancel an order."""
     async def _attempt() -> Any:
         call_metrics.record_angelone_call()
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, transport=api_health.transport()) as client:
             try:
                 response = await client.get(BASE_URL + ROUTES[route], headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"})
             except httpx.HTTPError as exc:
@@ -282,7 +282,7 @@ async def get_ltp(session: AngelOneSession, exchange: str, trading_symbol: str, 
     """Last traded price of one contract (read-only POST of a quote request)."""
     async def _attempt() -> Any:
         call_metrics.record_angelone_call()
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, transport=api_health.transport()) as client:
             try:
                 response = await client.post(BASE_URL + ROUTES["ltp"], headers={**_base_headers(session.api_key), "Authorization": f"Bearer {session.jwt_token}"},
                                              json={"exchange": exchange, "tradingsymbol": trading_symbol, "symboltoken": token})

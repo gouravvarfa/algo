@@ -6,8 +6,8 @@ from app.broker import account, store
 from app.providers import angelone_client as ao
 from tests.security.helpers import api, login, make_owner, make_user
 
-BODY = {"client_code": "A123456", "api_key": "KEY12345", "pin": "1234", "totp_secret": "JBSWY3DPEHPK3PXP"}
-SECRETS = ["KEY12345", "1234", "JBSWY3DPEHPK3PXP"]
+BODY = {"client_code": "A123456", "api_key": "KEY12345", "pin": "864297", "totp_secret": "JBSWY3DPEHPK3PXP"}                 # a 6-digit PIN: "1234" could appear inside a random id
+SECRETS = ["KEY12345", "864297", "JBSWY3DPEHPK3PXP"]
 
 
 @pytest.fixture(autouse=True)
@@ -76,7 +76,7 @@ def test_the_test_button_logs_in_and_records_the_verdict(db, new_client, monkeyp
     monkeypatch.setattr(ao, "login", fake_login)
     monkeypatch.setattr(ao, "logout", fake_logout)
     r = api(c_user, "POST", "/api/me/broker/test")
-    assert r.status_code == 200 and r.json()["status"] == "connected" and seen["client_code"] == "A123456" and seen["pin"] == "1234" and seen["logout"]
+    assert r.status_code == 200 and r.json()["status"] == "connected" and seen["client_code"] == "A123456" and seen["pin"] == "864297" and seen["logout"]
     assert "A123456" not in r.text
 
     async def bad_login(**_):

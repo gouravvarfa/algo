@@ -139,6 +139,9 @@ def now_ist() -> dt.datetime:
 
 def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
     now = now or now_ist()
+    from app.ops import market_calendar
+    if market_calendar.entry(now.date(), session.name) is not None:
+        return False                  # an exchange holiday, or a special session (Muhurat etc.) in which the strategy and real orders stay off
     return now.weekday() < 5 and session.first_start <= now.time() <= session.close
 
 

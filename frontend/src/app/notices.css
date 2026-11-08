@@ -1,0 +1,26 @@
+.notices { display: grid; gap: 8px; margin: 12px 24px 0; }
+.notice {
+  --tone: var(--accent);
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px 12px 16px; border-radius: 12px;
+  background: color-mix(in srgb, var(--tone) 9%, var(--bg-surface));
+  border: 1px solid color-mix(in srgb, var(--tone) 28%, var(--border));
+  border-left: 4px solid var(--tone);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+}
+.notice.info { --tone: var(--accent); }
+.notice.warn, .notice.holiday { --tone: var(--warning); }
+.notice.bad { --tone: var(--danger); }
+.notice.special { --tone: #c2410c; }
+.notice-icon {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 15px;
+  background: color-mix(in srgb, var(--tone) 18%, var(--bg-surface));
+}
+.notice-body { flex: 1; min-width: 0; display: grid; gap: 2px; line-height: 1.45; }
+.notice-body b { font-size: 13px; letter-spacing: .02em; color: color-mix(in srgb, var(--tone) 70%, var(--text-primary, currentColor)); text-transform: uppercase; }
+.notice-body span { color: var(--text-primary, inherit); font-size: 14px; overflow-wrap: anywhere; }
+.notice-x {
+  flex: none; border: 0; background: transparent; color: var(--text-secondary); font-size: 20px; line-height: 1; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 8px;
+}
+.notice-x:hover { background: color-mix(in srgb, var(--tone) 14%, transparent); color: var(--text-primary, inherit); }
+@media (max-width: 640px) { .notices { margin: 10px 12px 0; } .notice { padding: 10px 10px 10px 12px; } }

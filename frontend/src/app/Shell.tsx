@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { Notices } from './Notices'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { get } from '../lib/api'
@@ -28,12 +29,6 @@ const MAIN: Item[] = [
 function titleFor(pathname: string): string {
   const all = [...MAIN, { to: '/account', label: 'Account', icon: 'user' as IconName }]
   return all.find((i) => pathname === i.to || pathname.startsWith(i.to + '/'))?.label ?? 'Algo Trading'
-}
-
-function AnnouncementBanner() {
-  const q = useQuery({ queryKey: ['announcement'], queryFn: () => get<{ announcement: { message: string; level: string } | null }>('/api/announcement'), refetchInterval: 60_000, retry: false })
-  const a = q.data?.announcement
-  return a ? <div className={`banner ${a.level}`} role="status" style={{ margin: '12px 24px 0' }}><span>{a.message}</span></div> : null
 }
 
 function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string }) {
@@ -131,7 +126,7 @@ export function Shell() {
       <Sidebar />
       <NavBackdrop open={nav} onClose={() => setNav(false)} />
       <StatusBar navOpen={nav} onNav={() => setNav((v) => !v)} />
-      <AnnouncementBanner />
+      <Notices />
       <Outlet />
     </div>
   )

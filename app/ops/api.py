@@ -255,3 +255,38 @@ def dev_live_logs(lines: int = 300, level: str = "", _=Depends(require("system.r
     if level:
         out = [ln for ln in out if level.upper() in ln]
     return {"available": True, "size_kb": round(size / 1024), "lines": out}
+
+
+# ---- Angel One API health ----------------------------------------------------------------------------------------------------------------
+@router.get("/api/dev/angel")
+async def dev_angel(window: int = 3600, _=Depends(require("system.read")), c=Depends(db)):
+    """How the Angel One API is answering: timings and errors of the calls the app made, the IP our requests leave from (it must be the static IP
+    registered at Angel One), and any real order Angel One refused because of the IP."""
+    from app.providers import api_health
+    ip = await api_health.outbound_ip()
+    since = time.time() - 7 * 86400
+    ip_rejects = [dict(r) for r in c.execute(
+        "SELECT created_at, symbol, role, message FROM real_tb_orders WHERE status='rejected' AND created_at>? AND (lower(message) LIKE '%ip%' OR lower(message) LIKE '%static%') "
+        "ORDER BY created_at DESC LIMIT 10", (since,))]
+    accts = [dict(r) for r in c.execute("SELECT b.status, b.status_message, b.last_checked_at, u.username FROM user_broker b LEFT JOIN users u ON u.id=b.user_id")]
+    return {**api_health.summary(max(60, min(window, 86400))), "outbound_ip": ip, "ip_rejects_7d": ip_rejects, "accounts": accts}
+
+
+@router.post("/api/dev/angel/probe")
+async def dev_angel_probe(actor=Depends(require("system.manage")), c=Depends(db)):
+    """One live price through the app's own data session, timed. Read-only: no order, no user account."""
+    from app.providers import angelone_client as ao
+    eng = context.engine
+    prov = getattr(eng, "provider", None) if eng is not None else None
+    if prov is None:
+        raise AuthError(503, "NO_PROVIDER", "The data session is not running.")
+    t0 = time.perf_counter()
+    try:
+        s = await prov.get_session()
+        t1 = time.perf_counter()
+        ltp = await ao.get_ltp(s, "NSE", "Nifty 50", "99926000")
+        out = {"ok": ltp is not None, "session_ms": round((t1 - t0) * 1000, 1), "ltp_ms": round((time.perf_counter() - t1) * 1000, 1), "nifty": ltp}
+    except Exception as exc:
+        out = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}", "ms": round((time.perf_counter() - t0) * 1000, 1)}
+    _audit(c, actor, "dev.angel_probe", detail={"ok": out["ok"]})
+    return out

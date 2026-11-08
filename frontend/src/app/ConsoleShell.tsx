@@ -17,6 +17,7 @@ const ITEMS: Record<ConsoleKind, Item[]> = {
     { to: '/admin/broker', label: 'Broker & Real', icon: 'shield' },
     { to: '/admin/audit', label: 'Audit log', icon: 'audit' },
     { to: '/admin/announcements', label: 'Announcements', icon: 'flag' },
+    { to: '/admin/calendar', label: 'Market calendar', icon: 'history' },
   ],
   dev: [
     { to: '/dev', label: 'System health', icon: 'health', end: true },
@@ -24,6 +25,7 @@ const ITEMS: Record<ConsoleKind, Item[]> = {
     { to: '/dev/isolation', label: 'Fault isolation', icon: 'shield' },
     { to: '/dev/errors', label: 'Errors', icon: 'bug' },
     { to: '/dev/stream', label: 'Live stream', icon: 'chain' },
+    { to: '/dev/angel', label: 'Angel One API', icon: 'health' },
     { to: '/dev/flags', label: 'Switches', icon: 'flag' },
     { to: '/dev/sessions', label: 'Sessions', icon: 'user' },
     { to: '/dev/logins', label: 'Login attempts', icon: 'audit' },

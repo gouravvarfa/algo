@@ -26,6 +26,8 @@ const ErrorsPage = lazy(() => import('../features/developer/ErrorsPage'))
 const StreamPage = lazy(() => import('../features/developer/StreamPage'))
 const FlagsPage = lazy(() => import('../features/developer/FlagsPage'))
 const AnnouncementsPage = lazy(() => import('../features/admin/AnnouncementsPage'))
+const CalendarPage = lazy(() => import('../features/admin/CalendarPage'))
+const AngelHealthPage = lazy(() => import('../features/developer/AngelHealthPage'))
 const BrokerAdminPage = lazy(() => import('../features/admin/BrokerAdminPage'))
 const AdminOverview = lazy(() => import('../features/admin/OverviewPage'))
 const SessionsPage = lazy(() => import('../features/developer/MorePages').then((m) => ({ default: m.SessionsPage })))
@@ -80,6 +82,7 @@ export function App() {
         <Route path="broker" element={<BrokerAdminPage />} />
         <Route path="audit" element={<Guard need="audit.read"><AuditPage /></Guard>} />
         <Route path="announcements" element={<Guard need="users.manage"><AnnouncementsPage /></Guard>} />
+        <Route path="calendar" element={<Guard need="users.manage"><CalendarPage /></Guard>} />
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Route>
       <Route path="/dev" element={<Guard need="system.read"><ConsoleShell kind="dev" /></Guard>}>
@@ -89,6 +92,7 @@ export function App() {
         <Route path="isolation" element={<IsolationPage />} />
         <Route path="errors" element={<ErrorsPage />} />
         <Route path="stream" element={<StreamPage />} />
+        <Route path="angel" element={<AngelHealthPage />} />
         <Route path="flags" element={<FlagsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="logins" element={<LoginAttemptsPage />} />

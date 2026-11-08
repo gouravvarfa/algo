@@ -60,6 +60,8 @@ async def lifespan(_: FastAPI):
     asyncio.create_task(options_api.warm())
     asyncio.create_task(option_collector.loop(provider))   # daily after-close 1-minute option download (REST only; the WebSocket feed is untouched)
     asyncio.create_task(_selftest_loop())                  # known-answer checks every 10 minutes (developer panel)
+    from app.ops import market_calendar
+    asyncio.create_task(market_calendar.loop())             # NSE trading holidays into the market calendar (at start, then every 12 h)
     yield
     await engine.real.stop()
     await engine.stop()

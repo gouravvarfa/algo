@@ -239,7 +239,79 @@ class AnnouncementBody(BaseModel):
 @router.get("/api/announcement")
 def announcement(c=Depends(db)):
     r = c.execute("SELECT message, level, updated_at FROM announcement WHERE id=1").fetchone()
-    return {"announcement": dict(r) if r else None}
+    return {"announcement": dict(r) if r else None, "calendar": _calendar_today()}
+
+
+def _calendar_today() -> list[dict]:
+    """Today's holiday / special session lines for the banner, made from the market calendar (no admin has to write them)."""
+    import datetime as _dt
+    from app.ops import market_calendar
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+    out = []
+    for e in market_calendar.today_entries(now):
+        what = e["note"] or ("Special session" if e["kind"] == "special" else "Market holiday")
+        if e["kind"] == "special":
+            text = f"{what}: {e['exchange']} special session {e['start_time']}-{e['end_time']}. Top-Bottom paper and real trading stay off in it; normal trading resumes next session."
+        else:
+            text = f"{what}: {e['exchange']} is closed today. No strategy evaluation and no real order."
+        out.append({"exchange": e["exchange"], "kind": e["kind"], "text": text})
+    # ahead of time: a holiday or special session in the next 3 days (Friday already shows Monday's), so nobody is surprised
+    today = now.date()
+    for k in range(1, 4):
+        d = today + _dt.timedelta(days=k)
+        for ex in ("NSE", "MCX"):
+            e = market_calendar.entry(d, ex)
+            if e is None:
+                continue
+            when = "Kal" if k == 1 else d.strftime("%a %d %b")
+            what = e["note"] or ("Special session" if e["kind"] == "special" else "Market holiday")
+            text = (f"{when} ({d.strftime('%d %b')}) {ex} band rahega: {what}." if e["kind"] == "holiday"
+                    else f"{when} ({d.strftime('%d %b')}) {ex} special session {e['start_time']}-{e['end_time']}: {what}. Top-Bottom us session mein off rahega.")
+            out.append({"exchange": ex, "kind": e["kind"], "text": text, "ahead": True})
+    return out
+
+
+class CalendarBody(BaseModel):
+    date: str = Field(min_length=10, max_length=10)
+    exchange: str = "NSE"
+    kind: str = "holiday"
+    start: str | None = None
+    end: str | None = None
+    note: str = Field(default="", max_length=200)
+
+
+@router.get("/api/calendar")
+def calendar_list(c=Depends(db)):
+    from app.ops import market_calendar
+    return {"entries": market_calendar.upcoming(c), "today": _calendar_today(), "sync": market_calendar.LAST_SYNC}
+
+
+@router.post("/api/admin/calendar/sync")
+async def calendar_sync(actor=Depends(require("users.manage")), c=Depends(db)):
+    from app.ops import market_calendar
+    out = await market_calendar.sync_nse()
+    audit.append(c, "calendar.sync", actor_id=actor["id"], actor_role=actor["role"], detail={"added": out.get("added"), "error": out.get("error")})
+    return calendar_list(c)
+
+
+@router.put("/api/admin/calendar")
+def calendar_put(body: CalendarBody, actor=Depends(require("users.manage")), c=Depends(db)):
+    from app.ops import market_calendar
+    try:
+        market_calendar.put(c, body.date, body.exchange.upper(), body.kind, body.start, body.end, body.note, actor["username"])
+    except ValueError as e:
+        raise AuthError(400, "BAD_CALENDAR", str(e))
+    audit.append(c, "calendar.set", actor_id=actor["id"], actor_role=actor["role"], detail=body.model_dump())
+    return calendar_list(c)
+
+
+@router.delete("/api/admin/calendar/{day}/{exchange}")
+def calendar_delete(day: str, exchange: str, actor=Depends(require("users.manage")), c=Depends(db)):
+    from app.ops import market_calendar
+    if not market_calendar.delete(c, day, exchange.upper()):
+        raise AuthError(404, "NOT_FOUND", "No calendar entry for that day.")
+    audit.append(c, "calendar.delete", actor_id=actor["id"], actor_role=actor["role"], detail={"date": day, "exchange": exchange.upper()})
+    return calendar_list(c)
 
 
 @router.put("/api/admin/announcement")

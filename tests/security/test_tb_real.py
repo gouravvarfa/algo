@@ -23,7 +23,7 @@ def async_test(fn):
 BODY = {"client_code": "A123456", "api_key": "KEY12345", "pin": "1234", "totp_secret": "JBSWY3DPEHPK3PXP"}
 IID, SYM, CONTRACT = "i-bank", "BANKNIFTY", "BANKNIFTY25NOV26FUT"
 MON = dt.datetime(2026, 11, 9, 10, 0, 0)                      # a Monday, market open
-INST = {"trading_symbol": CONTRACT, "token": "555", "exch_seg": "NFO", "lot_size": 30, "lots": 1, "quantity": 30, "session": "NSE"}
+INST = {"trading_symbol": CONTRACT, "token": "555", "exch_seg": "NFO", "lot_size": 30, "lots": 1, "quantity": 30, "session": "NSE", "tick_size": 0.05}
 
 
 class FakeBroker:
@@ -520,8 +520,10 @@ async def test_an_mcx_future_is_ordered_in_lots_x_lotsize_on_the_rupee_grid(env)
 
 
 @async_test
-async def test_an_mcx_contract_without_a_known_tick_is_not_traded(env):
-    mcx = {"trading_symbol": "GOLDM04DEC26FUT", "token": "777", "exch_seg": "MCX", "lot_size": 100, "lots": 1, "quantity": 100, "session": "MCX"}
-    env.rt.sync(IID, env.uid, SYM, {"instrument": mcx, "ltp": 125010.0, "position": None}, MON)
-    await go(env, env.ev("ENTRY", "BUY", contract="GOLDM04DEC26FUT", quantity=100, entry_price=125000.0))
-    assert env.fb.n == 0 and "tick size" in env.state()["missed"][-1]["reason"]
+async def test_an_unknown_tick_uses_whole_rupees_which_every_futures_grid_accepts(env):
+    inst = {k: v for k, v in INST.items() if k != "tick_size"}  # no tick known: BANKNIFTY futures really trade on 0.20 now
+    env.rt.sync(IID, env.uid, SYM, {"instrument": inst, "ltp": 50001.0, "position": None}, MON)
+    await go(env, env.ev("ENTRY", "BUY"))
+    [(_, p)] = [c for c in env.fb.calls if c[0] == "place"]
+    price = float(p["price"])
+    assert price == int(price) and round(price / 0.2, 6) == int(round(price / 0.2))

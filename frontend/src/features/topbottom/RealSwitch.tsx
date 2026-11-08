@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
+import './realswitch.css'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { ApiError, get, post, put } from '../../lib/api'
@@ -45,39 +46,48 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   if (ds.readOnly || !d || !it) return null
   const marginLine = mg.data?.connected ? <MarginLine m={mg.data} lots={lots} /> : null
   if (!d.real_allowed) return (
-    <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
-      <span className="chip muted">PAPER</span>
-      <span className="sub">Real orders for <b>{symbol}</b></span>
-      <button className="btn" style={{ padding: '10px 22px', fontSize: 15, fontWeight: 700, borderRadius: 10, minWidth: 170 }} disabled title={d.blockers.join(' ')}>▶ Turn REAL ON</button>
-      {marginLine}
-      <span className="sub" style={{ flexBasis: '100%' }}>Not available yet: {d.blockers.length ? d.blockers.join(' · ') : 'an admin has not allowed real orders for your account'}. <Link to="/settings">Settings</Link></span>
+    <div className="realpanel off">
+      <div className="rp-main">
+        <span className="rp-dot" aria-hidden />
+        <div className="rp-text"><b>Real trading · {symbol}</b><span>Not available yet: {d.blockers.length ? d.blockers.join(' · ') : 'an admin has not allowed real orders for your account'}. <Link to="/settings">Settings</Link></span></div>
+        <button className="rp-btn" disabled title={d.blockers.join(' ')}>Turn REAL on</button>
+      </div>
     </div>
   )
   const st = tb.data?.instruments.find((x) => x.instrument_id === instrumentId)
   const accountReal = d.account_mode === 'real'
   const on = it.real_on && accountReal
   return (
-    <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
-      <span className={'chip ' + (on ? 'bad' : 'muted')}>{on ? 'REAL' : 'PAPER'}</span>
-      <span className="sub">Real orders for <b>{symbol}</b></span>
-      {on && <span className="sub"><b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> · qty {it.real_lots * it.lot_size}</span>}
-      <button className={'btn' + (on ? '' : ' danger')} style={{ padding: '10px 22px', fontSize: 15, fontWeight: 700, borderRadius: 10, minWidth: 170 }} disabled={set.isPending || (!on && !accountReal)}
-        title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
-        onClick={() => {
-          if (on) set.mutate(false)
-          else { setPickLots(it.real_lots || 1); setTicket(true); void mg.refetch() }
-        }}>{on ? '⏸ Switch to paper' : '▶ Turn REAL ON'}</button>
-      {(on || st?.position || st?.pending_entry) && (
-        <button className="btn sm danger" disabled={exit.isPending || st?.exiting}
-          title="Turns real OFF for this instrument and closes the real position at Angel One now with a LIMIT order"
-          onClick={() => { if (window.confirm(`EXIT NOW for ${symbol}?\n\nReal orders go OFF for this instrument, the stop is cancelled and the open real position is closed at Angel One with a LIMIT order at the live price.`)) exit.mutate() }}>
-          {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
-        </button>
-      )}
-      {on && marginLine}
+    <div className={'realpanel ' + (on ? 'on' : 'off')}>
+      <div className="rp-main">
+        <span className="rp-dot" aria-hidden />
+        <div className="rp-text">
+          <b>{on ? 'REAL trading is ON' : 'Real trading is off'} · {symbol}</b>
+          <span>{on ? <>Every new System Point goes to Angel One · <b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> (qty {it.real_lots * it.lot_size}) · limit orders, automatic stop-loss</>
+            : !accountReal ? <>Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link> first.</>
+            : 'Paper keeps running either way. Turning real on sends nothing now: the first order goes at the next new System Point.'}</span>
+        </div>
+        <div className="rp-actions">
+          {(on || st?.position || st?.pending_entry) && (
+            <button className="rp-btn exit" disabled={exit.isPending || st?.exiting}
+              title="Turns real OFF for this instrument and closes the real position at Angel One now with a LIMIT order"
+              onClick={() => { if (window.confirm(`EXIT NOW for ${symbol}?
+
+Real orders go OFF for this instrument, the stop is cancelled and the open real position is closed at Angel One with a LIMIT order at the live price.`)) exit.mutate() }}>
+              {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
+            </button>
+          )}
+          <button className={'rp-btn ' + (on ? 'pause' : 'go')} disabled={set.isPending || (!on && !accountReal)}
+            title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
+            onClick={() => {
+              if (on) set.mutate(false)
+              else { setPickLots(it.real_lots || 1); setTicket(true); void mg.refetch() }
+            }}>{set.isPending ? '…' : on ? 'Switch to paper' : 'Turn REAL on'}</button>
+        </div>
+      </div>
+      {on && marginLine && <div className="rp-foot">{marginLine}</div>}
       {ticket && <RealTicket symbol={symbol} contract={mg.data?.contract ?? ''} lotSize={it.lot_size} maxLots={d.max_lots} lots={lots} setLots={setPickLots} m={mg.data}
         busy={set.isPending} onClose={() => setTicket(false)} onArm={() => set.mutate(true, { onSuccess: () => setTicket(false) })} />}
-      {!accountReal && <span className="sub">Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link>.</span>}
       {st && <TbStatus st={st} onClear={() => { if (window.confirm('Have you looked at your Angel One orders and positions? Clearing the halt lets the app send orders again.')) clear.mutate() }} clearing={clear.isPending} />}
     </div>
   )

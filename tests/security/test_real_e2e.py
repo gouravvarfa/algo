@@ -14,7 +14,7 @@ from tests.security.helpers import make_user
 
 IID, SYM, CONTRACT = "i-bank", "BANKNIFTY", "BANKNIFTY25NOV26FUT"
 MON = dt.datetime(2026, 11, 9, 10, 0, 0)
-INST = {"trading_symbol": CONTRACT, "token": "555", "exch_seg": "NFO", "lot_size": 30, "lots": 1, "quantity": 30, "session": "NSE"}
+INST = {"trading_symbol": CONTRACT, "token": "555", "exch_seg": "NFO", "lot_size": 30, "lots": 1, "quantity": 30, "session": "NSE", "tick_size": 0.05}
 PAPER_BUY = {"direction": "BUY", "entry_price": 50000.0, "active_stop": 49500.0}
 
 

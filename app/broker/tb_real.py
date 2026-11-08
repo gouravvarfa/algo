@@ -37,7 +37,7 @@ NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
 IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
-REAL_TICK_FALLBACK = 0.10          # price grid when the contract's tick is unknown: a multiple of 0.10 is also a multiple of 0.05, so it is valid on either NSE grid
+REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
 TICK_S = 5.0
@@ -249,10 +249,7 @@ class RealTB:
             known = dryrun.resolve_contract(e["symbol"], contract.get("trading_symbol") or "") or {}
             contract["tick_size"] = known.get("tick_size") or 0
         if not contract.get("tick_size"):
-            if contract.get("exch_seg") == "MCX":
-                self._miss(a, now, "tick size of the MCX contract unknown: no price can be put on the exchange grid safely", e)
-                return
-            contract["tick_size"] = REAL_TICK_FALLBACK                                   # NSE: 0.10 is valid on both the 0.05 and 0.10 grids
+            contract["tick_size"] = REAL_TICK_FALLBACK                                   # BANKNIFTY futures trade on a 0.20 grid since 2026: a guessed 0.10 would be refused
         inst = snap.get("instrument") or {}
         contract["lot_size"] = contract.get("lot_size") or inst.get("lot_size")
         lots = store.instrument_lots(c, a["user_id"], a["instrument_id"])                # the person's chosen lots, not the paper quantity

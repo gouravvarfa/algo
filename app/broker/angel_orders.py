@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app.providers import angelone_client as ao
+from app.providers import angelone_client as ao, api_health
 from app.providers.angelone_client import AngelOneSession, _base_headers, _parse_json_or_raise, AngelOneApiError
 
 PLACE = "/rest/secure/angelbroking/order/v1/placeOrder"
@@ -26,7 +26,7 @@ def _headers(s: AngelOneSession) -> dict[str, str]:
 
 
 async def _post(s: AngelOneSession, route: str, body: dict[str, Any]) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=20.0, transport=api_health.transport()) as client:
         try:
             response = await client.post(ao.BASE_URL + route, headers=_headers(s), json=body)
         except httpx.HTTPError as exc:

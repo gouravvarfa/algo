@@ -473,3 +473,41 @@ def admin_orders(limit: int = 100, actor=Depends(require("users.read")), c=Depen
     names = {r["id"]: (r["username"], r["name"]) for r in c.execute("SELECT id, username, name FROM users")}
     uid = {r["id"]: r["user_id"] for r in c.execute("SELECT id, user_id FROM broker_orders")}
     return {"orders": [{**o, "user_id": uid.get(o["id"]), "username": (names.get(uid.get(o["id"])) or (None, None))[0], "name": (names.get(uid.get(o["id"])) or (None, None))[1]} for o in out]}
+
+
+# ---- one user's activity, for the admin's user page ---------------------------------------------------------------------------------------
+@router.get("/api/admin/users/{user_id}/activity")
+def admin_user_activity(user_id: str, limit: int = 200, actor=Depends(require("users.read")), c=Depends(db)):
+    """Everything about one person's broker and real trading in one list, newest first: real orders (Top-Bottom and options), halts the executor
+    holds now, and every settings change (connect, test, mode, switches, lots, admin grants, exits) from the audit log. Never a secret."""
+    import datetime as _dt
+    import json as _json
+    limit = max(10, min(limit, 500))
+    items: list[dict] = []
+    for r in c.execute("SELECT created_at, updated_at, symbol, contract, role, side, qty, order_type, price, trigger_price, status, message, filled_avg FROM real_tb_orders "
+                       "WHERE user_id=? ORDER BY created_at DESC LIMIT ?", (user_id, limit)):
+        px = f" @ {r['price']}" if r["price"] is not None else ""
+        trg = f" trigger {r['trigger_price']}" if r["trigger_price"] is not None else ""
+        fill = f" · filled {r['filled_avg']}" if r["filled_avg"] else ""
+        items.append({"at": r["created_at"], "type": "order", "status": r["status"], "title": f"Top-Bottom {r['role']} {r['side']} {r['qty']} {r['contract']}",
+                      "detail": f"{r['order_type']}{px}{trg} · {r['status']}{fill}" + (f" · {r['message']}" if r["message"] else "")})
+    for r in c.execute("SELECT created_at, trading_symbol, side, qty, price, intent, status, message FROM broker_orders WHERE user_id=? AND status!='previewed' "
+                       "ORDER BY created_at DESC LIMIT ?", (user_id, limit)):
+        items.append({"at": r["created_at"], "type": "order", "status": r["status"], "title": f"Option {r['intent']} {r['side']} {r['qty']} {r['trading_symbol']}",
+                      "detail": f"LIMIT @ {r['price']} · {r['status']}" + (f" · {r['message']}" if r["message"] else "")})
+    for r in c.execute("SELECT state_json, updated_at FROM real_tb_state WHERE user_id=?", (user_id,)):
+        st = _json.loads(r["state_json"])
+        if st.get("halted"):
+            items.append({"at": r["updated_at"], "type": "halt", "status": "halted", "title": f"HALTED: {st.get('symbol')}", "detail": st["halted"]})
+    for r in c.execute("SELECT ts, action, actor_id, actor_role, detail_json FROM audit_log WHERE (target_id=? OR actor_id=?) "
+                       "AND (action LIKE 'broker.%' OR action LIKE 'user.%' OR action LIKE 'auth.%' OR action LIKE 'credits.%') ORDER BY id DESC LIMIT ?", (user_id, user_id, limit)):
+        try:
+            at = _dt.datetime.fromisoformat(r["ts"].replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        d = _json.loads(r["detail_json"] or "{}")
+        d = {k: v for k, v in d.items() if k not in ("password", "pin", "totp", "api_key", "totp_secret")}
+        by = "self" if r["actor_id"] == user_id else (r["actor_role"] or "system")
+        items.append({"at": at, "type": "change", "status": None, "title": r["action"], "detail": (", ".join(f"{k}: {v}" for k, v in d.items()) + f" · by {by}").strip(" ·")})
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return {"items": items[:limit]}

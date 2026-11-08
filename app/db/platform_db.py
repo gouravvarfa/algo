@@ -276,7 +276,21 @@ _V11 = """
 ALTER TABLE user_instrument_real ADD COLUMN real_lots INTEGER NOT NULL DEFAULT 1;   -- how many lots each real order of this instrument uses (1..the admin's max lots)
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10), (11, _V11)]
+_V12 = """
+CREATE TABLE market_calendar (        -- exchange holidays and special sessions (Muhurat, Budget Sunday), kept by an admin
+  date TEXT NOT NULL,                 -- YYYY-MM-DD
+  exchange TEXT NOT NULL,             -- NSE | MCX
+  kind TEXT NOT NULL,                 -- holiday | special
+  start_time TEXT,                    -- HH:MM, special sessions only
+  end_time TEXT,
+  note TEXT,
+  created_by TEXT,
+  created_at REAL,
+  PRIMARY KEY (date, exchange)
+);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10), (11, _V11), (12, _V12)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 
