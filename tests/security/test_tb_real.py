@@ -108,7 +108,7 @@ def env(db, monkeypatch):
 
     e = E()
     e.fb, e.rt, e.user, e.db, e.uid = fb, rt, user, db, user.id
-    e.at = lambda: (dt.datetime.now() + dt.timedelta(seconds=1)).isoformat()
+    e.at = lambda: (dt.datetime.now(tb_real.IST).replace(tzinfo=None) + dt.timedelta(seconds=1)).isoformat()   # the engine writes IST wall time, whatever the machine's zone
 
     def snap(position=None, ltp=50001.0):
         return {"instrument": dict(INST), "ltp": ltp, "position": position}
