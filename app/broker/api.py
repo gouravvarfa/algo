@@ -326,12 +326,16 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
         for side in ("BUY", "SELL"):
             m = await b.margin([{"exchange": inst.exch_seg, "qty": qty, "price": 0, "productType": "CARRYFORWARD", "token": str(inst.token), "tradeType": side, "orderType": "MARKET"}])
             need[side] = account._num(m.get("totalMarginRequired"))
+        try:
+            ltp = await b.ltp(inst.exch_seg, inst.trading_symbol, str(inst.token))
+        except Exception:
+            ltp = None
     except Exception as exc:
         orders._drop(uid)
         return {"connected": True, "error": f"Angel One margin calculator not reachable ({type(exc).__name__})"}
     cash = account._num(f.get("availablecash"))
     worst = max((v for v in need.values() if v is not None), default=None)
-    out = {"connected": True, "contract": inst.trading_symbol, "lots": lots, "qty": qty, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
+    out = {"connected": True, "contract": inst.trading_symbol, "lots": lots, "qty": qty, "ltp": ltp, "lot_size": qty // lots if lots else None, "need_buy": need["BUY"], "need_sell": need["SELL"], "available": cash,
            "enough": None if worst is None or cash is None else cash >= worst, "short_by": None if worst is None or cash is None or cash >= worst else round(worst - cash, 2), "at": time.time()}
     _MARGIN[(uid, instrument_id)] = (time.time(), out)
     return out

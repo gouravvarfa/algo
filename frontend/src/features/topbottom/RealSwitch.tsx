@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, get, post, put } from '../../lib/api'
 import { useDataSource } from '../../lib/datasource'
@@ -37,6 +37,7 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   })
   const d = q.data
   const [pickLots, setPickLots] = useState<number | null>(null)
+  const [ticket, setTicket] = useState(false)
   const it = d?.instruments.find((i) => i.instrument_id === instrumentId)
   const mg = useQuery({ queryKey: ['broker-margin', instrumentId], queryFn: () => get<Margin>(`/api/me/broker/tb/${instrumentId}/margin`), enabled: !ds.readOnly && !!d?.real_allowed, refetchInterval: 120_000, retry: false })
   const lots = pickLots ?? it?.real_lots ?? 1
@@ -58,19 +59,12 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
     <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '6px 0' }}>
       <span className={'chip ' + (on ? 'bad' : 'muted')}>{on ? 'REAL' : 'PAPER'}</span>
       <span className="sub">Real orders for <b>{symbol}</b></span>
-      {on ? <span className="sub"><b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> · qty {it.real_lots * it.lot_size}</span> : (
-        <label className="sub" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>Lots
-          <select value={lots} onChange={(e) => setPickLots(Number(e.target.value))} disabled={!accountReal}>
-            {Array.from({ length: Math.max(1, d.max_lots) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <span>= qty <b>{lots * it.lot_size}</b> ({it.lot_size} per lot · max {d.max_lots})</span>
-        </label>
-      )}
+      {on && <span className="sub"><b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> · qty {it.real_lots * it.lot_size}</span>}
       <button className={'btn sm' + (on ? '' : ' danger')} disabled={set.isPending || (!on && !accountReal)}
         title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
         onClick={() => {
           if (on) set.mutate(false)
-          else if (window.confirm(`Turn REAL orders ON for ${symbol}?\n\n${lots} lot${lots > 1 ? 's' : ''} = quantity ${lots * it.lot_size} per order${mg.data?.need_buy != null && mg.data.lots ? `, margin about ₹${Math.round(Math.max(mg.data.need_buy, mg.data.need_sell ?? 0) / mg.data.lots * lots).toLocaleString('en-IN')}` : ''}.\nThe first order goes out at the next new System Point, not now. You can turn it off or Exit at any time.`)) set.mutate(true)
+          else { setPickLots(it.real_lots || 1); setTicket(true); void mg.refetch() }
         }}>{on ? 'Switch to paper' : 'Turn real ON'}</button>
       {(on || st?.position || st?.pending_entry) && (
         <button className="btn sm danger" disabled={exit.isPending || st?.exiting}
@@ -79,14 +73,16 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
           {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
         </button>
       )}
-      {marginLine}
+      {on && marginLine}
+      {ticket && <RealTicket symbol={symbol} contract={mg.data?.contract ?? ''} lotSize={it.lot_size} maxLots={d.max_lots} lots={lots} setLots={setPickLots} m={mg.data}
+        busy={set.isPending} onClose={() => setTicket(false)} onArm={() => set.mutate(true, { onSuccess: () => setTicket(false) })} />}
       {!accountReal && <span className="sub">Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link>.</span>}
       {st && <TbStatus st={st} onClear={() => { if (window.confirm('Have you looked at your Angel One orders and positions? Clearing the halt lets the app send orders again.')) clear.mutate() }} clearing={clear.isPending} />}
     </div>
   )
 }
 
-interface Margin { connected: boolean; error?: string; contract?: string; lots?: number; qty?: number; need_buy?: number | null; need_sell?: number | null; available?: number | null; enough?: boolean | null; short_by?: number | null }
+interface Margin { connected: boolean; error?: string; contract?: string; ltp?: number | null; lots?: number; qty?: number; need_buy?: number | null; need_sell?: number | null; available?: number | null; enough?: boolean | null; short_by?: number | null }
 const rs = (v: number | null | undefined) => (v == null ? '–' : '₹' + Math.round(v).toLocaleString('en-IN'))
 
 /** Angel One's own margin calculator for one real order of this instrument, next to the cash in the account. */
@@ -122,4 +118,78 @@ function TbStatus({ st, onClear, clearing }: { st: TbState; onClear: () => void;
       {st.missed.length > 0 && <div className="sub">Last missed entry: {st.missed[st.missed.length - 1].reason}</div>}
     </div>
   )
+}
+
+/** The order ticket shown when real is switched on, laid out like a broker's: what each real order will be, what it needs, what it costs.
+ * Arming sends nothing: the first order goes out at the next new System Point, in the strategy's direction. */
+function RealTicket({ symbol, contract, lotSize, maxLots, lots, setLots, m, busy, onClose, onArm }: {
+  symbol: string; contract: string; lotSize: number; maxLots: number; lots: number; setLots: (n: number) => void; m?: Margin; busy: boolean; onClose: () => void; onArm: () => void
+}) {
+  const k = m?.lots ? lots / m.lots : 1
+  const buy = m?.need_buy != null ? m.need_buy * k : null
+  const sell = m?.need_sell != null ? m.need_sell * k : null
+  const need = Math.max(buy ?? 0, sell ?? 0) || null
+  const short = need != null && m?.available != null && need > m.available ? need - m.available : null
+  const qty = lots * lotSize
+  const charges = m?.ltp ? estCharges(m.ltp * qty) : null
+  return (
+    <div role="dialog" aria-modal="true" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 1000, display: 'grid', placeItems: 'center', padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} className="card" style={{ width: 'min(520px, 100%)', maxHeight: '92vh', overflowY: 'auto', padding: 0 }}>
+        <div className="row" style={{ alignItems: 'center', padding: '18px 20px 6px' }}>
+          <div><b style={{ fontSize: 17 }}>{contract || symbol}</b><div className="num">{m?.ltp != null ? m.ltp.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '–'} <span className="sub">NFO</span></div></div>
+          <span className="spacer" />
+          <span className="chip" title="The strategy decides BUY or SELL at the next System Point">BUY / SELL by strategy</span>
+        </div>
+        <div style={{ padding: '0 20px' }}>
+          <div style={{ margin: '8px 0' }}><Seg items={[['Normal', true, 'Carry-forward: Top-Bottom holds positions for days'], ['Intraday', false, 'Not used: Angel One would square it off the same day']]} /></div>
+          <TRow label="Quantity">
+            <span className="row" style={{ alignItems: 'center', gap: 6, border: '1px solid var(--border)', borderRadius: 999, padding: '2px 6px' }}>
+              <button type="button" className="btn sm" aria-label="one lot less" disabled={lots <= 1} onClick={() => setLots(lots - 1)}>−</button>
+              <span style={{ textAlign: 'center', minWidth: 60 }}><b className="num">{qty}</b><div className="sub" style={{ fontSize: 11 }}>{lots} lot{lots > 1 ? 's' : ''}</div></span>
+              <button type="button" className="btn sm" aria-label="one lot more" disabled={lots >= maxLots} onClick={() => setLots(lots + 1)}>+</button>
+            </span>
+          </TRow>
+          <TRow label="Order type"><Seg items={[['Market', false, 'Never used for real orders'], ['Limit', true, 'Entry within 0.5% of the strategy price; never chased'], ['Trigger', false, '']]} /></TRow>
+          <TRow label="Price"><span className="sub" style={{ textAlign: 'right' }}>set at the System Point<br />(live price, at most 0.5% from the strategy)</span></TRow>
+          <TRow label="Validity"><Seg items={[['Day', true, ''], ['GTT', false, '']]} /></TRow>
+          <div className="card" style={{ margin: '12px 0', padding: 12 }}>
+            <div className="row" style={{ alignItems: 'center' }}><span className="chip bad">SL</span>&nbsp;<b>Stop Loss</b><span className="spacer" /><span className="chip ok">ON · automatic</span></div>
+            <div className="sub" style={{ marginTop: 4 }}>Placed at Angel One right after the entry fills, at the strategy&apos;s stop, and moved whenever the strategy moves it.</div>
+          </div>
+          <div className="card" style={{ margin: '0 0 12px', padding: 12 }}>
+            <div className="row" style={{ alignItems: 'center' }}><b>Reversal</b><span className="spacer" /><span className="chip muted">exit first, then the new entry</span></div>
+          </div>
+        </div>
+        <div className="sub" style={{ background: 'var(--bg-subtle, rgba(0,0,0,.04))', padding: '10px 20px' }}>
+          Nothing is sent now. The first real order goes out at the <b>next new System Point</b>; the paper position already open is not copied.
+        </div>
+        {short != null && <div style={{ background: 'var(--danger-soft)', color: 'var(--danger)', padding: '10px 20px', fontWeight: 600 }}>⚠ Insufficient funds · add {rs(short)} or entries will be skipped</div>}
+        {m?.error && <div style={{ color: 'var(--danger)', padding: '10px 20px' }}>{m.error}</div>}
+        <div className="row" style={{ padding: '14px 20px', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div className="sub" style={{ lineHeight: 1.6 }}>
+            Est. balance: <b>{rs(m?.available)}</b><br />
+            <span style={{ color: short != null ? 'var(--danger)' : undefined }}>Req margin: <b>{rs(need)}</b></span>{buy != null && sell != null && <span title="BUY / SELL"> ({rs(buy)} / {rs(sell)})</span>}<br />
+            Charges ≈ <b>{charges == null ? '–' : rs(charges)}</b> <span title="Estimate for one entry order: brokerage ₹20, exchange, SEBI, stamp duty and GST. The exit costs about the same plus STT.">ⓘ</span>
+          </div>
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn danger" disabled={busy} onClick={onArm} style={{ minWidth: 150 }}>{busy ? 'Arming…' : `Arm real · ${lots} lot${lots > 1 ? 's' : ''}`}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TRow({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="row" style={{ alignItems: 'center', minHeight: 44, borderBottom: '1px solid var(--border)' }}><span>{label}</span><span className="spacer" />{children}</div>
+}
+
+function Seg({ items }: { items: [string, boolean, string][] }) {
+  return <span className="seg">{items.map(([t, on, tip]) => <button key={t} type="button" className={on ? 'on' : ''} disabled={!on} title={tip || undefined}>{t}</button>)}</span>
+}
+
+/** Rough cost of one futures entry order at Angel One: ₹20 brokerage, NSE transaction 0.00173%, SEBI ₹10 per crore, stamp 0.002% (buy side), GST 18% on brokerage + fees. */
+export function estCharges(turnover: number): number {
+  const brok = 20, txn = turnover * 0.0000173, sebi = turnover * 0.000001, stamp = turnover * 0.00002
+  return brok + txn + sebi + stamp + 0.18 * (brok + txn + sebi)
 }
