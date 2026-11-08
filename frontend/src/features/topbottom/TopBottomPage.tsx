@@ -74,6 +74,34 @@ export default function TopBottomPage() {
 const INDEX_STREAM: Record<string, { spec: string; token: string }> = { BANKNIFTY: { spec: 'NSE:99926009', token: '99926009' }, NIFTY: { spec: 'NSE:99926000', token: '99926000' } }
 const r2 = (x: number) => Math.round(x * 100) / 100
 /** The open position valued at a live price pushed by the stream (same arithmetic as the server: points x quantity). The entry, stop and direction are the engine's. */
+interface RealTrade { direction: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null; entry_at: number; exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string }
+interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null } | null }
+const iso = (t: number) => new Date(t * 1000).toISOString()
+
+/** The same page, but with the person's REAL trades: only fills Angel One confirmed. Candles and System Points stay the strategy's. */
+export function realSnap(s: Snapshot, d: RealData): Snapshot {
+  const rp = d.state?.position
+  const open = d.trades.find((t) => t.status === 'OPEN')
+  let position: Position | null = null
+  if (rp && rp.entry_price != null) {
+    const stop = d.state?.stop_target ?? rp.entry_price
+    position = livePosition({ direction: rp.side, entry_price: rp.entry_price, entry_date: open ? iso(open.entry_at) : '', active_stop: stop, initial_sl: stop, breakeven: false, gap_state: null, protective_sl: null, pnl_amount: 0, pnl_points: 0, pnl_pct: 0 }, s.ltp, rp.qty)
+  }
+  const bar = (t: number) => { let b = s.candles[0]?.time ?? t; for (const k of s.candles) { if (k.time <= t) b = k.time; else break } return b }
+  const trades = d.trades.map((t, i) => ({ n: d.trades.length - i, direction: t.direction, status: t.status, live: true, entry_date: iso(t.entry_at), entry_price: t.entry_price ?? 0, active_stop: t.status === 'OPEN' ? (d.state?.stop_target ?? 0) : 0,
+    initial_sl: 0, exit_date: t.exit_at ? iso(t.exit_at) : null, exit_price: t.exit_price, exit_reason: t.exit_by ? `${t.exit_by.toUpperCase()}_ORDER` : null, pnl_points: t.pnl_points, pnl_amount: t.pnl_amount,
+    pnl_pct: t.pnl_points != null && t.entry_price ? r2(t.pnl_points / t.entry_price * 100) : null, breakeven: false, gap_state: null, contract: t.contract })) as Trade[]
+  const markers = d.trades.flatMap((t) => [
+    { time: bar(t.entry_at), position: (t.direction === 'BUY' ? 'belowBar' : 'aboveBar') as 'belowBar' | 'aboveBar', shape: t.direction === 'BUY' ? 'arrowUp' : 'arrowDown', color: t.direction === 'BUY' ? '#16a34a' : '#dc2626', text: `${t.direction} ${num(t.entry_price)}` },
+    ...(t.exit_at ? [{ time: bar(t.exit_at), position: 'inBar' as const, shape: 'circle', color: '#6b7280', text: `${t.direction === 'BUY' ? 'SELL' : 'BUY'} exit ${num(t.exit_price)}` }] : []),
+  ])
+  const closed = trades.filter((t) => t.status !== 'OPEN')
+  const net = closed.reduce((a, t) => a + (t.pnl_amount ?? 0), 0)
+  const wins = closed.filter((t) => (t.pnl_amount ?? 0) > 0).length
+  return { ...s, position, trades, markers, waiting: !position,
+    stats: { ...s.stats, live_realized: r2(net), live_trades: closed.length, live_win_rate: closed.length ? r2(wins / closed.length * 100) : null, replay_trades: 0, replay_realized: 0 } }
+}
+
 function livePosition(p: Position, ltp: number, qty: number): Position {
   const pts = p.direction === 'BUY' ? ltp - p.entry_price : p.entry_price - ltp
   return { ...p, pnl_points: r2(pts), pnl_amount: r2(pts * qty), pnl_pct: r2((pts / p.entry_price) * 100) }
@@ -124,7 +152,12 @@ function StrategyOffBanner() {
   return <div className="banner warn" role="status"><span><b>Strategy is OFF.</b> {q.data.locked ? 'An admin switched it off; only an admin can switch it back on. ' : ''}Nothing new is evaluated: no signals, entries or exits. An open position is not closed.</span></div>
 }
 
-function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
+function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
+  const rq = useQuery({ queryKey: ['broker-tb-trades', s0.instrument.id], queryFn: () => get<RealData>(`/api/me/broker/tb/${s0.instrument.id}/trades`), enabled: !readOnly, refetchInterval: 10_000, retry: false })
+  const [pick, setPick] = useState<'paper' | 'real' | null>(null)
+  const hasReal = !!rq.data && (rq.data.real_on || rq.data.trades.length > 0 || !!rq.data.state?.position)
+  const view = hasReal ? (pick ?? (rq.data!.real_on || rq.data!.state?.position ? 'real' : 'paper')) : 'paper'
+  const s = useMemo(() => (view === 'real' && rq.data ? realSnap(s0, rq.data) : s0), [view, rq.data, s0])
   const st = s.stats, inst = s.instrument
   // live prices pushed by the server (SSE): the futures contract being traded and its index; the engine's own numbers (entry, stop, signals) are unchanged
   const ix = INDEX_STREAM[inst.symbol]
@@ -154,6 +187,10 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
         <div className="hero-main">
           <div className="hero-top">
             <span className="eyebrow">Top-Bottom strategy · {inst.symbol} futures · daily</span>
+            {hasReal && <span className="seg" title="Paper: the strategy's own trades. Real: only your Angel One fills since you turned real on.">
+              <button className={view === 'paper' ? 'on' : ''} onClick={() => setPick('paper')}>Paper</button>
+              <button className={view === 'real' ? 'on' : ''} onClick={() => setPick('real')} style={view === 'real' ? { background: 'var(--danger)', color: '#fff' } : undefined}>Real</button>
+            </span>}
             <span className={'livepill' + (ov.market_open ? ' on' : '')}><i />{live}</span>
           </div>
           <div className="hero-pos">
@@ -167,7 +204,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
             <b className={`num ${sign(p?.pnl_amount)}`}>{p ? money(p.pnl_amount) : '–'}</b>
             {p && <span className={`trend ${sign(p.pnl_amount)}`}>{p.pnl_amount >= 0 ? '+' : ''}{num(p.pnl_points)} pts · {p.pnl_pct}%</span>}
           </div>
-          {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={ltp} /> : <p className="sub">{s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
+          {p ? <StopBar dir={p.direction} entry={p.entry_price} stop={p.active_stop} ltp={ltp} /> : <p className="sub">{view === 'real' ? 'No real position. The first real order goes out at the next new System Point.' : s.waiting ? 'Waiting for a new System Point.' : 'No open position.'}</p>}
         </div>
         <div className="hero-side">
           <div className="hero-q"><span className="k">{inst.symbol} fut</span><b className="num">{num(ltp)}</b></div>
@@ -239,7 +276,7 @@ function Content({ tabs, snap: s, ov, idx, journal, kind, setKind, fit, onFit, s
       <div className="card">
         <div className="card-head"><h2>Recent trade legs</h2><span className="spacer" /><button className="btn sm" hidden={s.trades.length <= 8} onClick={onToggleAll}>{showAll ? 'Show recent' : `Show all (${s.trades.length})`}</button></div>
         <div className="scroll"><TradesTable rows={rows} /></div>
-        <p className="note">Greyed rows are history from before this instrument was added: not counted in live P&amp;L.</p>
+        <p className="note">{view === 'real' ? 'REAL trades: only orders Angel One filled for you, since you turned real on. P&L is before brokerage and taxes.' : 'Greyed rows are history from before this instrument was added: not counted in live P&L.'}</p>
       </div>
 
       <div className="card">

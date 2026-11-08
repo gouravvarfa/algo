@@ -651,6 +651,24 @@ class RealTB:
         self._save(c, a)
         return "exiting"
 
+    @staticmethod
+    def real_trades(c, user_id: str, inst_id: str) -> list[dict]:
+        """The person's REAL Top-Bottom trades, built only from fills Angel One confirmed: each entry fill paired with the stop / exit fill that closed it.
+        Newest first. P&L is before charges."""
+        rows = c.execute("SELECT role, side, qty, contract, filled_avg, updated_at FROM real_tb_orders WHERE user_id=? AND instrument_id=? AND status='filled' ORDER BY updated_at",
+                         (user_id, inst_id)).fetchall()
+        out, cur = [], None
+        for r in rows:
+            if r["role"] == "entry":
+                cur = {"direction": r["side"], "qty": r["qty"], "contract": r["contract"], "entry_price": r["filled_avg"], "entry_at": r["updated_at"],
+                       "exit_price": None, "exit_at": None, "exit_by": None, "pnl_points": None, "pnl_amount": None, "status": "OPEN"}
+                out.append(cur)
+            elif cur is not None and cur["status"] == "OPEN":
+                sgn = 1 if cur["direction"] == "BUY" else -1
+                pts = ((r["filled_avg"] or 0) - (cur["entry_price"] or 0)) * sgn
+                cur.update(exit_price=r["filled_avg"], exit_at=r["updated_at"], exit_by=r["role"], pnl_points=round(pts, 2), pnl_amount=round(pts * cur["qty"], 2), status="CLOSED")
+        return out[::-1]
+
     def view(self, c, user_id: str | None) -> list[dict]:
         out = []
         q = "SELECT state_json FROM real_tb_state" + (" WHERE user_id=?" if user_id else "")

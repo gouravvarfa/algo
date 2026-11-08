@@ -288,6 +288,18 @@ def my_tb_exit(instrument_id: str, request: Request, c=Depends(db)):
     return {"result": out, "message": msg}
 
 
+@router.get("/api/me/broker/tb/{instrument_id}/trades")
+def my_tb_trades(instrument_id: str, request: Request, c=Depends(db)):
+    """Real trades only (Angel One fills), plus what the executor holds now, for the Real view of the Top-Bottom page."""
+    from app.broker import tb_real
+    _owned_instrument(request, instrument_id)
+    uid = user_id_of(request)
+    rt = _executor()
+    st = next((x for x in (rt.view(c, uid) if rt is not None else []) if x["instrument_id"] == instrument_id), None)
+    r = c.execute("SELECT real_on, changed_at FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (uid, instrument_id)).fetchone()
+    return {"trades": tb_real.RealTB.real_trades(c, uid, instrument_id), "state": st, "real_on": bool(r and r["real_on"]), "since": r["changed_at"] if r else None}
+
+
 _FUNDS: dict[str, tuple[float, dict]] = {}
 
 

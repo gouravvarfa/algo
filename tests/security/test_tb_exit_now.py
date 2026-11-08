@@ -43,3 +43,22 @@ async def test_a_symbol_the_admin_did_not_allow_is_never_traded(e2e):
     e2e.rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
     await e2e.rt.tick(MON)
     assert places(e2e.fa) == [] and "not in the symbols" in e2e.state()["missed"][-1]["reason"]
+
+
+@async_test
+async def test_real_trades_are_built_from_angel_one_fills_only(e2e):
+    from app.broker import tb_real
+    fa, rt = e2e.fa, e2e.rt
+    e2e.sync(None)
+    rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await rt.tick(MON)
+    assert tb_real.RealTB.real_trades(e2e.db, e2e.uid, IID) == []                     # placed, not filled: no trade yet
+    fa.fill(fa.open_orders()[0]["orderid"], 50002.0)
+    e2e.sync(PAPER_BUY)
+    await rt.tick(secs(5))
+    [t] = tb_real.RealTB.real_trades(e2e.db, e2e.uid, IID)
+    assert t["status"] == "OPEN" and t["entry_price"] == 50002.0 and t["direction"] == "BUY"
+    fa.fill(fa.open_orders("STOPLOSS_LIMIT")[0]["orderid"], 49500.0)
+    await rt.tick(secs(10))
+    [t] = tb_real.RealTB.real_trades(e2e.db, e2e.uid, IID)
+    assert t["status"] == "CLOSED" and t["exit_by"] == "stop" and t["pnl_points"] == -502.0 and t["pnl_amount"] == -502.0 * 30
