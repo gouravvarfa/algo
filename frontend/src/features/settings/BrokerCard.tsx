@@ -20,6 +20,17 @@ const inr = (v: number | null | undefined) => (v == null ? '–' : '₹' + v.toL
 const LABEL: Record<string, string> = { not_set: 'Not connected', untested: 'Saved, not checked yet', connected: 'Connected', error: 'Login failed' }
 const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong')
 
+/** A small Angel One badge (brand orange/blue) for the broker card. */
+export function AngelMark({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" role="img" aria-label="Angel One" style={{ flex: 'none' }}>
+      <rect width="32" height="32" rx="8" fill="#1C3D8F" />
+      <path d="M16 6 L25 25 H20.6 L16 14.6 L11.4 25 H7 Z" fill="#FF7A00" />
+      <circle cx="16" cy="21" r="2.2" fill="#fff" />
+    </svg>
+  )
+}
+
 /** The user's own Angel One account: they enter their details once; the server logs in for them every time. Read-only: no order can be placed from here. */
 export function BrokerCard() {
   const qc = useQueryClient()
@@ -49,7 +60,7 @@ export function BrokerCard() {
   const ready = f.client_code && f.api_key && f.pin && f.totp_secret
   return (
     <div className="card">
-      <div className="card-head"><h2>Angel One account</h2><span className="spacer" />
+      <div className="card-head" style={{ alignItems: 'center', gap: 10 }}><AngelMark /><h2>Angel One account</h2><span className="spacer" />
         {s && <span className={'chip ' + (s.status === 'connected' ? 'ok' : s.status === 'error' ? 'bad' : 'warn')}>{LABEL[s.status] ?? s.status}</span>}</div>
       <p className="sub">Connect your own Angel One account so this app can read it for you (funds, positions, orders). This screen is <b>read-only</b>: it cannot place, change or cancel an order, and
         your account stays in <b>Paper</b> mode.</p>
@@ -63,13 +74,16 @@ export function BrokerCard() {
         </dl>
       )}
       {(open || !s?.configured) && (
-        <form className="col" style={{ gap: 8, maxWidth: 420 }} autoComplete="off" onSubmit={(e) => { e.preventDefault(); if (ready) save.mutate() }}>
-          <label className="inline">Client code<input value={f.client_code} onChange={set('client_code')} autoComplete="off" placeholder="e.g. A123456" /></label>
-          <label className="inline">SmartAPI key<input type="password" value={f.api_key} onChange={set('api_key')} autoComplete="new-password" /></label>
-          <label className="inline">Trading PIN<input type="password" inputMode="numeric" value={f.pin} onChange={set('pin')} autoComplete="new-password" /></label>
-          <label className="inline">TOTP secret<input type="password" value={f.totp_secret} onChange={set('totp_secret')} autoComplete="new-password" placeholder="the letters shown next to the QR code" /></label>
-          <p className="note">Saved encrypted on the server and never shown again, not even to an admin. To change anything, enter all four again.</p>
-          <div className="row"><button className="btn primary" disabled={!ready || save.isPending}>{save.isPending ? 'Saving…' : 'Save'}</button>
+        <form autoComplete="off" onSubmit={(e) => { e.preventDefault(); if (ready) save.mutate() }}
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px 16px', maxWidth: 640, marginTop: 4 }}>
+          {([['client_code', 'Client code', 'text', 'e.g. A123456'], ['api_key', 'SmartAPI key', 'password', 'from smartapi.angelbroking.com'],
+            ['pin', 'Trading PIN', 'password', '4-digit PIN'], ['totp_secret', 'TOTP secret', 'password', 'letters next to the QR code']] as const).map(([k, label, type, ph]) => (
+            <label key={k} style={{ display: 'grid', gap: 4, fontSize: 13, fontWeight: 600 }}>{label}
+              <input type={type} value={f[k]} onChange={set(k)} placeholder={ph} autoComplete={type === 'password' ? 'new-password' : 'off'} inputMode={k === 'pin' ? 'numeric' : undefined} style={{ width: '100%', boxSizing: 'border-box' }} />
+            </label>
+          ))}
+          <p className="note" style={{ gridColumn: '1 / -1', margin: 0 }}>🔒 Saved encrypted on the server and never shown again, not even to an admin. To change anything, enter all four again.</p>
+          <div className="row" style={{ gridColumn: '1 / -1', gap: 8 }}><button className="btn primary" disabled={!ready || save.isPending}>{save.isPending ? 'Saving…' : 'Save'}</button>
             {s?.configured && <button type="button" className="btn" onClick={() => { setOpen(false); setErr('') }}>Cancel</button>}</div>
         </form>
       )}
