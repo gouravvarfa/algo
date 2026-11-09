@@ -52,7 +52,9 @@ export interface Marker {
 }
 
 export interface Snapshot {
-  instrument: { id: string; symbol: string; trading_symbol: string; timeframe: string; quantity: number; lots?: number; expiry: string; token?: string; exch_seg?: string }
+  instrument: { id: string; symbol: string; trading_symbol: string; timeframe: string; quantity: number; lots?: number; lot_size?: number | null; point_value?: number | null; expiry: string; token?: string; exch_seg?: string }
+  /** Set by the Real view only: rupees per point of the REAL position (its own quantity). The paper view uses pnlUnits(instrument). */
+  pnl_per_point?: number
   ltp: number
   last_confirmed_bar: string
   updated_at: string

@@ -681,9 +681,10 @@ class RealTB:
         return "exiting"
 
     @staticmethod
-    def real_trades(c, user_id: str, inst_id: str) -> list[dict]:
+    def real_trades(c, user_id: str, inst_id: str, per_qty: float = 1.0) -> list[dict]:
         """The person's REAL Top-Bottom trades, built only from fills Angel One confirmed: each entry fill paired with the stop / exit fill that closed it.
-        Newest first. P&L is before charges."""
+        Newest first. P&L is before charges. `per_qty`: rupees per point for one unit of quantity, i.e. the instrument's pnl_units / quantity. It is 1 for
+        NSE futures, but MCX gold is quoted per 10 g while its quantity is in grams (Gold Ten: quantity 10 = Rs 1 per point, so 0.1)."""
         rows = c.execute("SELECT role, side, qty, contract, filled_avg, updated_at FROM real_tb_orders WHERE user_id=? AND instrument_id=? AND status='filled' ORDER BY updated_at",
                          (user_id, inst_id)).fetchall()
         out, cur = [], None
@@ -695,7 +696,7 @@ class RealTB:
             elif cur is not None and cur["status"] == "OPEN":
                 sgn = 1 if cur["direction"] == "BUY" else -1
                 pts = ((r["filled_avg"] or 0) - (cur["entry_price"] or 0)) * sgn
-                cur.update(exit_price=r["filled_avg"], exit_at=r["updated_at"], exit_by=r["role"], pnl_points=round(pts, 2), pnl_amount=round(pts * cur["qty"], 2), status="CLOSED")
+                cur.update(exit_price=r["filled_avg"], exit_at=r["updated_at"], exit_by=r["role"], pnl_points=round(pts, 2), pnl_amount=round(pts * cur["qty"] * per_qty, 2), status="CLOSED")
         return out[::-1]
 
     def view(self, c, user_id: str | None) -> list[dict]:

@@ -303,12 +303,13 @@ def my_tb_exit(instrument_id: str, request: Request, c=Depends(db)):
 def my_tb_trades(instrument_id: str, request: Request, c=Depends(db)):
     """Real trades only (Angel One fills), plus what the executor holds now, for the Real view of the Top-Bottom page."""
     from app.broker import tb_real
-    _owned_instrument(request, instrument_id)
+    inst = _owned_instrument(request, instrument_id)
+    per_qty = inst.pnl_units / inst.quantity if inst.quantity else 1.0       # MCX gold: lots x point value per point, not the quantity in grams
     uid = user_id_of(request)
     rt = _executor()
     st = next((x for x in (rt.view(c, uid) if rt is not None else []) if x["instrument_id"] == instrument_id), None)
     r = c.execute("SELECT real_on, changed_at FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (uid, instrument_id)).fetchone()
-    return {"trades": tb_real.RealTB.real_trades(c, uid, instrument_id), "state": st, "real_on": bool(r and r["real_on"]), "since": r["changed_at"] if r else None}
+    return {"trades": tb_real.RealTB.real_trades(c, uid, instrument_id, per_qty), "state": st, "real_on": bool(r and r["real_on"]), "since": r["changed_at"] if r else None}
 
 
 _MARGIN: dict[tuple[str, str], tuple[float, dict]] = {}

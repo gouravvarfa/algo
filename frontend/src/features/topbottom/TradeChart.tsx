@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { PAGE_FRIENDLY_CHART, attachChartFocus } from '../../lib/chartScroll'
 import { cssVar } from '../../lib/theme'
 import { money, n2, num } from '../../lib/format'
+import { pnlUnits } from '../../lib/pnl'
 import type { Snapshot } from '../../lib/types'
 
 type Kind = 'line' | 'candle'
@@ -82,7 +83,7 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
     levels.current = []
     const p = snap.position
     if (p) {
-      const loss = Math.abs(p.entry_price - p.active_stop) * snap.instrument.quantity
+      const loss = Math.abs(p.entry_price - p.active_stop) * (snap.pnl_per_point ?? pnlUnits(snap.instrument))   // MCX gold: lots x point value, not the quantity
       const worse = p.direction === 'BUY' ? p.active_stop < p.entry_price : p.active_stop > p.entry_price
       for (const s of [ls, cs]) {
         levels.current.push({ series: s, pl: s.createPriceLine({ price: p.entry_price, color: cssVar('--success'), lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `ENTRY ${p.direction} ${num(p.entry_price)}` }) })

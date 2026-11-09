@@ -5,6 +5,7 @@ import { ApiError, get, post } from '../../lib/api'
 import { useToast } from '../../lib/toast'
 import { useDataSource } from '../../lib/datasource'
 import { dt, money, n2, num, sign, words } from '../../lib/format'
+import { perQtyUnit, pnlUnits, unitsLabel } from '../../lib/pnl'
 import { fresh, streamSpec, useLiveTicks } from '../../lib/stream'
 import type { IndexQuote, JournalEvent, Overview, Position, Snapshot, Trade } from '../../lib/types'
 import { RealSwitch } from './RealSwitch'
@@ -73,7 +74,8 @@ export default function TopBottomPage() {
 /** Where the price sits between the stop and the entry: how much room is left before the stop is hit. */
 const INDEX_STREAM: Record<string, { spec: string; token: string }> = { BANKNIFTY: { spec: 'NSE:99926009', token: '99926009' }, NIFTY: { spec: 'NSE:99926000', token: '99926000' } }
 const r2 = (x: number) => Math.round(x * 100) / 100
-/** The open position valued at a live price pushed by the stream (same arithmetic as the server: points x quantity). The entry, stop and direction are the engine's. */
+/** The open position valued at a live price pushed by the stream, with the server's own multiplier (pnlUnits: points x quantity, or lots x point value for
+ * MCX gold / silver, which are quoted per 10 g / per kg). The entry, stop and direction are the engine's. */
 interface RealTrade { direction: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null; entry_at: number; exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string }
 interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null } | null }
 const iso = (t: number) => new Date(t * 1000).toISOString()
@@ -83,9 +85,10 @@ export function realSnap(s: Snapshot, d: RealData): Snapshot {
   const rp = d.state?.position
   const open = d.trades.find((t) => t.status === 'OPEN')
   let position: Position | null = null
+  const perPoint = rp ? rp.qty * perQtyUnit(s.instrument) : undefined          // the REAL quantity, at the contract's own rupees per point
   if (rp && rp.entry_price != null) {
     const stop = d.state?.stop_target ?? rp.entry_price
-    position = livePosition({ direction: rp.side, entry_price: rp.entry_price, entry_date: open ? iso(open.entry_at) : '', active_stop: stop, initial_sl: stop, breakeven: false, gap_state: null, protective_sl: null, pnl_amount: 0, pnl_points: 0, pnl_pct: 0 }, s.ltp, rp.qty)
+    position = livePosition({ direction: rp.side, entry_price: rp.entry_price, entry_date: open ? iso(open.entry_at) : '', active_stop: stop, initial_sl: stop, breakeven: false, gap_state: null, protective_sl: null, pnl_amount: 0, pnl_points: 0, pnl_pct: 0 }, s.ltp, perPoint ?? rp.qty)
   }
   const bar = (t: number) => { let b = s.candles[0]?.time ?? t; for (const k of s.candles) { if (k.time <= t) b = k.time; else break } return b }
   const trades = d.trades.map((t, i) => ({ n: d.trades.length - i, direction: t.direction, status: t.status, live: true, entry_date: iso(t.entry_at), entry_price: t.entry_price ?? 0, active_stop: t.status === 'OPEN' ? (d.state?.stop_target ?? 0) : 0,
@@ -98,13 +101,14 @@ export function realSnap(s: Snapshot, d: RealData): Snapshot {
   const closed = trades.filter((t) => t.status !== 'OPEN')
   const net = closed.reduce((a, t) => a + (t.pnl_amount ?? 0), 0)
   const wins = closed.filter((t) => (t.pnl_amount ?? 0) > 0).length
-  return { ...s, position, trades, markers, waiting: !position,
+  return { ...s, position, trades, markers, waiting: !position, pnl_per_point: perPoint,
     stats: { ...s.stats, live_realized: r2(net), live_trades: closed.length, live_win_rate: closed.length ? r2(wins / closed.length * 100) : null, replay_trades: 0, replay_realized: 0 } }
 }
 
-function livePosition(p: Position, ltp: number, qty: number): Position {
+/** `perPoint`: rupees for a 1.00 move of this position (pnlUnits for the paper position, the real quantity's own for the Real view). */
+export function livePosition(p: Position, ltp: number, perPoint: number): Position {
   const pts = p.direction === 'BUY' ? ltp - p.entry_price : p.entry_price - ltp
-  return { ...p, pnl_points: r2(pts), pnl_amount: r2(pts * qty), pnl_pct: r2((pts / p.entry_price) * 100) }
+  return { ...p, pnl_points: r2(pts), pnl_amount: r2(pts * perPoint), pnl_pct: r2((pts / p.entry_price) * 100) }
 }
 
 function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: number; ltp: number }) {
@@ -165,7 +169,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
   const futTick = inst.token ? ticks[inst.token] : undefined
   const liveLtp = fresh(futTick) ? futTick.ltp : undefined
   const ltp = liveLtp ?? s.ltp
-  const p = s.position && liveLtp != null ? livePosition(s.position, liveLtp, inst.quantity) : s.position
+  const p = s.position && liveLtp != null ? livePosition(s.position, liveLtp, s.pnl_per_point ?? pnlUnits(inst)) : s.position
   const ixTick = ix ? ticks[ix.token] : undefined
   const ixLive = fresh(ixTick) ? ixTick.ltp : undefined
   const be = (s as { rules?: { breakeven_pct?: number } }).rules?.breakeven_pct ?? 2
@@ -196,7 +200,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
           <div className="hero-pos">
             {p ? <span className={`dirpill ${p.direction === 'BUY' ? 'buy' : 'sell'}`}>{p.direction === 'BUY' ? '▲' : '▼'} {p.direction}</span> : <span className="dirpill flat">FLAT</span>}
             <span className="hero-sym">{inst.trading_symbol}</span>
-            <span className="sub">{inst.lots || 1} lot · qty {inst.quantity} · exp {inst.expiry}</span>
+            <span className="sub">{inst.lots || 1} lot · qty {inst.quantity}{inst.point_value ? ` · ${unitsLabel(inst)}` : ''} · exp {inst.expiry}</span>
           </div>
           <RealSwitch instrumentId={inst.id} symbol={inst.symbol} />
           <div className="hero-pnl">
@@ -263,7 +267,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
               <dt>Closed trades</dt><dd>{closed.length}</dd>
               <dt>Win rate</dt><dd>{closed.length ? `${(wins.length / closed.length * 100).toFixed(1)}%` : '–'}</dd>
               <dt>Net points</dt><dd className={sign(pts)}>{num(pts)}</dd>
-              <dt>Net P&amp;L (qty {inst.quantity})</dt><dd className={sign(net)}>{money(net)}</dd>
+              <dt>Net P&amp;L ({unitsLabel(inst)})</dt><dd className={sign(net)}>{money(net)}</dd>
               <dt>Live realized</dt><dd className={sign(st.live_realized)}>{money(st.live_realized)}</dd>
               <dt>Live trades / win</dt><dd>{st.live_trades} / {st.live_win_rate == null ? '–' : `${st.live_win_rate}%`}</dd>
               <dt>History trades</dt><dd>{st.replay_trades}</dd>
