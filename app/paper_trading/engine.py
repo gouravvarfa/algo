@@ -94,7 +94,8 @@ def struct_cap_for(symbol: str) -> float:
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
 SWEEP_MIN_SLEEP = 0.25                  # between two sweeps of the engine while ticks flow (seconds)
 FAULT_RETRY_SECONDS = 5.0                # an instrument whose evaluation is failing is looked at again after this long, not on every sweep
-SWEEP_DUTY = 2.0                        # ... and at least this many times the sweep's own duration, so the engine never takes more than about a third of a core
+SWEEP_DUTY = 2.0                        # ... and at least this many times the CPU the sweep used, so the engine never takes more than about a third of a core
+                                        # (CPU, not wall time: a sweep that mostly WAITED for Angel One is not followed by a long pause)
 LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
 LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
 GAP_15M_REFRESH_SECONDS = 600  # 15m bars for the daily gap protocol are re-fetched at most this often
@@ -135,6 +136,30 @@ class PaperError(ValueError):
 
 def now_ist() -> dt.datetime:
     return dt.datetime.now(IST).replace(tzinfo=None)
+
+
+def _expired(expiry, now: dt.datetime) -> bool:
+    """The contract's expiry day is over (an empty or unreadable expiry, e.g. an equity, never is)."""
+    try:
+        return dt.date.fromisoformat(str(expiry)[:10]) < now.date()
+    except ValueError:
+        return False
+
+
+def _settled(expiry, last_ts, now: dt.datetime) -> bool:
+    """An expired contract whose candles we already hold up to its expiry day: Angel One no longer serves it and its candles can no longer
+    change, so asking again only spends the candle quota. (On 9 Nov 2026 the two October contracts were re-asked every 15 seconds, because no
+    tick ever arrives for an expired contract, while Angel One was refusing about half of all candle requests.)"""
+    if last_ts is None or not _expired(expiry, now):
+        return False
+    try:
+        return pd.Timestamp(last_ts).date() >= dt.date.fromisoformat(str(expiry)[:10])
+    except (TypeError, ValueError):
+        return False
+
+
+def _last_ts(df) -> object | None:
+    return df.index[-1] if df is not None and len(df) else None
 
 
 def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
@@ -203,6 +228,7 @@ class PaperEngine:
         self._chain_cache: dict = {}
         self._sweeps: deque = deque(maxlen=300)             # (time, sweep milliseconds): how long one pass over all instruments takes
         self.last_sweep_s = 0.0
+        self.last_sweep_cpu_s = 0.0                          # the CPU that pass used (the pause after it is based on this)
         self._load()
 
     # ---- persistence -----------------------------------------------------
@@ -606,7 +632,7 @@ class PaperEngine:
         key = ("d", c.token)
         hit = self._chain_cache.get(key)
         if hit:
-            if (now - hit[0]).total_seconds() >= DAILY_RAW_CACHE_WITH_FEED:
+            if (now - hit[0]).total_seconds() >= DAILY_RAW_CACHE_WITH_FEED and not _settled(c.expiry, _last_ts(hit[1]), now):
                 self._refresh_later(key, lambda: self._load_daily(c, from_dt, now_ist()))
             return hit[1]
         return await self._load_daily(c, from_dt, now)
@@ -614,12 +640,15 @@ class PaperEngine:
     async def _load_daily(self, c: ContractRef, from_dt: dt.datetime, now: dt.datetime) -> pd.DataFrame:
         key = ("d", c.token)
         stored = candle_store.get(c.token, "ONE_DAY", from_dt)
-        try:
-            fresh = await self._candles(c.exch_seg, c.token, "ONE_DAY", (now - from_dt).days + 2, include_partial=True)
-            candle_store.put(c.token, "ONE_DAY", fresh)
-        except Exception as exc:
-            log.warning("daily candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
-            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        if _settled(c.expiry, _last_ts(stored), now):
+            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])     # final: nothing to ask Angel One
+        else:
+            try:
+                fresh = await self._candles(c.exch_seg, c.token, "ONE_DAY", (now - from_dt).days + 2, include_partial=True)
+                candle_store.put(c.token, "ONE_DAY", fresh)
+            except Exception as exc:
+                log.warning("daily candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
+                fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = candle_store.merge(stored, fresh)
         df = df[df.index >= from_dt]
         self._chain_cache[key] = (now, df)
@@ -631,7 +660,7 @@ class PaperEngine:
         refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(c.token) else LIVE_MINUTES_REFRESH_SECONDS
         if hit:
             base = hit[1]
-            if (now - hit[0]).total_seconds() >= refresh:          # the ticks cover the newest minutes meanwhile
+            if (now - hit[0]).total_seconds() >= refresh and not _settled(c.expiry, base[-1].ts if base else None, now):   # the ticks cover the newest minutes meanwhile
                 self._refresh_later(key, lambda: self._load_minutes(c, first_day, now_ist()))
         else:
             base = await self._load_minutes(c, first_day, now)
@@ -642,15 +671,18 @@ class PaperEngine:
         since = dt.datetime.combine(first_day, dt.time(9, 0))
         stored = candle_store.get(c.token, "ONE_MINUTE", since)
         days = max(LIVE_MINUTES_DAYS, min(TIMEFRAMES["1m"][2] - 1, (now.date() - first_day).days + 3))
-        try:
-            fresh = await self._candles(c.exch_seg, c.token, "ONE_MINUTE", days, include_partial=True)
-            fresh = drop_incomplete_trailing_bars(fresh, 1, now)
-            candle_store.put(c.token, "ONE_MINUTE", fresh)
-        except Exception as exc:
-            log.warning("1-minute candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
-            if "too many requests" in str(exc).lower():
-                self._cooldown_until[("c", c.token)] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
-            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        if _settled(c.expiry, _last_ts(stored), now):
+            fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])     # final: nothing to ask Angel One
+        else:
+            try:
+                fresh = await self._candles(c.exch_seg, c.token, "ONE_MINUTE", days, include_partial=True)
+                fresh = drop_incomplete_trailing_bars(fresh, 1, now)
+                candle_store.put(c.token, "ONE_MINUTE", fresh)
+            except Exception as exc:
+                log.warning("1-minute candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
+                if "too many requests" in str(exc).lower():
+                    self._cooldown_until[("c", c.token)] = now + dt.timedelta(seconds=LIVE_RATE_LIMIT_COOLDOWN_SECONDS)
+                fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = candle_store.merge(stored, fresh)
         base = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
         self._chain_cache[("m", c.token)] = (now, base)
@@ -748,13 +780,18 @@ class PaperEngine:
         rc = self._raw_cache.get(inst.id)
         ttl = DAILY_RAW_CACHE_WITH_FEED if self.feed.healthy(inst.token) else 15
         if rc:
-            if (now - rc[0]).total_seconds() >= ttl:
+            if (now - rc[0]).total_seconds() >= ttl and not _settled(getattr(inst, "expiry", ""), _last_ts(rc[1]), now):
                 self._refresh_later(("o", inst.id), lambda: self._load_own(inst, interval, from_dt, days_back, now_ist()))
             return rc[1][rc[1].index >= from_dt]
         return await self._load_own(inst, interval, from_dt, days_back, now)
 
     async def _load_own(self, inst: Instrument, interval: str, from_dt: dt.datetime, days_back: int, now: dt.datetime) -> pd.DataFrame:
         raw, err = None, None
+        if from_dt is not None and _expired(getattr(inst, "expiry", ""), now):
+            stored = candle_store.get(inst.token, interval, from_dt)
+            if _settled(inst.expiry, _last_ts(stored), now):         # an expired contract we hold to its last day: final, nothing to ask Angel One
+                self._raw_cache[inst.id] = (now, stored)
+                return stored[stored.index >= from_dt]
         try:
             raw = await self._candles(inst.exch_seg, inst.token, interval, days_back, include_partial=True)
         except Exception as exc:                  # Angel One refused (403 / rate limit)
@@ -776,7 +813,8 @@ class PaperEngine:
         failure here never blocks the instrument: the close rules still run."""
         cached = self._bars15.get(inst.id)
         if cached:
-            if self._new_15m_candle_closed(cached[0], now, inst.sess) or (now - cached[0]).total_seconds() >= GAP_15M_REFRESH_SECONDS:
+            fresh_due = self._new_15m_candle_closed(cached[0], now, inst.sess) or (now - cached[0]).total_seconds() >= GAP_15M_REFRESH_SECONDS
+            if fresh_due and not _expired(getattr(inst, "expiry", ""), now):     # an expired contract's 15m bars can no longer change (nor are they served)
                 self._refresh_later(("g", inst.id), lambda: self._load_gap_bars(inst, from_dt, now_ist()))
             return cached[1]
         return await self._load_gap_bars(inst, from_dt, now)
@@ -937,9 +975,14 @@ class PaperEngine:
         return {"sweeps": len(ms), "last_ms": round(self._sweeps[-1][1], 1), "avg_ms": round(sum(ms) / len(ms), 1), "p95_ms": round(ms[min(len(ms) - 1, int(len(ms) * 0.95))], 1),
                 "cycle_s": round(span / (len(ms) - 1), 2) if len(ms) > 1 and span > 0 else None}
 
+    def pause_after_sweep(self) -> float:
+        """The pause after a sweep, from the CPU it used: waiting on Angel One (a refused candle request, its retries) costs no CPU, so it no
+        longer turns into a long pause before the next look at stops and entries (a 30 s wait used to be followed by 60 s of sleep)."""
+        return self.sweep_sleep(getattr(self, "last_sweep_cpu_s", self.last_sweep_s))
+
     async def refresh_all(self) -> None:
         async with self._lock:
-            t0 = time.perf_counter()
+            t0, c0 = time.perf_counter(), time.process_time()
             tried = self.__dict__.setdefault("_fault_tried", {})
             for inst in self._ordered():
                 if inst.id in self.faults and time.monotonic() - tried.get(inst.id, 0.0) < FAULT_RETRY_SECONDS:
@@ -955,6 +998,7 @@ class PaperEngine:
                 self.last_tick = now_ist()
             self._shadow_step("poll", now_ist())                # timers of the simulated account run even while the engine is paused (a resting stop order does not stop)
             self.last_sweep_s = time.perf_counter() - t0
+            self.last_sweep_cpu_s = time.process_time() - c0
             self._sweeps.append((time.time(), self.last_sweep_s * 1000))
 
     def _any_market_open(self) -> bool:
@@ -974,7 +1018,7 @@ class PaperEngine:
                 except asyncio.TimeoutError:
                     pass
                 self.feed.updated.clear()
-                await asyncio.sleep(self.sweep_sleep(self.last_sweep_s))
+                await asyncio.sleep(self.pause_after_sweep())
             else:
                 await asyncio.sleep(20 if open_now else 300)
 

@@ -68,17 +68,35 @@ def feed_tile() -> dict:
 
 
 def angel_rest_tile() -> dict:
-    b = next((x for x in circuit.all_info() if x["name"] == "angelone.rest"), None)
+    """Two circuits: 'angelone.rest' (account views, quotes, margin: what real orders need) and 'angelone.candles' (historical candles, which
+    Angel One throttles during market hours). The account circuit open is DOWN; the candle circuit open is only DEGRADED, because strategies then
+    run on the stored candles and the live ticks while orders still work."""
+    infos = {x["name"]: x for x in circuit.all_info()}
+    b, cb = infos.get("angelone.rest"), infos.get("angelone.candles")
     try:
         from app.providers import call_metrics
         calls = call_metrics.snapshot().angelone_calls
     except Exception:
         calls = None
-    if b is None:
+    if b is None and cb is None:
         return _tile("angel_rest", "Angel One REST", OK, "no calls made yet", calls_today=calls)
-    st = DOWN if b["state"] == "OPEN" else DEGRADED if b["state"] == "HALF_OPEN" or b["failures_in_window"] >= max(2, b["threshold"] // 2) else OK
-    why = f"circuit {b['state']}" + (f", last error: {b['last_error']}" if b["last_error"] and st != OK else "")
-    return _tile("angel_rest", "Angel One REST", st, why, calls_today=calls, **{k: b[k] for k in ("state", "failures_in_window", "opened_count", "total_calls", "total_failures")})
+
+    def grade(x, down):
+        if x is None:
+            return OK
+        return down if x["state"] == "OPEN" else DEGRADED if x["state"] == "HALF_OPEN" or x["failures_in_window"] >= max(2, x["threshold"] // 2) else OK
+
+    st_acct, st_cand = grade(b, DOWN), grade(cb, DEGRADED)
+    st = DOWN if DOWN in (st_acct, st_cand) else DEGRADED if DEGRADED in (st_acct, st_cand) else OK
+    parts = []
+    if b is not None:
+        parts.append(f"account/orders circuit {b['state']}" + (f" (last error: {b['last_error']})" if b["last_error"] and st_acct != OK else ""))
+    if cb is not None:
+        parts.append(f"candles circuit {cb['state']}" + (f" (last error: {cb['last_error']})" if cb["last_error"] and st_cand != OK else ""))
+    extra = {k: b[k] for k in ("state", "failures_in_window", "opened_count", "total_calls", "total_failures")} if b is not None else {}
+    if cb is not None:
+        extra.update({f"candles_{k}": cb[k] for k in ("state", "failures_in_window", "opened_count", "total_calls", "total_failures")})
+    return _tile("angel_rest", "Angel One REST", st, "; ".join(parts), calls_today=calls, **extra)
 
 
 def engine_tile() -> dict:

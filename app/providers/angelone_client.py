@@ -49,12 +49,16 @@ AngelOneInterval = Literal[
 ]
 
 
-def _rest_opened(b) -> None:
-    incidents.record("angelone.rest", f"circuit OPEN after {b.threshold} failures in {b.window_s:.0f}s ({b.last_error})", severity="warning",
+def _circuit_opened(b) -> None:
+    incidents.record(b.name, f"circuit OPEN after {b.threshold} failures in {b.window_s:.0f}s ({b.last_error})", severity="warning",
                      auto_action=f"calls blocked for {b.cooldown_s:.0f}s, then one trial call")
 
 
-_rest = circuit.breaker("angelone.rest", threshold=8, window_s=60.0, cooldown_s=30.0, on_open=_rest_opened)
+# Account views, quotes and the margin calculator: the calls real orders depend on (the order book is read at the start of every executor round).
+_rest = circuit.breaker("angelone.rest", threshold=8, window_s=60.0, cooldown_s=30.0, on_open=_circuit_opened)
+# Historical candles have a breaker of their own. Angel One throttles this endpoint hard during market hours (about half of the candle requests
+# were refused with a 403 page on 5-6 Nov 2026, almost none in the evening), and those refusals must never block the account calls above.
+_candle_circuit = circuit.breaker("angelone.candles", threshold=8, window_s=60.0, cooldown_s=30.0, on_open=_circuit_opened)
 
 
 def _is_outage(exc: BaseException) -> bool:
@@ -222,7 +226,7 @@ async def get_candle_data(
 
         return body.get("data") or []
 
-    return await _rest.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
+    return await _candle_circuit.acall(lambda: _retry_async(_attempt), count_if=_is_outage)
 
 
 @tracked("angelone.margin")

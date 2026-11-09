@@ -7,6 +7,8 @@ fresh TOTP-based login each time would waste Angel's rate limits and the
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -17,6 +19,23 @@ from app.providers.angelone_client import AngelOneApiError, AngelOneInterval, An
 from app.services import angelone_credential_store
 
 IST = ZoneInfo("Asia/Kolkata")
+log = logging.getLogger("scanner.angelone_provider")
+
+RELOGIN_STALL_S = 300.0      # safety net: no candle request has worked for this long (a rate limit lets some through), so the session may be dead after all ...
+RELOGIN_MIN_GAP_S = 600.0    # ... then one fresh login, at most once in this many seconds
+
+
+def relogin_can_help(exc: AngelOneApiError) -> bool:
+    """True when a fresh login cures the refusal: Angel One's JSON 'invalid / expired token' answer. False for a 403 rate-limit page or network
+    trouble (the retryable errors): logging in again lifts no rate limit and only adds sessions on the account, which can be the very account
+    real orders use. Re-logging in after every refused candle request cost ~650 logins a day on 5-6 Nov 2026, and Angel One then refused
+    some logins as well."""
+    if exc.kind == "auth":
+        return True
+    if exc.retryable:
+        return False
+    msg = str(exc).lower()
+    return any(k in msg for k in ("token", "session", "expired", "unauthori", "ag8001", "ag8002", "ag8003", "ab1010"))
 
 INTERVAL_MINUTES: dict[AngelOneInterval, int] = {
     "ONE_MINUTE": 1,
@@ -40,6 +59,9 @@ def _format_angel_date(moment: dt.datetime) -> str:
 class AngelOneProvider:
     def __init__(self) -> None:
         self._session: AngelOneSession | None = None
+        self._last_ok = time.monotonic()        # the last candle request that worked
+        self._last_relogin = 0.0
+        self.relogins = 0
 
     async def _ensure_session(self) -> AngelOneSession:
         credentials = angelone_credential_store.get_credentials()
@@ -66,6 +88,26 @@ class AngelOneProvider:
         authentication path."""
         return await self._ensure_session()
 
+    async def _candle_rows(self, **request) -> list:
+        """getCandleData with the cached session. A refusal that says the session is dead (relogin_can_help) gets exactly one fresh login and
+        one retry; so does a long stall where NOTHING has worked for RELOGIN_STALL_S (at most once per RELOGIN_MIN_GAP_S), in case a dead
+        session ever shows up as something else. A 403 rate-limit page is raised as it is: the callers fall back to stored candles."""
+        session = await self._ensure_session()
+        try:
+            rows = await get_candle_data(session, **request)
+        except AngelOneApiError as exc:
+            now = time.monotonic()
+            stalled = now - self._last_ok > RELOGIN_STALL_S and now - self._last_relogin > RELOGIN_MIN_GAP_S
+            if not (relogin_can_help(exc) or stalled):
+                raise
+            log.warning("Angel One candle session looks dead (%s); logging in again once", str(exc)[:80])
+            self.reset_session()
+            self._last_relogin, self.relogins = now, self.relogins + 1
+            session = await self._ensure_session()
+            rows = await get_candle_data(session, **request)
+        self._last_ok = time.monotonic()
+        return rows
+
     async def get_intraday_ohlc(
         self, exch_seg: str, symbol_token: str, interval: AngelOneInterval, days_back: int = 5,
         include_partial: bool = False,
@@ -84,34 +126,13 @@ class AngelOneProvider:
         1/5) omits this and is completely unaffected — they still only ever
         see confirmed candles, exactly as before.
         """
-        session = await self._ensure_session()
         now_ist = dt.datetime.now(IST)
         from_dt = now_ist - dt.timedelta(days=days_back)
         from_date = _format_angel_date(from_dt.replace(tzinfo=None))
         to_date = _format_angel_date(now_ist.replace(tzinfo=None))
 
-        try:
-            rows = await get_candle_data(
-                session, exchange=exch_seg, symbol_token=symbol_token, interval=interval,
-                from_date=from_date, to_date=to_date,
-            )
-        except AngelOneApiError:
-            # Angel One allows only ONE active API session per account —
-            # logging in from the app/web elsewhere silently invalidates
-            # this cached session, and every further call then fails
-            # identically no matter how many times get_candle_data's own
-            # internal retry loop tries again with the SAME dead session
-            # (this was a real bug: an entire scan could fail 100% of its
-            # stocks this way, recoverable only by restarting the backend).
-            # Force exactly one fresh re-login and retry before giving up —
-            # if the credentials themselves are the problem, this second
-            # attempt fails too and the real error still surfaces normally.
-            self.reset_session()
-            session = await self._ensure_session()
-            rows = await get_candle_data(
-                session, exchange=exch_seg, symbol_token=symbol_token, interval=interval,
-                from_date=from_date, to_date=to_date,
-            )
+        # A session that died (say, invalidated elsewhere) is replaced once inside _candle_rows; a rate-limit refusal is not (see relogin_can_help).
+        rows = await self._candle_rows(exchange=exch_seg, symbol_token=symbol_token, interval=interval, from_date=from_date, to_date=to_date)
 
         if not rows:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -141,21 +162,9 @@ class AngelOneProvider:
         window, not "up to now"); Cup's own pipeline handles the current
         in-progress month separately via to_monthly().
         """
-        session = await self._ensure_session()
         from_date = _format_angel_date(from_dt)
         to_date = _format_angel_date(to_dt)
-        try:
-            rows = await get_candle_data(
-                session, exchange=exch_seg, symbol_token=symbol_token, interval="ONE_DAY",
-                from_date=from_date, to_date=to_date,
-            )
-        except AngelOneApiError:
-            self.reset_session()
-            session = await self._ensure_session()
-            rows = await get_candle_data(
-                session, exchange=exch_seg, symbol_token=symbol_token, interval="ONE_DAY",
-                from_date=from_date, to_date=to_date,
-            )
+        rows = await self._candle_rows(exchange=exch_seg, symbol_token=symbol_token, interval="ONE_DAY", from_date=from_date, to_date=to_date)
         if not rows:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
