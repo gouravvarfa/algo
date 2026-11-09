@@ -25,6 +25,11 @@ RELOGIN_STALL_S = 300.0      # safety net: no candle request has worked for this
 RELOGIN_MIN_GAP_S = 600.0    # ... then one fresh login, at most once in this many seconds
 
 
+def _clock() -> float:
+    """Seconds on a clock that only moves forward. It counts from the machine's boot, so it can be small (a CI runner, a server just rebooted)."""
+    return time.monotonic()
+
+
 def relogin_can_help(exc: AngelOneApiError) -> bool:
     """True when a fresh login cures the refusal: Angel One's JSON 'invalid / expired token' answer. False for a 403 rate-limit page or network
     trouble (the retryable errors): logging in again lifts no rate limit and only adds sessions on the account, which can be the very account
@@ -59,8 +64,8 @@ def _format_angel_date(moment: dt.datetime) -> str:
 class AngelOneProvider:
     def __init__(self) -> None:
         self._session: AngelOneSession | None = None
-        self._last_ok = time.monotonic()        # the last candle request that worked
-        self._last_relogin = 0.0
+        self._last_ok = _clock()                # the last candle request that worked
+        self._last_relogin = float("-inf")      # never (NOT 0.0: the clock starts at boot, so 0.0 would mean "just now" on a fresh machine)
         self.relogins = 0
 
     async def _ensure_session(self) -> AngelOneSession:
@@ -96,7 +101,7 @@ class AngelOneProvider:
         try:
             rows = await get_candle_data(session, **request)
         except AngelOneApiError as exc:
-            now = time.monotonic()
+            now = _clock()
             stalled = now - self._last_ok > RELOGIN_STALL_S and now - self._last_relogin > RELOGIN_MIN_GAP_S
             if not (relogin_can_help(exc) or stalled):
                 raise
@@ -105,7 +110,7 @@ class AngelOneProvider:
             self._last_relogin, self.relogins = now, self.relogins + 1
             session = await self._ensure_session()
             rows = await get_candle_data(session, **request)
-        self._last_ok = time.monotonic()
+        self._last_ok = _clock()
         return rows
 
     async def get_intraday_ohlc(

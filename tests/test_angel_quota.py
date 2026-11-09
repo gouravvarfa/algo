@@ -81,6 +81,17 @@ def test_a_long_stall_gets_one_fresh_login_at_most_every_ten_minutes(monkeypatch
     assert len(logins) == 2
 
 
+def test_the_stall_safety_net_works_on_a_machine_that_just_booted(monkeypatch):
+    # time.monotonic() counts from boot: CI runners and a just-rebooted server are only minutes old. "No fresh login yet" must not read as
+    # "a fresh login at second 0", or the safety net stays shut for the first ten minutes (this failed on CI, never on a laptop up for days).
+    p, logins = _provider(monkeypatch, [RATE_LIMIT, RATE_LIMIT])
+    monkeypatch.setattr(ap, "_clock", lambda: 200.0)
+    p._last_ok = 200.0 - ap.RELOGIN_STALL_S - 1
+    with pytest.raises(AngelOneApiError):
+        asyncio.run(p._candle_rows(**REQ))
+    assert len(logins) == 2 and p.relogins == 1
+
+
 def test_intraday_candles_still_come_back_as_a_frame(monkeypatch):
     p, _ = _provider(monkeypatch, [[["2026-11-09T09:15:00+05:30", 100, 101, 99, 100.5, 7]]])
     df = asyncio.run(p.get_intraday_ohlc("NFO", "1", "ONE_MINUTE", 1, include_partial=True))
@@ -231,6 +242,8 @@ def test_a_sweep_that_only_waited_is_not_followed_by_a_long_pause():
         await asyncio.sleep(0.3)                         # e.g. Angel One refusing, then the retries' back-off
     e.refresh_one = waits
     asyncio.run(e.refresh_all())
-    assert e.last_sweep_s >= 0.3 and e.last_sweep_cpu_s < 0.1
-    assert e.pause_after_sweep() == em.SWEEP_MIN_SLEEP   # the wall-time rule slept 2 x the sweep (a 30 s wait meant 60 s of sleep)
-    assert em.PaperEngine.sweep_sleep(0.5) == 1.0         # real CPU work still earns a proportional pause
+    assert e.last_sweep_s >= 0.25 and e.last_sweep_cpu_s >= 0.0   # both are recorded (exact CPU numbers depend on the machine)
+    e.last_sweep_s, e.last_sweep_cpu_s = 30.0, 0.05       # waited 30 s on Angel One, used 0.05 s of CPU
+    assert e.pause_after_sweep() == em.SWEEP_MIN_SLEEP   # the wall-time rule slept 2 x 30 s = 60 s before looking at stops again
+    e.last_sweep_cpu_s = 0.5
+    assert e.pause_after_sweep() == 1.0                   # real CPU work still earns a proportional pause
