@@ -8,13 +8,16 @@
 .tk-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .tk-badge.on .tk-dot { animation: tk-pulse 1.6s ease-in-out infinite; }
 @keyframes tk-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 45%, transparent); } 50% { opacity: .55; box-shadow: 0 0 0 5px transparent; } }
-.tk-viewport { position: relative; flex: 1; overflow: hidden;
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 48px), transparent 100%);
-  mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 48px), transparent 100%); }
-.tk-track { display: flex; width: max-content; height: 100%; animation: tk-scroll linear infinite; }
+.tk-viewport { position: relative; flex: 1; overflow: hidden; isolation: isolate; }
+/* edge fades as overlays, not a mask: iPad Safari left parts of the moving strip unpainted under a mask (10 Nov 2026) */
+.tk-viewport::before, .tk-viewport::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none; }
+.tk-viewport::before { left: 0; width: 24px; background: linear-gradient(90deg, var(--bg-surface), color-mix(in srgb, var(--bg-surface) 0%, transparent)); }
+.tk-viewport::after { right: 0; width: 44px; background: linear-gradient(270deg, var(--bg-surface), color-mix(in srgb, var(--bg-surface) 0%, transparent)); }
+.tk-track { display: flex; width: max-content; height: 100%; animation: tk-scroll linear infinite; will-change: transform; backface-visibility: hidden;
+  -webkit-backface-visibility: hidden; transform: translate3d(0, 0, 0); }
 @media (hover: hover) { .mticker:hover .tk-track { animation-play-state: paused; } }
 .mticker:has(.tk-item:focus-visible) .tk-track { animation-play-state: paused; }
-@keyframes tk-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes tk-scroll { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-50%, 0, 0); } }
 .tk-item { display: flex; align-items: center; gap: 8px; padding: 0 18px; height: 100%; border: 0; border-right: 1px solid var(--border); background: transparent;
   color: var(--text-primary); font: inherit; cursor: pointer; white-space: nowrap; transition: background .15s; }
 .tk-item:hover, .tk-item:focus-visible { background: var(--bg-hover); outline: none; }

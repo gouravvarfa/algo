@@ -1072,9 +1072,10 @@ class PaperEngine:
             self._task.cancel()
 
     async def index_quote(self, name: str) -> dict:
-        """Index price with today's change in points and % versus the previous trading day's close (real Angel One data)."""
+        """Index price and change (real Angel One data), by the same rule as the market bar (_index_view)."""
         ex, tok = INDEX_TOKENS[name]
         now = now_ist()
+        self._closes_from_disk()
         cached = self._prev_close.get(name)
         tick = self.feed.latest.get(tok)
         live = self.feed.healthy(tok) and tick is not None
@@ -1082,12 +1083,28 @@ class PaperEngine:
             cached = await self._load_index_close(name)            # nothing to show yet: this one answer has to wait
         elif cached is None or (now - cached[0]).total_seconds() > 600:
             self._refresh_later(("i", name), lambda: self._load_index_close(name))    # a live price never waits for the candle queue
-        prev_close, last_close = cached[1:3] if cached else (None, None)
-        price = tick.ltp if live else last_close
-        change = None if price is None or prev_close is None else round(price - prev_close, 2)
-        return {"symbol": name, "price": price, "prev_close": prev_close, "change": change,
-                "pct": None if change is None or not prev_close else round(change / prev_close * 100, 2),
-                "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
+        price, ref, session = self._index_view(name, tok, now)
+        change = None if price is None or ref is None else round(price - ref, 2)
+        today = session == now.date()
+        return {"symbol": name, "price": price, "prev_close": ref, "change": change, "pct": None if change is None or not ref else round(change / ref * 100, 2),
+                "session": session.isoformat() if session else None, "today": today, "live": bool(live and today), "age_s": self.feed.age(tok),
+                "source": "WebSocket tick" if live and today else "REST daily candle"}
+
+    def _index_view(self, key: str, tok: str, now: dt.datetime) -> tuple:
+        """(price, reference close, session date). Traded today: the live tick against the last close BEFORE today. No trade today (a holiday, a
+        weekend, before the open): the last session's close against the session before it, as brokers show it (10 Nov 2026, an NSE holiday, showed
+        +0.00% everywhere before)."""
+        cached = self._prev_close.get(key)
+        closes = cached[1] if cached else []
+        tick = self.feed.latest.get(tok)
+        if tick is not None and tick.exch_ts.date() == now.date():
+            price, session = tick.ltp, now.date()
+        elif closes:
+            session, price = closes[-1]
+        else:
+            return None, None, None
+        ref = next((c for d, c in reversed(closes) if d < session), None)
+        return price, ref, session
 
     def ticker(self) -> list[dict]:
         """The market bar: every TICKER_INDICES index with its price and change versus the previous close. It never waits: the live tick, else the last
@@ -1100,13 +1117,7 @@ class PaperEngine:
             if cached is None or cached[0].date() != now.date():
                 self._refresh_later(("i", key), lambda k=key: self._load_index_close(k))
             tick = self.feed.latest.get(tok)
-            prev_close, last_close, before_last, last_day = cached[1:5] if cached and len(cached) >= 5 else (None, None, None, None)
-            if tick is not None and tick.exch_ts.date() == now.date():
-                price, ref, session = tick.ltp, prev_close, now.date()              # trading today: today's change against the previous session's close
-            else:
-                # no trade today (holiday, weekend, before the open): the LAST session's close and its change against the session before it,
-                # as brokers show it (10 Nov 2026, an NSE holiday, showed 0.00% everywhere before)
-                price, ref, session = last_close, before_last, last_day
+            price, ref, session = self._index_view(key, tok, now)
             change = None if price is None or ref is None else round(price - ref, 2)
             closes = [m[4] for m in self.feed.builder.minutes(tok) if m[0].date() == now.date()]     # today's minutes built from live ticks: no API call
             step = max(1, -(-len(closes) // 48))                                                       # at most 48 points + the last
@@ -1148,28 +1159,24 @@ class PaperEngine:
         ex, tok = INDEX_TOKENS[name] if name in INDEX_TOKENS else TICKER_INDICES[name][:2]
         now = now_ist()
         df = await self._candles(ex, tok, "ONE_DAY", 10, include_partial=True)
-        prev = None if df is None or df.empty else df[df.index.date < now.date()]
-        prev_close = float(prev["close"].iloc[-1]) if prev is not None and not prev.empty else None
-        last_close = float(df["close"].iloc[-1]) if df is not None and not df.empty else None
-        before_last = float(df["close"].iloc[-2]) if df is not None and len(df) >= 2 else None       # the close before the last session
-        last_day = df.index[-1].date() if df is not None and not df.empty else None
-        self._prev_close[name] = (now, prev_close, last_close, before_last, last_day)
+        closes = [] if df is None or df.empty else [(t.date(), float(c)) for t, c in df["close"].tail(6).items()]
+        self._prev_close[name] = (now, closes)                     # the last sessions' closes: the reference is picked when read (_index_view)
         self._closes_to_disk()
         return self._prev_close[name]
 
     def _closes_to_disk(self) -> None:
         """Failing to store must never touch the engine."""
         try:
-            rows = {k: [v[0].isoformat(), *v[1:4], v[4].isoformat() if len(v) > 4 and v[4] else None] for k, v in self._prev_close.items() if len(v) >= 5}
+            rows = {k: [v[0].isoformat(), [[d.isoformat(), c] for d, c in v[1]]] for k, v in self._prev_close.items() if len(v) == 2}
             INDEX_CLOSE_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = INDEX_CLOSE_PATH.with_suffix(".tmp")
             tmp.write_text(json.dumps(rows), encoding="utf-8")
             tmp.replace(INDEX_CLOSE_PATH)
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError, AttributeError):
             log.warning("could not store the market bar's closes")
 
     def _closes_from_disk(self) -> None:
-        """Once per process: the closes stored before a restart (they are refreshed in the background as usual, being of an earlier fetch)."""
+        """Once per process: the closes stored before a restart, shown at once (they are refreshed in the background as usual)."""
         if self.__dict__.get("_closes_loaded"):
             return
         self._closes_loaded = True
@@ -1178,12 +1185,20 @@ class PaperEngine:
         except (OSError, ValueError):
             return
         for k, v in rows.items():
-            if k not in self._prev_close and isinstance(v, list) and len(v) == 5:
-                try:
-                    at = dt.datetime.fromisoformat(v[0]) - dt.timedelta(days=1)       # older than today: a background refresh is still asked for
-                    self._prev_close[k] = (at, v[1], v[2], v[3], dt.date.fromisoformat(v[4]) if v[4] else None)
-                except (TypeError, ValueError):
+            if k in self._prev_close or not isinstance(v, list):
+                continue
+            try:
+                at = dt.datetime.fromisoformat(v[0]) - dt.timedelta(days=1)           # older than today: a background refresh is still asked for
+                if len(v) == 2 and isinstance(v[1], list):
+                    closes = [(dt.date.fromisoformat(d), float(c)) for d, c in v[1]]
+                elif len(v) == 5 and v[4]:                     # the first layout (10 Nov 2026): last close, the close before it, the last session's date
+                    last = dt.date.fromisoformat(v[4])
+                    closes = [(last - dt.timedelta(days=1), float(v[3])), (last, float(v[2]))] if v[3] is not None else [(last, float(v[2]))]
+                else:
                     continue
+                self._prev_close[k] = (at, closes)
+            except (TypeError, ValueError):
+                continue
 
     # ---- views -----------------------------------------------------------
     def overview(self, owner=ALL) -> dict:

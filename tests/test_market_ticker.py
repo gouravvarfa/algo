@@ -35,13 +35,14 @@ def test_every_index_token_is_known_and_the_bar_never_waits():
 def test_change_is_against_the_previous_close_and_loaded_once_a_day(monkeypatch):
     e = _eng()
     now = em.now_ist()
-    e._prev_close["NIFTY IT"] = (now, 38000.0, 38100.0, 37900.0, now.date())
+    y = (now - dt.timedelta(days=1)).date()
+    e._prev_close["NIFTY IT"] = (now, [(y - dt.timedelta(days=1), 37900.0), (y, 38000.0)])
     e.feed.latest["99926008"] = SimpleNamespace(ltp=38380.0, exch_ts=now)
     monkeypatch.setattr(e.feed, "healthy", lambda tok=None: True)
     it = next(i for i in e.ticker() if i["key"] == "NIFTY IT")
     assert it["price"] == 38380.0 and it["change"] == 380.0 and it["pct"] == 1.0 and it["live"]
     assert ("i", "NIFTY IT") not in e.refreshes                         # loaded today already: no candle request
-    e._prev_close["NIFTY IT"] = (now - dt.timedelta(days=1), 38000.0, 38100.0, 37900.0, now.date())
+    e._prev_close["NIFTY IT"] = (now - dt.timedelta(days=1), [(y - dt.timedelta(days=1), 37900.0), (y, 38000.0)])
     e.ticker()
     assert ("i", "NIFTY IT") in e.refreshes                             # a new day: loaded again
 
@@ -84,7 +85,7 @@ def test_on_a_day_without_trading_the_last_sessions_close_and_its_change_are_sho
     e = _eng()
     now = em.now_ist()
     last = (now - dt.timedelta(days=1)).date()
-    e._prev_close["NIFTY"] = (now, 25044.65, 25044.65, 24900.0, last)          # last session's close 25,044.65; the one before 24,900
+    e._prev_close["NIFTY"] = (now, [(last - dt.timedelta(days=1), 24900.0), (last, 25044.65)])   # last session's close 25,044.65; the one before 24,900
     e.feed.latest["99926000"] = SimpleNamespace(ltp=25044.65, exch_ts=now - dt.timedelta(days=1))   # the last tick is from that session
     it = next(i for i in e.ticker() if i["key"] == "NIFTY")
     assert it["price"] == 25044.65 and it["prev_close"] == 24900.0 and it["change"] == 144.65 and it["pct"] == 0.58
@@ -120,3 +121,34 @@ def test_after_a_restart_the_bar_shows_the_stored_closes_at_once():
     fresh = _eng()                                                 # a new process: nothing in memory, Angel One not asked yet
     it = next(i for i in fresh.ticker() if i["key"] == "NIFTY IT")
     assert it["price"] == 121.0 and it["change"] == 11.0 and ("i", "NIFTY IT") in fresh.refreshes   # shown at once, refreshed in the background
+
+
+
+def test_with_ticks_today_the_reference_is_the_last_close_before_today_even_from_an_old_load():
+    # loaded last evening (its last session is yesterday); this morning's first ticks must be compared with yesterday, not the day before
+    e = _eng()
+    now = em.now_ist()
+    y = (now - dt.timedelta(days=1)).date()
+    e._prev_close["NIFTY"] = (now - dt.timedelta(hours=12), [(y - dt.timedelta(days=1), 24900.0), (y, 25000.0)])
+    e.feed.latest["99926000"] = SimpleNamespace(ltp=25100.0, exch_ts=now)
+    it = next(i for i in e.ticker() if i["key"] == "NIFTY")
+    assert it["prev_close"] == 25000.0 and it["change"] == 100.0 and it["today"] is True
+
+
+def test_the_sidebar_and_top_bottom_index_quote_use_the_same_rule():
+    e = _eng()
+    now = em.now_ist()
+    last = (now - dt.timedelta(days=1)).date()
+    e._prev_close["BANKNIFTY"] = (now, [(last - dt.timedelta(days=1), 58850.65), (last, 59741.25)])
+    q = asyncio.run(e.index_quote("BANKNIFTY"))
+    assert q["price"] == 59741.25 and q["change"] == 890.6 and q["pct"] == 1.51 and q["today"] is False      # was +0.00% on the holiday
+
+
+
+def test_the_first_closes_file_layout_is_still_read():
+    import json
+    em.INDEX_CLOSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    em.INDEX_CLOSE_PATH.write_text(json.dumps({"NIFTY": ["2026-11-10T20:45:00", 24986.4, 25044.65, 24986.4, "2026-11-09"]}), encoding="utf-8")
+    e = _eng()
+    it = next(i for i in e.ticker() if i["key"] == "NIFTY")
+    assert it["price"] == 25044.65 and it["change"] == 58.25 and it["session"] == "2026-11-09"
