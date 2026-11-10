@@ -52,6 +52,7 @@ STATE_PATH = Path("data/watchlist.json")
 # rewrite it, so its intraday window is pinned here instead of sliding with the REST window.
 FIRST_CONTRACT_MINUTES_FROM = dt.date(2026, 10, 12)
 CONTRACTS_PATH = Path("data/paper_trading/contracts.json")      # every futures contract seen per symbol (expired ones disappear from Angel One's master)
+INDEX_CLOSE_PATH = Path("data/paper_trading/index_close.json")   # the market bar's last closes: shown at once after a restart
 SNAPSHOT_DIR = Path("data/paper_trading/snapshots")              # the last good screen of each instrument: a restart shows it at once instead of nothing
 SNAPSHOT_SAVE_SECONDS = 60
 JOURNAL_PATH = Path("data/paper_trading/journal.jsonl")         # append-only log of live events
@@ -1092,6 +1093,7 @@ class PaperEngine:
         """The market bar: every TICKER_INDICES index with its price and change versus the previous close. It never waits: the live tick, else the last
         daily close. The previous close is loaded ONCE a day per index, in the background (it shares Angel One's candle quota with the strategy)."""
         now = now_ist()
+        self._closes_from_disk()
         out = []
         for key, (ex, tok, label) in TICKER_INDICES.items():
             cached = self._prev_close.get(key)
@@ -1152,7 +1154,36 @@ class PaperEngine:
         before_last = float(df["close"].iloc[-2]) if df is not None and len(df) >= 2 else None       # the close before the last session
         last_day = df.index[-1].date() if df is not None and not df.empty else None
         self._prev_close[name] = (now, prev_close, last_close, before_last, last_day)
+        self._closes_to_disk()
         return self._prev_close[name]
+
+    def _closes_to_disk(self) -> None:
+        """Failing to store must never touch the engine."""
+        try:
+            rows = {k: [v[0].isoformat(), *v[1:4], v[4].isoformat() if len(v) > 4 and v[4] else None] for k, v in self._prev_close.items() if len(v) >= 5}
+            INDEX_CLOSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = INDEX_CLOSE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(rows), encoding="utf-8")
+            tmp.replace(INDEX_CLOSE_PATH)
+        except (OSError, TypeError, ValueError):
+            log.warning("could not store the market bar's closes")
+
+    def _closes_from_disk(self) -> None:
+        """Once per process: the closes stored before a restart (they are refreshed in the background as usual, being of an earlier fetch)."""
+        if self.__dict__.get("_closes_loaded"):
+            return
+        self._closes_loaded = True
+        try:
+            rows = json.loads(INDEX_CLOSE_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for k, v in rows.items():
+            if k not in self._prev_close and isinstance(v, list) and len(v) == 5:
+                try:
+                    at = dt.datetime.fromisoformat(v[0]) - dt.timedelta(days=1)       # older than today: a background refresh is still asked for
+                    self._prev_close[k] = (at, v[1], v[2], v[3], dt.date.fromisoformat(v[4]) if v[4] else None)
+                except (TypeError, ValueError):
+                    continue
 
     # ---- views -----------------------------------------------------------
     def overview(self, owner=ALL) -> dict:

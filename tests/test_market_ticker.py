@@ -104,3 +104,19 @@ def test_a_chart_seen_before_opens_at_once_and_refreshes_in_the_background():
     e._index_charts[("NIFTY", "5m")] = (em.now_ist() - dt.timedelta(minutes=10), df)     # an old copy
     out = asyncio.run(e.index_chart("NIFTY", "5m"))
     assert len(out) == 5 and len(e.calls) == 1 and ("ic", "NIFTY", "5m") in e.refreshes   # served at once, refreshed in the background
+
+
+
+def test_after_a_restart_the_bar_shows_the_stored_closes_at_once():
+    # 10 Nov 2026: after a deploy the bar showed blanks for 1-2 minutes, its closes queued behind the strategy's startup candle requests
+    e = _eng()
+    idx = pd.date_range("2026-11-05", periods=3, freq="B", tz=IST)
+    df = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": [100.0, 110.0, 121.0], "volume": 0}, index=idx)
+
+    async def candles(*a, **k):
+        return df
+    e._candles = candles
+    asyncio.run(e._load_index_close("NIFTY IT"))                 # stored on disk
+    fresh = _eng()                                                 # a new process: nothing in memory, Angel One not asked yet
+    it = next(i for i in fresh.ticker() if i["key"] == "NIFTY IT")
+    assert it["price"] == 121.0 and it["change"] == 11.0 and ("i", "NIFTY IT") in fresh.refreshes   # shown at once, refreshed in the background
