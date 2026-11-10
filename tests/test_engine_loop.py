@@ -168,7 +168,7 @@ def test_a_live_index_price_never_waits_for_the_candle_queue():
     async def go():
         e = em.PaperEngine.__new__(em.PaperEngine)
         e._prev_close = {}
-        e.feed = SimpleNamespace(latest={"99926009": SimpleNamespace(ltp=55000.0)}, healthy=lambda *_: True, age=lambda *_: 0.1)
+        e.feed = SimpleNamespace(latest={"99926009": SimpleNamespace(ltp=55000.0, exch_ts=em.now_ist())}, healthy=lambda *_: True, age=lambda *_: 0.1)   # a tick of today
         release = asyncio.Event()
 
         async def slow(*a, **k):
