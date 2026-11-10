@@ -22,7 +22,7 @@ from app.strategy.top_bottom.gap_protocol import NSE, Session
 from app.strategy.top_bottom.intraday import IntradayInitial, Minute, run_intraday
 from app.strategy.top_bottom.models import Trade
 
-WAITING_EXITS = ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT")
+WAITING_EXITS: tuple = ()   # since 10 Nov 2026 no exit waits for a new System Point (the existing ones stay usable)
 ROLLED = "ROLLED_TO_NEXT_CONTRACT"
 
 

@@ -198,3 +198,28 @@ def test_symbol_groups_for_real_orders():
     assert st.symbol_allowed("GOLDM", ["MCX"]) and not st.symbol_allowed("GOLDM", ["STOCKS", "NIFTY"])
     assert st.symbol_allowed("RELIANCE", ["STOCKS"]) and not st.symbol_allowed("RELIANCE", ["MCX"])
     assert not st.symbol_allowed("NIFTY", ["STOCKS"])                                    # the index futures are only ever allowed by name
+
+
+@async_test
+async def test_the_real_trades_page_lists_only_angel_one_fills_of_all_instruments(e2e, monkeypatch):
+    """The Real Trades page (10 Nov 2026): real trades kept apart from paper, every instrument together."""
+    from types import SimpleNamespace
+    from app import main as appmain
+    from app.broker import api as bapi
+    fa, rt = e2e.fa, e2e.rt
+    monkeypatch.setattr(bapi, "user_id_of", lambda r: e2e.uid)
+    monkeypatch.setattr(bapi, "_executor", lambda: rt)
+    monkeypatch.setattr(appmain, "engine", SimpleNamespace(owned=lambda iid, uid: None))
+    e2e.sync(None)
+    assert bapi.my_tb_real_trades_all(None, e2e.db)["trades"] == []
+    rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)
+    await rt.tick(MON)
+    fa.fill(fa.open_orders()[0]["orderid"], 50002.0)
+    e2e.sync(PAPER_BUY)
+    await rt.tick(secs(5))
+    d = bapi.my_tb_real_trades_all(None, e2e.db)
+    assert d["open"] == 1 and d["closed"] == 0 and d["trades"][0]["symbol"] == "BANKNIFTY" and d["instruments"][0]["position"]["side"] == "BUY"
+    fa.fill(fa.open_orders("STOPLOSS_LIMIT")[0]["orderid"], 49500.0)
+    await rt.tick(secs(10))
+    d = bapi.my_tb_real_trades_all(None, e2e.db)
+    assert d["closed"] == 1 and d["open"] == 0 and d["realised"] == -502.0 * 30 and d["wins"] == 0

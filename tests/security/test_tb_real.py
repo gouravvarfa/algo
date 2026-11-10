@@ -205,10 +205,14 @@ async def test_a_gap_exit_cancels_the_stop_and_sends_an_exit_limit_at_once(env):
     sid = await open_long(env)
     env.sync(None, secs(60))
     await go(env, env.ev("EXIT", "BUY", now=secs(60), reason="GAP_PROTOCOL_EXIT", exit_price=49000.0), now=secs(60))
-    await env.rt.tick(secs(65))
     assert env.fb.orders[sid]["status"] == "cancelled"
-    _, x = env.fb.last("entry")
+    xid, x = env.fb.last("entry")
     assert x["p"]["transactiontype"] == "SELL" and x["p"]["ordertype"] == "LIMIT" and x["p"]["quantity"] == "30"
+    await env.rt.tick(secs(64))                                                                        # the LIMIT exit did not fill in 3 s
+    assert env.fb.orders[xid]["status"] == "cancelled"
+    await env.rt.tick(secs(65))
+    _, m = env.fb.last("entry")
+    assert m["p"]["transactiontype"] == "SELL" and m["p"]["ordertype"] == "MARKET"                   # then at the market
 
 
 @async_test
@@ -217,9 +221,9 @@ async def test_a_stop_that_does_not_fill_in_time_is_replaced_by_an_exit_order(en
     env.sync(None, secs(60))
     await go(env, env.ev("EXIT", "BUY", now=secs(60), reason="STOP_LOSS_REVERSAL", exit_price=49500.0), now=secs(60))
     assert env.fb.orders[sid]["status"] == "trigger pending"                                              # waiting for our own stop
-    await env.rt.tick(secs(80))
-    assert env.fb.orders[sid]["status"] == "trigger pending"                                              # still inside the 30 s grace
-    await env.rt.tick(secs(95))
+    await env.rt.tick(secs(62))
+    assert env.fb.orders[sid]["status"] == "trigger pending"                                              # still inside the 3 s grace
+    await env.rt.tick(secs(64))
     assert env.fb.orders[sid]["status"] == "cancelled" and env.fb.last("entry")[1]["p"]["transactiontype"] == "SELL"
 
 
@@ -241,12 +245,12 @@ async def test_an_unfilled_entry_is_cancelled_and_placed_again_three_times_then_
 
 
 @async_test
-async def test_a_price_that_ran_away_is_not_chased(env):
+async def test_a_price_that_ran_away_is_still_entered_at_the_live_price(env):
     env.sync(None)
-    env.fb.ltp_value = 50400.0                                                                           # 400 points past 50000, band is 250
+    env.fb.ltp_value = 50400.0                                                                           # 400 points past 50000 (it used to be skipped)
     await go(env, env.ev("ENTRY", "BUY"))
-    a = env.state()
-    assert env.fb.n == 0 and a["pending_entry"] is None and "not chasing" in a["missed"][-1]["reason"]
+    _, o = env.fb.last("entry")
+    assert env.fb.n == 1 and o["p"]["ordertype"] == "LIMIT" and float(o["p"]["price"]) == 50402.0       # decided 10 Nov 2026: never skipped
 
 
 @async_test
@@ -374,7 +378,7 @@ async def test_every_order_is_stored_and_audited_and_no_secret_is_in_them(env):
     assert len(rows) == 1 and rows[0]["order_type"] == "LIMIT"
     acts = [r["action"] for r in env.db.execute("SELECT action FROM audit_log")]
     assert "broker.tb.order" in acts
-    blob = json.dumps(env.state()) + json.dumps([dict(r) for r in rows])
+    blob = json.dumps(env.state()) + json.dumps([{k: v for k, v in dict(r).items() if k not in ("created_at", "updated_at")} for r in rows])   # wall-clock times can contain "1234"
     for s in ("KEY12345", "JBSWY3DPEHPK3PXP", "1234"):
         assert s not in blob.replace("1234567", "")
 

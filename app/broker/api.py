@@ -299,6 +299,32 @@ def my_tb_exit(instrument_id: str, request: Request, c=Depends(db)):
     return {"result": out, "message": msg}
 
 
+@router.get("/api/me/broker/tb-real-trades")
+def my_tb_real_trades_all(request: Request, c=Depends(db)):
+    """The Real Trades page: every REAL Top-Bottom trade of this person (only what Angel One filled), all instruments together, kept apart from paper."""
+    from app import main as appmain
+    from app.broker import tb_real
+    uid = user_id_of(request)
+    rt = _executor()
+    states = {x["instrument_id"]: x for x in (rt.view(c, uid) if rt is not None else [])}
+    sw = {r["instrument_id"]: dict(r) for r in c.execute("SELECT instrument_id, symbol, real_on, changed_at FROM user_instrument_real WHERE user_id=?", (uid,))}
+    ids = set(sw) | {r["instrument_id"] for r in c.execute("SELECT DISTINCT instrument_id FROM real_tb_orders WHERE user_id=?", (uid,))}
+    trades, instruments = [], []
+    for iid in sorted(ids):
+        inst = appmain.engine.owned(iid, uid)
+        per_qty = inst.pnl_units / inst.quantity if inst is not None and inst.quantity else 1.0
+        st = states.get(iid) or {}
+        sym = (inst.symbol if inst is not None else None) or (sw.get(iid) or {}).get("symbol") or st.get("symbol") or iid
+        for t in tb_real.RealTB.real_trades(c, uid, iid, per_qty):
+            trades.append({**t, "instrument_id": iid, "symbol": sym})
+        instruments.append({"instrument_id": iid, "symbol": sym, "real_on": bool((sw.get(iid) or {}).get("real_on")), "position": st.get("position"),
+                            "stop_target": st.get("stop_target"), "halted": st.get("halted")})
+    trades.sort(key=lambda t: t.get("entry_at") or 0, reverse=True)
+    closed = [t for t in trades if t.get("status") == "CLOSED"]
+    return {"trades": trades, "instruments": instruments, "realised": round(sum(t.get("pnl_amount") or 0 for t in closed), 2), "closed": len(closed),
+            "wins": sum(1 for t in closed if (t.get("pnl_amount") or 0) > 0), "open": sum(1 for t in trades if t.get("status") == "OPEN")}
+
+
 @router.get("/api/me/broker/tb/{instrument_id}/trades")
 def my_tb_trades(instrument_id: str, request: Request, c=Depends(db)):
     """Real trades only (Angel One fills), plus what the executor holds now, for the Real view of the Top-Bottom page."""

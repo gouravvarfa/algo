@@ -16,6 +16,7 @@ const BuilderPage = lazy(() => import('../features/builder/BuilderPage'))
 const OptionChainPage = lazy(() => import('../features/options/OptionChainPage'))
 const SettingsPage = lazy(() => import('../features/settings/SettingsPage'))
 const PositionsPage = lazy(() => import('../features/positions/PositionsPage'))
+const RealTradesPage = lazy(() => import('../features/realtrades/RealTradesPage'))
 const UsersPage = lazy(() => import('../features/admin/UsersPage'))
 const ViewAsPage = lazy(() => import('../features/admin/ViewAsPage'))
 const AuditPage = lazy(() => import('../features/admin/AuditPage'))
@@ -72,6 +73,7 @@ export function App() {
         <Route path="/options" element={<Guard><OptionChainPage /></Guard>} />
         <Route path="/settings" element={<Guard><SettingsPage /></Guard>} />
         <Route path="/positions" element={<Guard><PositionsPage /></Guard>} />
+        <Route path="/real-trades" element={<Guard><RealTradesPage /></Guard>} />
         <Route path="/account" element={<Guard><AccountPage /></Guard>} />
         <Route path="*" element={<Navigate to="/top-bottom" replace />} />
       </Route>

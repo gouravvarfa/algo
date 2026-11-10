@@ -70,6 +70,7 @@ CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
 NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
 STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
 FIRST_15_START, FIRST_15_END = dt.time(9, 15), dt.time(9, 30)
+MAX_TRADES_PER_DAY = 2      # decided with the user, 10 Nov 2026: at most two entries (reversals included) per trading day
 
 
 @dataclass(frozen=True)
@@ -162,7 +163,14 @@ def run_intraday(
     stopped_side: str | None = None
     lift_day: dt.date | None = None         # that next trading day
 
-    def new_trade(direction, level, fill, anchor, ts, day_i, gap_state=None) -> Trade:
+    day_entries: dict[dt.date, int] = {}
+
+    def can_enter(ts) -> bool:
+        return day_entries.get(ts.date(), 0) < MAX_TRADES_PER_DAY
+
+    def new_trade(direction, level, fill, anchor, ts, day_i, gap_state=None, count=True) -> Trade:
+        if count:
+            day_entries[ts.date()] = day_entries.get(ts.date(), 0) + 1
         t = Trade(
             direction=direction, symbol=symbol, trading_symbol=symbol, expiry="", instrument_class="INDEX", lot_size=0,
             signal_date=ts, entry_date=ts, entry_price=fill, system_point=level, initial_sl=anchor, active_stop=anchor,
@@ -286,7 +294,7 @@ def run_intraday(
             anchor_r = bot if roll_in == "BUY" else top
             level_r = top if roll_in == "BUY" else bot
             if anchor_r is not None:
-                open_t = new_trade(roll_in, level_r if level_r is not None else first.open, first.open, anchor_r, first.ts, i)
+                open_t = new_trade(roll_in, level_r if level_r is not None else first.open, first.open, anchor_r, first.ts, i, count=False)
                 open_t.rolled_in = True
                 open_t.events.append((first.ts, f"ROLL IN: {roll_in} continued in this contract at {_f(first.open)} (stop {_f(anchor_r)} from this contract's own System Point)"))
                 block_after = None
@@ -376,6 +384,12 @@ def run_intraday(
                     open_t.gap_first_high, open_t.gap_first_low = fc.high, fc.low
                     close_trade(open_t, c.ts, fill, level, "GAP_EXIT_15M")
                     open_t, mode, gap_resolved = None, None, True
+                    # decided with the user (10 Nov 2026): the gap exit REVERSES at once, at the exit price, like a stop-and-reverse
+                    rev = "SELL" if buy else "BUY"
+                    anchor = top if rev == "SELL" else bot
+                    if anchor is not None and can_enter(c.ts):
+                        open_t = new_trade(rev, level, fill, anchor, c.ts, i)
+                        open_t.events.append((c.ts, f"GAP REVERSE: {rev} at {_f(fill)} right after the 15-minute rule exit"))
                     continue  # the exit candle never also enters (conservative)
                 breakeven(c)
                 continue
@@ -387,6 +401,8 @@ def run_intraday(
                     level = fc.high if buy else fc.low
                     fill = max(level, c.open) if buy else min(level, c.open)
                     block_after = None
+                    if not can_enter(c.ts):
+                        continue
                     t = new_trade(mode_side, mode_level, fill, mode_anchor, c.ts, i, "GAP_ENTRY")
                     t.signal_price = level
                     t.gap_first_high, t.gap_first_low = fc.high, fc.low
@@ -420,7 +436,7 @@ def run_intraday(
                             # never reverse, wait for a System Point confirmed after this exit.
                             close_trade(open_t, c.ts, fill, stop, BREAKEVEN_EXIT)
                             open_t = None
-                            block_after = i - 1
+                            block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -434,7 +450,7 @@ def run_intraday(
                             if open_t.entry_date.date() == day:
                                 stopped_day, stopped_side, lift_day = day, open_t.direction, None
                             open_t = None
-                            block_after = i - 1
+                            block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -449,7 +465,7 @@ def run_intraday(
                             used_high = True
                         rev = "SELL" if buy else "BUY"
                         anchor = top if rev == "SELL" else bot   # latest Top / Bottom, as in the daily engine
-                        if anchor is None:
+                        if anchor is None or not can_enter(c.ts):
                             open_t = None
                             break
                         if too_close:   # filter ON and the points are too close: the stop-out stands, the REVERSAL is not taken
@@ -472,7 +488,7 @@ def run_intraday(
                 else:
                     cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and c.high > top and not used_high
                     cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and c.low < bot and not used_low
-                if not (cand_buy or cand_sell):
+                if not (cand_buy or cand_sell) or not can_enter(c.ts):
                     break
                 if too_close:   # a genuine crossing happened, but the opposing points are too close: no new entry
                     block(c, "ENTRY", "BUY" if cand_buy and not cand_sell else "SELL" if cand_sell and not cand_buy else "BUY/SELL", top if cand_buy else bot)

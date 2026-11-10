@@ -69,12 +69,6 @@ def test_open_position_is_closed_in_the_old_contract_and_continued_in_the_next_w
     assert r.rolls[0]["old_price"] == 112.0 and r.rolls[0]["new_price"] == 142.0 and r.active.trading_symbol == "BANKNIFTYNOV"
 
 
-def test_far_structural_stop_in_the_new_contract_exits_only_at_the_one_percent_stop():
-    nov = flat(19, 30, 112.0) + minutes(20, 30, [112.0, 111.0, 110.0, 109.0, 88.0] + [88.0] * 40) + flat(21, 30, 88.0)           # Nov's Bottom is 120 (15% away)
-    r = run([OCT, NOV], {"1": daily(0), "2": daily(30)}, {"1": oct_with_open_buy(), "2": nov})
-    assert [(t.contract, t.direction, t.exit_reason) for t in r.trades] == [("BANKNIFTYOCT", "BUY", ce.ROLLED), ("BANKNIFTYNOV", "BUY", "CAPPED_1_PERCENT_STOP_EXIT")]
-
-
 def test_close_structural_stop_in_the_new_contract_reverses_inside_the_new_contract_only():
     closes = [120, 140, 150, 140.5, 145, 146, 146, 146, 146, 146]                                                                 # Nov: Top 150, Bottom 140.5 (1.1% under a 142 entry)
     days = list(pd.bdate_range("2026-10-01", periods=10))

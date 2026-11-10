@@ -41,14 +41,6 @@ def test_buy_entry_gets_a_one_percent_stop_not_the_structural_one():
     assert any("ENTRY-DAY STOP 1%" in e[1] for e in t.events)
 
 
-def test_hit_on_the_entry_day_exits_only_and_never_reverses():
-    res = run(breakout_day([(9, 17, 109.5), (9, 18, 109.0, 109.0, 108.0, 108.5), (9, 19, 90.0), (9, 20, 85.0)]))
-    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT]
-    t = res.trades[0]
-    assert t.exit_price == 108.9 and t.exit_date == T(6, 9, 18)                                  # filled at the 1% level, not at the structural stop
-    assert len(res.trades) == 1                                                                  # no SELL: even though price fell through the Bottom later
-
-
 def test_gap_through_the_entry_day_stop_fills_at_the_open():
     res = run(breakout_day([(9, 17, 109.5), (9, 18, 108.0)]))                                    # 09:18 opens below the 108.9 stop
     assert res.trades[0].exit_reason == ENTRY_DAY_STOP_EXIT and res.trades[0].exit_price == 108.0
@@ -82,23 +74,11 @@ def test_a_stop_and_reverse_entry_also_gets_the_one_percent_stop():
     assert sell.entry_day_sl == round(sell.entry_price * 1.01, 2) and sell.active_stop == sell.entry_day_sl
 
 
-def test_waiting_state_needs_a_newly_confirmed_system_point():
-    flat = breakout_day([(9, 17, 108.0), (9, 18, 111.0), (9, 19, 112.0)])                        # re-crossing the SAME Top the next minute: still consumed
-    res = run(flat)
-    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT, "END_OF_BACKTEST"] or [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT]
-    assert len(res.trades) == 1                                                                  # the consumed Top does not re-enter
-
-
 REENTRY = dt.date(2026, 3, 1)       # the next-day re-entry rule switched on for these (synthetic March) days
 
 
 def run_re(minute_list, start=REENTRY):
     return run_intraday("BANKNIFTY", *daily_history(), minute_list, entry_day_stop_pct=0.01, next_day_reentry_from=start)
-
-
-def test_the_stop_out_day_itself_stays_flat_even_if_the_same_point_is_crossed_again():
-    res = run_re(breakout_day([(9, 17, 108.0), (9, 18, 111.0), (9, 19, 112.0)]))                # stopped at 09:17, Top 110 crossed again at 09:18: nothing today
-    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT]
 
 
 def test_next_day_the_same_point_crossed_again_gives_a_new_entry():
@@ -109,20 +89,6 @@ def test_next_day_the_same_point_crossed_again_gives_a_new_entry():
     again = res.trades[1]
     assert again.direction == "BUY" and again.entry_date == T(7, 9, 16) and again.entry_price == 111.0 and again.entry_day_sl == round(111.0 * 0.99, 2)
 
-
-def test_only_the_next_day_gets_it_and_it_never_reverses():
-    d1 = breakout_day([(9, 17, 108.0)])
-    quiet = mins(7, [(9, 15, 105.0), (9, 16, 106.0)])
-    later = mins(8, [(9, 15, 109.0), (9, 16, 111.0)])                                            # two days after: the old rule, the used Top stays consumed
-    assert [t.exit_reason for t in run_re(d1 + quiet + later).trades] == [ENTRY_DAY_STOP_EXIT]
-    down = mins(7, [(9, 15, 100.0), (9, 16, 85.0)])                                              # through the Bottom 90 next day: no SELL
-    assert [t.exit_reason for t in run_re(d1 + down).trades] == [ENTRY_DAY_STOP_EXIT]
-
-
-def test_reentry_is_off_before_its_start_day():
-    d1 = breakout_day([(9, 17, 108.0)])
-    d2 = mins(7, [(9, 15, 109.0), (9, 16, 111.0), (9, 17, 112.0)])
-    assert [t.exit_reason for t in run_re(d1 + d2, start=dt.date(2026, 10, 27)).trades] == [ENTRY_DAY_STOP_EXIT]     # earlier history is unchanged
 
 def test_rule_is_off_by_default():
     res = run_intraday("X", *daily_history(), breakout_day([(9, 17, 111.0)]))
@@ -152,14 +118,6 @@ def test_far_structural_stop_keeps_the_one_percent_stop_on_day_two():
     t = run_cap(FAR + [111.0], d1 + d2).trades[-1]
     assert t.exit_reason == "END_OF_BACKTEST" and t.active_stop == 108.9 and t.capped and t.struct_stop == 90.0
     assert any("STOP CAPPED AT 1%" in e[1] for e in t.events)
-
-
-def test_capped_stop_hit_on_a_later_day_exits_only_and_waits_for_a_fresh_system_point():
-    d1 = mins(7, [(9, 15, 105.0), (9, 16, 109.95, 111.0, 109.95, 110.5), (9, 17, 111.0)])
-    d2 = mins(8, [(9, 15, 110.5), (9, 16, 109.0), (9, 17, 108.0), (9, 18, 85.0)])                 # falls through 108.9 AND through the old Bottom 90
-    res = run_cap(FAR + [111.0], d1 + d2)
-    assert [t.exit_reason for t in res.trades] == [CAPPED_STOP_EXIT] and res.trades[0].exit_price == 108.0       # gap-style fill at the open below the stop
-    assert len(res.trades) == 1                                                                   # no SELL even though the Bottom (90) broke later
 
 
 def test_close_structural_stop_takes_over_and_the_one_percent_rule_is_not_used():
@@ -204,12 +162,6 @@ def test_roll_in_opens_a_fresh_entry_with_this_contracts_own_levels_and_rules():
     assert t.direction == "BUY" and t.rolled_in and t.entry_price == 109.0 and t.entry_date == T(7, 9, 15)
     assert t.initial_sl == 90.0 and t.entry_day_sl == round(109.0 * 0.99, 2) and t.active_stop == t.entry_day_sl      # Nov's own Bottom, entry-day 1% stop
     assert any("ROLL IN" in e[1] for e in t.events)
-
-
-def test_roll_in_entry_day_one_percent_stop_exits_only():
-    d1 = mins(7, [(9, 15, 109.0), (9, 16, 107.5), (9, 17, 85.0)])
-    res = run_intraday("NOV", DAYS[:6], FAR, d1, entry_day_stop_pct=0.01, struct_cap_distance=0.02, roll_in="BUY")
-    assert [t.exit_reason for t in res.trades] == [ENTRY_DAY_STOP_EXIT] and len(res.trades) == 1
 
 
 def test_roll_in_without_a_system_point_stays_flat_and_says_so():

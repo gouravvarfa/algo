@@ -29,9 +29,9 @@ from app.providers import angelone_client as ao
 
 log = logging.getLogger("real_tb")
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-RETRY_AFTER_S = 30.0
+RETRY_AFTER_S = 3.0               # decided with the user, 10 Nov 2026: a LIMIT entry / exit not filled in 3 s goes again at the market
 MAX_ATTEMPTS = 3
-STOP_GRACE_S = 30.0
+STOP_GRACE_S = 3.0                # a stop that triggered (or should have) and did not fill in 3 s: exit at the market
 STALE_SIGNAL_S = 900.0
 NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
@@ -451,6 +451,7 @@ class RealTB:
             a["position"] = None
             a["exit_since"] = None
             a["stop_target"] = None
+            a.pop("exit_tries", None)
             a["_clean_stops"] = True
 
     async def _reconcile(self, c, broker, a: dict, now: dt.datetime) -> None:
@@ -579,19 +580,14 @@ class RealTB:
             if reason in ("market closed",):
                 return                                              # wait for the session
             return self._miss(a, now, reason)
-        side, P = pe["side"], pe["strategy_price"]
-        band, buf = P * ENTRY_BAND_PCT, dryrun.entry_buffer(a["symbol"], P, ct.get("exch_seg"))
-        tick = dryrun._tick(ct)[0]
-        if side == "BUY":
-            if ltp > P + band:
-                return self._miss(a, now, f"price ran {ltp - P:.2f} points past the strategy price {P} (band {band:.2f}); not chasing")
-            limit = dryrun.rnd(min(P + band, ltp + buf), tick, "up")
+        side = pe["side"]
+        buf, tick = dryrun.entry_buffer(a["symbol"], ltp, ct.get("exch_seg")), dryrun._tick(ct)[0]
+        # decided with the user (10 Nov 2026): the first try is a LIMIT at the live price; not filled in RETRY_AFTER_S -> at the MARKET. Never skipped.
+        if pe["attempts"] == 0:
+            payload = dryrun._payload(ct, side, pe["qty"], "LIMIT", price=dryrun.rnd(ltp + buf, tick, "up") if side == "BUY" else dryrun.rnd(ltp - buf, tick, "down"))
         else:
-            if ltp < P - band:
-                return self._miss(a, now, f"price ran {P - ltp:.2f} points past the strategy price {P} (band {band:.2f}); not chasing")
-            limit = dryrun.rnd(max(P - band, ltp - buf), tick, "down")
+            payload = dryrun._payload(ct, side, pe["qty"], "MARKET", price=0)
         pe["attempts"] += 1
-        payload = dryrun._payload(ct, side, pe["qty"], "LIMIT", price=limit)
         o = await self._place(c, broker, a, now, "entry", payload, f"entry attempt {pe['attempts']} at live {ltp}", ct, attempt=pe["attempts"])
         if o is not None and o["state"] == "rejected":
             self._miss(a, now, o["message"] or "the entry order was rejected")
@@ -679,7 +675,10 @@ class RealTB:
             if ltp is None:
                 self._ev(a, now, "exit waiting for a live price")
                 return
-            payload = dryrun._payload(ct, side_close, p["qty"], "LIMIT", price=dryrun._limit(ct, a["symbol"], side_close, ltp))
+            tries = a.get("exit_tries", 0)
+            a["exit_tries"] = tries + 1
+            payload = (dryrun._payload(ct, side_close, p["qty"], "LIMIT", price=dryrun._limit(ct, a["symbol"], side_close, ltp)) if tries == 0
+                       else dryrun._payload(ct, side_close, p["qty"], "MARKET", price=0))          # a LIMIT first; not filled in RETRY_AFTER_S -> the MARKET
             await self._place(c, broker, a, now, "exit", payload, "exit the open position", ct)
             return
         if not market:

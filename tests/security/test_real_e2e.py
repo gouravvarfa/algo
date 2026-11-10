@@ -116,7 +116,7 @@ async def test_an_unfilled_entry_is_really_cancelled_at_angel_one(e2e):
     await rt.tick(secs(31))
     assert [b for k, b in fa.requests if k == "cancel"] == [{"variety": "NORMAL", "orderid": oid}] and fa.orders[oid]["status"] == "cancelled"
     await rt.tick(secs(32))
-    assert len(places(fa)) == 2                                                                           # attempt 2
+    assert len(places(fa)) == 2 and places(fa)[-1]["ordertype"] == "MARKET"                                # attempt 2: at the market (decided 10 Nov 2026)
 
 
 @async_test

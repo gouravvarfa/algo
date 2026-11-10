@@ -16,6 +16,7 @@ interface Item { to: string; label: string; icon: IconName }
 
 const MAIN: Item[] = [
   { to: '/top-bottom', label: 'Top Bottom', icon: 'chart' },
+  { to: '/real-trades', label: 'Real Trades', icon: 'history' },
   { to: '/positions', label: 'Positions', icon: 'history' },
   { to: '/simulator', label: 'Options Simulator', icon: 'sim' },
   { to: '/options-journal', label: 'Options Journal', icon: 'chain' },

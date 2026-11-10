@@ -62,13 +62,14 @@ _PLACE_KEYS = {"variety", "tradingsymbol", "symboltoken", "transactiontype", "ex
 
 
 def _checked(payload: dict[str, Any]) -> dict[str, Any]:
-    """Only the fields Angel One's order call knows, only the two order types the app uses, always a day order. Anything else is a bug and stops here."""
+    """Only the fields Angel One's order call knows, only the order types the app uses (LIMIT, STOPLOSS_LIMIT, and MARKET: the fallback when a LIMIT
+    entry / exit does not fill in 3 s, decided with the user 10 Nov 2026), always a day order. Anything else is a bug and stops here."""
     extra = set(payload) - _PLACE_KEYS - {"orderid"}
     if extra:
         raise AngelOneApiError(f"unexpected order field(s): {sorted(extra)}", "data", retryable=False)
-    if payload.get("ordertype") not in ("LIMIT", "STOPLOSS_LIMIT") or payload.get("duration") != "DAY":
-        raise AngelOneApiError("only LIMIT and STOPLOSS_LIMIT day orders may be sent", "data", retryable=False)
-    if payload.get("variety") not in ("NORMAL", "STOPLOSS") or payload.get("transactiontype") not in ("BUY", "SELL") or not payload.get("symboltoken"):
+    if payload.get("ordertype") not in ("LIMIT", "STOPLOSS_LIMIT", "MARKET") or payload.get("duration") != "DAY":
+        raise AngelOneApiError("only LIMIT, STOPLOSS_LIMIT and MARKET day orders may be sent", "data", retryable=False)
+    if (payload.get("ordertype") == "MARKET" and payload.get("variety") != "NORMAL") or payload.get("variety") not in ("NORMAL", "STOPLOSS") or payload.get("transactiontype") not in ("BUY", "SELL") or not payload.get("symboltoken"):
         raise AngelOneApiError("order is missing its variety, side or contract token", "data", retryable=False)
     return {**payload, "squareoff": "0", "stoploss": "0"} if "squareoff" not in payload else payload
 
