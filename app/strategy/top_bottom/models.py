@@ -95,6 +95,7 @@ class Trade:
     contract: str | None = None         # trading symbol of the futures contract this leg lives in (set by the live engine)
     rolled_in: bool = False             # this leg was opened by a contract roll (same direction as the leg it replaced)
     capped: bool = False               # True while the stop is the entry +/- 1% level because the structural stop is >= 2% from entry
+    handed_over: bool = False          # True once the day after the entry day has passed: from then on the stop only moves with the trade, never back
 
     @property
     def is_open(self) -> bool:

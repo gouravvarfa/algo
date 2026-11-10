@@ -221,3 +221,40 @@ def test_roll_in_is_ignored_when_a_position_already_exists_and_only_happens_once
     d = mins(7, [(9, 15, 109.0), (9, 16, 109.0)]) + mins(8, [(9, 15, 109.0), (9, 16, 109.0)])
     res = run_intraday("NOV", DAYS[:6], FAR + [109.0], d, entry_day_stop_pct=0.01, struct_cap_distance=0.02, roll_in="BUY")
     assert len([t for t in res.trades if t.rolled_in]) == 1
+
+
+def _never_loosens(t):
+    stops = [s for _, s in t.stop_history[1:]]                                                     # from day 2 (the entry-day 1% stop is replaced on purpose)
+    assert all((b >= a) if t.direction == "BUY" else (b <= a) for a, b in zip(stops, stops[1:])), stops
+
+
+def test_a_bottom_far_above_the_entry_is_trailed_to_not_sent_back_to_the_one_percent_stop():
+    # BANKNIFTY, 10 Nov 2026: BUY 54,378, new Bottom 58,926 (8.4% ABOVE the entry) -> the stop went back DOWN to the 1% stop 53,834
+    closes = FAR + [111, 118, 116, 120]                                                            # capped at first (Bottom 90 is 18% below), then Bottom 116 confirms (5.5% above)
+    d1 = mins(7, [(9, 15, 105.0), (9, 16, 109.95, 111.0, 109.95, 110.5), (9, 17, 111.0)])        # 7 Mar: BUY at 110
+    mid = mins(8, [(9, 15, 111.0), (9, 16, 111.0)])
+    d2 = mins(11, [(9, 15, 120.0), (9, 16, 120.0)])                                                # 11 Mar: Bottom 116 (pivot 9 Mar) confirmed by 10 Mar's close
+    t = run_cap(closes, d1 + mid + d2).trades[-1]
+    assert t.exit_reason == "END_OF_BACKTEST" and t.active_stop == 116.0 and not t.capped
+    _never_loosens(t)
+
+
+def test_a_top_far_below_a_sell_entry_is_trailed_to():
+    closes = [100, 90, 100, 110, 100, 92, 89, 82, 84, 80]                                         # Bottom 90, Top 110; SELL at 90 on 7 Mar; new Top 84 (6.7% below) confirms after 80
+    d1 = mins(7, [(9, 15, 95.0), (9, 16, 90.05, 90.05, 89.0, 89.5), (9, 17, 89.0)])
+    mid = mins(8, [(9, 15, 89.0), (9, 16, 89.0)])
+    d2 = mins(11, [(9, 15, 80.0), (9, 16, 80.0)])
+    t = run_cap(closes, d1 + mid + d2).trades[-1]
+    assert t.direction == "SELL" and t.exit_reason == "END_OF_BACKTEST" and t.active_stop == 84.0 and not t.capped
+    _never_loosens(t)
+
+
+def test_a_capped_stop_is_never_widened_later_when_a_lower_bottom_comes_within_two_percent():
+    closes = FAR + [111, 112, 108, 111]                                                            # capped at 108.9; later a Bottom 108.0 (1.8% below the entry) confirms
+    d1 = mins(7, [(9, 15, 105.0), (9, 16, 109.95, 111.0, 109.95, 110.5), (9, 17, 111.0)])
+    mid = mins(8, [(9, 15, 111.0), (9, 16, 111.0)])
+    d2 = mins(11, [(9, 15, 111.0), (9, 16, 111.0)])
+    t = run_cap(closes, d1 + mid + d2).trades[-1]
+    assert t.struct_stop == 108.0 and t.active_stop == 108.9                                       # it was moved back DOWN to 108.0 before
+    assert any("never moves back" in e[1] for e in t.events)
+    _never_loosens(t)

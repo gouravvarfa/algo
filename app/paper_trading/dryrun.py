@@ -208,3 +208,16 @@ def read(owner, limit: int = 300) -> list[dict]:
         return []
     rows = [json.loads(x) for x in DRYRUN_PATH.read_text(encoding="utf-8").splitlines() if x.strip()]
     return list(reversed([r for r in rows if r.get("owner") == owner][-limit:]))
+
+
+def may_move_stop(side: str, cur: float | None, target: float, entry_day: dt.date, pos: dict, now: dt.datetime) -> bool:
+    """Real (and shadow) stops: may the resting stop move from `cur` to `target`? Always WITH the trade (BUY up, SELL down). Back (wider) only on the
+    first trading day after the entry, when the strategy hands its 1% entry-day stop over to the structural one (a rule); `pos` remembers that day.
+    After it, never back, whatever the strategy says: a wrong wider stop (paper, 10 Nov 2026: BANKNIFTY 54,823 -> 53,834) must never reach a real order."""
+    if cur is None or ((target > cur) if side == "BUY" else (target < cur)):
+        return True
+    today = now.date()
+    if today <= entry_day:
+        return False
+    pos.setdefault("handover_day", today.isoformat())
+    return pos["handover_day"] == today.isoformat()

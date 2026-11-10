@@ -527,3 +527,30 @@ async def test_an_unknown_tick_uses_whole_rupees_which_every_futures_grid_accept
     [(_, p)] = [c for c in env.fb.calls if c[0] == "place"]
     price = float(p["price"])
     assert price == int(price) and round(price / 0.2, 6) == int(round(price / 0.2))
+
+
+@async_test
+async def test_a_real_stop_never_moves_back_after_the_handover_day(env):
+    # paper on 10 Nov 2026: a BANKNIFTY BUY's stop went from 54,823 back DOWN to 53,834 (a bug, fixed). A real stop must never follow such a move.
+    await open_long(env)                                                                      # Monday: stop 49,500 (the entry-day stop)
+    def mod_triggers():
+        return [c[2]["triggerprice"] for c in env.fb.calls if c[0] == "modify"]
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49000.0}, secs(30))
+    await env.rt.tick(secs(30))
+    assert env.state()["stop_target"] == 49500.0 and mod_triggers() == []                      # the entry day: never wider
+    tue = MON + dt.timedelta(days=1)
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49000.0}, tue)
+    await env.rt.tick(tue)
+    assert env.state()["stop_target"] == 49000.0                                             # the day after entry: the 1% stop is handed over to the structural one (a rule)
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49800.0}, tue + dt.timedelta(minutes=1))
+    await env.rt.tick(tue + dt.timedelta(minutes=1))
+    assert env.state()["stop_target"] == 49800.0                                             # trails up
+    wed = MON + dt.timedelta(days=2)
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49000.0}, wed)
+    await env.rt.tick(wed)
+    a = env.state()
+    assert a["stop_target"] == 49800.0 and mod_triggers()[-1] == "49800.00"                    # never back
+    assert any("never moves back" in ev["text"] if isinstance(ev, dict) else "never moves back" in str(ev) for ev in a["events"])
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 50100.0}, wed + dt.timedelta(minutes=1))
+    await env.rt.tick(wed + dt.timedelta(minutes=1))
+    assert env.state()["stop_target"] == 50100.0                                             # and still trails forward

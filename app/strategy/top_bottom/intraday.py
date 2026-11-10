@@ -136,7 +136,7 @@ def run_intraday(
     contract has no such System Point yet, no entry is taken (no guessing).
 
     struct_cap_distance (optional, needs entry_day_stop_pct): from the day AFTER entry, every day, if the structural stop (latest opposite
-    System Point, trailed as usual) is this fraction or MORE away from the ENTRY price, the stop stays at entry -/+ entry_day_stop_pct
+    System Point, trailed as usual) is this fraction or MORE away from the ENTRY price on the LOSS side (a stop trailed into profit is never capped), the stop stays at entry -/+ entry_day_stop_pct
     instead (fixed, never trails); once the structural stop is closer than that, it takes over. If the 1% stop is hit the position closes
     (CAPPED_1_PERCENT_STOP_EXIT) and the strategy stays FLAT until a System Point confirmed after the exit is crossed (no reverse)."""
     swings = detect_confirmed_swings(daily_dates, daily_closes, 1, 1)
@@ -242,20 +242,27 @@ def run_intraday(
             # capped-stop rule: track the structural stop on its own, then pick the stop for today (structural, or entry +/- 1% if it is too far)
             t = open_t
             buy_t = t.direction == "BUY"
+            handover, t.handed_over = not t.handed_over, True                # the first day after the entry day: the 1% entry-day stop is handed over (may widen, by rule)
             struct = t.struct_stop if t.struct_stop is not None else t.initial_sl
             if buy_t and bot is not None and bot > struct:
                 struct = bot
             elif not buy_t and top is not None and top < struct:
                 struct = top
             t.struct_stop = struct
-            far = abs(t.entry_price - struct) / t.entry_price >= struct_cap_distance
+            # "far" means far on the LOSS side only (BUY: below entry, SELL: above). A structural stop that has trailed past the entry into
+            # profit is never far: it was wrongly sent back to the 1% stop (BANKNIFTY, 10 Nov 2026: stop 58,926 above a 54,378 BUY -> 53,834)
+            risk = (t.entry_price - struct) if buy_t else (struct - t.entry_price)
+            far = risk / t.entry_price >= struct_cap_distance
             eff = t.entry_day_sl if far else struct
             if t.breakeven_date is not None:                                 # the 2% breakeven stop is never loosened
                 eff = max(eff, t.entry_price) if buy_t else min(eff, t.entry_price)
+            if not handover:                                                 # a trailing stop never moves back: from then on it only follows the trade
+                eff = max(eff, t.active_stop) if buy_t else min(eff, t.active_stop)
             if far != t.capped and t.breakeven_date is None:
                 t.events.append((first.ts, (f"STOP CAPPED AT {entry_day_stop_pct * 100:g}%: the structural stop {struct:,.2f} is {abs(t.entry_price - struct) / t.entry_price * 100:.2f}% from entry "
                                             f"(>= {struct_cap_distance * 100:g}%), so the stop stays at {t.entry_day_sl:,.2f}") if far else
-                                 f"STOP BACK TO STRUCTURAL: the structural stop {struct:,.2f} is now within {struct_cap_distance * 100:g}% of entry"))
+                                 f"STOP BACK TO STRUCTURAL: the structural stop {struct:,.2f} is now within {struct_cap_distance * 100:g}% of entry"
+                                 + ("" if eff == struct else f" (the stop never moves back, so it stays at {eff:,.2f})")))
             t.capped = far and t.breakeven_date is None
             if eff != t.active_stop:
                 t.active_stop = eff

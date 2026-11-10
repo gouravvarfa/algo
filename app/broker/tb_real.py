@@ -590,8 +590,13 @@ class RealTB:
         if paper and paper["direction"] == p["side"] and paper.get("active_stop") is not None:
             target = dryrun.rnd(float(paper["active_stop"]), p["tick"])
             if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
-                a["stop_target"] = target
-                self._ev(a, now, f"stop target is now {target}")
+                if dryrun.may_move_stop(p["side"], a["stop_target"], target, _p(p["entry_at"]).date() if p.get("entry_at") else now.date(), p, now):
+                    a["stop_target"] = target
+                    a.pop("held_stop", None)
+                    self._ev(a, now, f"stop target is now {target}")
+                elif a.get("held_stop") != target:
+                    a["held_stop"] = target
+                    self._ev(a, now, f"the strategy asked to move the stop BACK to {target}; a real stop never moves back after the day after entry, it stays at {a['stop_target']}")
         market = self._market_open((snap.get("instrument") or {}).get("session", "NSE"), now)
         # exit LIMIT order not filled: cancel, then place again next round at the live price
         if exits:
