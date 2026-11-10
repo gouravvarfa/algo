@@ -15,7 +15,13 @@ REPO=gouravvarfa/algo
 as_app() { sudo -u algo -H "$@"; }
 
 exec 9>/var/lock/algo-deploy.lock
-flock -n 9 || { echo "another deploy is running: skipping"; exit 0; }
+if [ -n "$SHA" ]; then
+  # the Deploy workflow WAITS for a timer run that holds the lock (it takes seconds) and never skips silently: on 10 Nov 2026 it met the timer at
+  # the same second, skipped with exit 0, and GitHub showed a green deploy while the server still ran the old commit
+  flock -w 240 9 || { echo "another deploy held the lock for 4 minutes: NOT deployed"; exit 1; }
+else
+  flock -n 9 || { echo "another deploy is running: skipping"; exit 0; }
+fi
 
 cd "$APP"
 PREV=$(as_app git rev-parse HEAD)
