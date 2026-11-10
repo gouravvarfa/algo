@@ -1115,23 +1115,32 @@ class PaperEngine:
         return out
 
     async def index_chart(self, key: str, tf: str) -> list[dict]:
-        """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call)."""
+        """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call).
+        A chart seen before opens AT ONCE from the cache and is refreshed in the background when older than its time to live (the candle requests
+        queue behind the strategy's own, so waiting for a fresh one made opening slow). Only the very first look waits for Angel One."""
         ex, tok, _label = TICKER_INDICES[key]
-        interval, days, ttl = INDEX_CHART_TF[tf]
+        _interval, _days, ttl = INDEX_CHART_TF[tf]
         now = now_ist()
-        cache = self.__dict__.setdefault("_index_charts", {})
-        hit = cache.get((key, tf))
-        if hit and (now - hit[0]).total_seconds() < ttl:
-            df = hit[1]
+        hit = self.__dict__.setdefault("_index_charts", {}).get((key, tf))
+        if hit is None:
+            df = await self._load_index_chart(key, tf)
         else:
-            df = await self._candles(ex, tok, interval, days, include_partial=True)
-            cache[(key, tf)] = (now, df)
+            df = hit[1]
+            if (now - hit[0]).total_seconds() >= ttl:
+                self._refresh_later(("ic", key, tf), lambda: self._load_index_chart(key, tf))
         tick = self.feed.latest.get(tok)
         if df is None or not len(df):
             return []
         rows = _candles_with_tick(df, tick.ltp if tick is not None and self.feed.healthy(tok) else None)
         vols = [float(v) for v in df["volume"]] if "volume" in df.columns else [0.0] * len(rows)     # an index has no traded volume (Angel One gives 0)
         return [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)]
+
+    async def _load_index_chart(self, key: str, tf: str):
+        ex, tok, _label = TICKER_INDICES[key]
+        interval, days, _ttl = INDEX_CHART_TF[tf]
+        df = await self._candles(ex, tok, interval, days, include_partial=True)
+        self.__dict__.setdefault("_index_charts", {})[(key, tf)] = (now_ist(), df)
+        return df
 
     async def _load_index_close(self, name: str) -> tuple:
         ex, tok = INDEX_TOKENS[name] if name in INDEX_TOKENS else TICKER_INDICES[name][:2]

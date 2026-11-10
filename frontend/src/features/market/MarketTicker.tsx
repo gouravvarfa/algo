@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createChart, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { get } from '../../lib/api'
@@ -58,10 +58,14 @@ export function MarketTicker() {
   const items = useMemo(() => q.data?.items ?? [], [q.data])
   const flash = useFlash(items)
   const [open, setOpen] = useState<string | null>(null)
+  const qc = useQueryClient()
+  // start loading an index's chart as soon as the pointer / finger is on it, so it is usually ready by the time the click lands
+  const warm = (key: string) => { void qc.prefetchQuery({ queryKey: ['market-chart', key, '5m'], queryFn: () => chartOf(key, '5m'), staleTime: 25_000 }) }
+  const close = () => { setOpen(null); (document.activeElement as HTMLElement | null)?.blur?.() }
   if (!items.length) return null
   const nse = q.data!.nse_open
   const row = (dup: boolean) => items.map((it) => (
-    <button key={(dup ? 'b-' : 'a-') + it.key} className={`tk-item ${tone(it.change)} ${flash[it.key] ?? ''}`} onClick={() => setOpen(it.key)}
+    <button key={(dup ? 'b-' : 'a-') + it.key} className={`tk-item ${tone(it.change)} ${flash[it.key] ?? ''}`} onClick={() => setOpen(it.key)} onPointerEnter={() => warm(it.key)} onTouchStart={() => warm(it.key)}
       tabIndex={dup ? -1 : 0} aria-hidden={dup || undefined} aria-label={dup ? undefined : `${it.label} ${fmt(it.price)} ${chg(it.change, it.pct)}. Open chart`}>
       <span className="tk-name">{it.label}</span>
       <span className="tk-price">{fmt(it.price)}</span>
@@ -80,20 +84,21 @@ export function MarketTicker() {
           <div className="tk-track" style={{ animationDuration: `${Math.max(45, items.length * 5)}s` }}>{row(false)}{row(true)}</div>
         </div>
       </div>
-      {current && <IndexChart item={current} onClose={() => setOpen(null)} />}
+      {current && <IndexChart item={current} onClose={close} />}
     </>
   )
 }
 
 const TFS = [['5m', '5 min'], ['15m', '15 min'], ['1D', '1 day']] as const
+const chartOf = (key: string, tf: string) => get<ChartData>(`/api/market/chart/${encodeURIComponent(key)}?tf=${tf}`)
 type Ind = { bb: boolean; vol: boolean; rsi: boolean }
 interface Hover { c: Candle; rsi: number | null; bb: { mid: number; upper: number; lower: number } | null }
 
 function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }) {
   const [tf, setTf] = useState<string>('5m')
   const [ind, setInd] = useState<Ind>({ bb: true, vol: true, rsi: true })
-  const q = useQuery({ queryKey: ['market-chart', item.key, tf], queryFn: () => get<ChartData>(`/api/market/chart/${encodeURIComponent(item.key)}?tf=${tf}`),
-    refetchInterval: tf === '1D' ? 300_000 : 30_000, retry: false })
+  const q = useQuery({ queryKey: ['market-chart', item.key, tf], queryFn: () => chartOf(item.key, tf), staleTime: 25_000, placeholderData: keepPreviousData,
+    refetchInterval: tf === '1D' ? 300_000 : 30_000, retry: 1 })
   const box = useRef<HTMLDivElement>(null)
   const rbox = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<Hover | null>(null)

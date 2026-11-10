@@ -89,3 +89,18 @@ def test_on_a_day_without_trading_the_last_sessions_close_and_its_change_are_sho
     it = next(i for i in e.ticker() if i["key"] == "NIFTY")
     assert it["price"] == 25044.65 and it["prev_close"] == 24900.0 and it["change"] == 144.65 and it["pct"] == 0.58
     assert it["today"] is False and it["session"] == last.isoformat() and it["live"] is False
+
+
+def test_a_chart_seen_before_opens_at_once_and_refreshes_in_the_background():
+    e = _eng()
+    idx = pd.date_range("2026-11-02", periods=5, freq="B", tz=IST)
+    df = pd.DataFrame({"open": [1.0] * 5, "high": [2.0] * 5, "low": [0.5] * 5, "close": [1.5] * 5, "volume": 0}, index=idx)
+
+    async def candles(*a, **k):
+        e.calls.append(a)
+        return df
+    e._candles = candles
+    asyncio.run(e.index_chart("NIFTY", "5m"))                                     # first look: waits for Angel One
+    e._index_charts[("NIFTY", "5m")] = (em.now_ist() - dt.timedelta(minutes=10), df)     # an old copy
+    out = asyncio.run(e.index_chart("NIFTY", "5m"))
+    assert len(out) == 5 and len(e.calls) == 1 and ("ic", "NIFTY", "5m") in e.refreshes   # served at once, refreshed in the background

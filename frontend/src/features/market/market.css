@@ -12,7 +12,8 @@
   -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 48px), transparent 100%);
   mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 48px), transparent 100%); }
 .tk-track { display: flex; width: max-content; height: 100%; animation: tk-scroll linear infinite; }
-.mticker:hover .tk-track, .mticker:focus-within .tk-track { animation-play-state: paused; }
+@media (hover: hover) { .mticker:hover .tk-track { animation-play-state: paused; } }
+.mticker:has(.tk-item:focus-visible) .tk-track { animation-play-state: paused; }
 @keyframes tk-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .tk-item { display: flex; align-items: center; gap: 8px; padding: 0 18px; height: 100%; border: 0; border-right: 1px solid var(--border); background: transparent;
   color: var(--text-primary); font: inherit; cursor: pointer; white-space: nowrap; transition: background .15s; }
