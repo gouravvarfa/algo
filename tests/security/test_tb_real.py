@@ -606,14 +606,14 @@ async def test_a_gap_exit_by_the_15_minute_rule_sends_the_exit_order_at_once(env
 
 
 @async_test
-async def test_the_gap_wait_ends_five_minutes_after_the_candle_and_the_ordinary_stop_goes_out(env):
+async def test_the_gap_wait_ends_after_25_minutes_and_the_ordinary_stop_goes_out(env):
     sid = await open_long(env)
     await _new_day_without_yesterdays_stop(env, sid)
     env.fb.ltp_value = 49300.0
     env.sync(PAPER_BUY, TUE)
     await env.rt.tick(TUE)
     assert env.fb.last("stop") == (None, None)
-    late = TUE.replace(minute=35, second=10)                                                   # no decision from the strategy by 09:35
+    late = TUE.replace(minute=40, second=10)                                                   # no decision from the strategy in 25 minutes
     await env.rt.tick(late)
     assert env.fb.last("stop")[1]["p"]["triggerprice"] == "49499.95"                         # (Angel One refuses it -> the position is exited at once)
 
@@ -674,3 +674,32 @@ async def test_the_stop_may_widen_only_on_the_first_trading_day_after_the_entry(
     t = dt.datetime(2026, 11, 10, 9, 20)                                                       # Tuesday, open: the handover day
     await env.rt.tick(t)
     assert env.state()["stop_target"] == 49000.0
+
+
+@async_test
+async def test_a_late_opening_day_also_waits_for_the_strategys_gap_decision(env):
+    # MCX on an NSE holiday opens only at 17:00 (GOLDTEN, 10 Nov 2026): the first stop of that day found price already below it
+    sid = await open_long(env)
+    await _new_day_without_yesterdays_stop(env, sid)
+    env.fb.ltp_value = 49300.0
+    t = dt.datetime(2026, 11, 10, 17, 0, 5)
+    mcx = lambda pos, at: env.rt.sync(IID, env.uid, SYM, {"instrument": {**INST, "session": "MCX"}, "ltp": 49300.0, "position": pos}, at)
+    mcx(PAPER_BUY, t)
+    await env.rt.tick(t)
+    assert env.fb.last("stop") == (None, None) and any("opened beyond the stop" in x for x in _texts(env))
+    mcx({**PAPER_BUY, "gap_state": "GAP_PENDING"}, t.replace(minute=10))
+    await env.rt.tick(t.replace(minute=10))
+    assert env.fb.last("stop") == (None, None)
+    mcx({**PAPER_BUY, "gap_state": "GAP_HELD", "protective_sl": 49200.0}, t.replace(minute=16))
+    await env.rt.tick(t.replace(minute=16))
+    assert env.fb.last("stop")[1]["p"]["triggerprice"] == "49199.95"
+
+
+@async_test
+async def test_a_later_first_stop_of_the_day_that_is_not_beyond_goes_out_at_once(env):
+    sid = await open_long(env)
+    await _new_day_without_yesterdays_stop(env, sid)
+    t = dt.datetime(2026, 11, 10, 13, 0)
+    env.sync(PAPER_BUY, t)
+    await env.rt.tick(t)
+    assert env.fb.last("stop")[1]["p"]["triggerprice"] == "49499.95"

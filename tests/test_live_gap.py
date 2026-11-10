@@ -86,3 +86,19 @@ def test_after_a_one_percent_stop_the_old_points_stay_usable_and_two_trades_a_da
                          Minute(T(6, 9, 20), 108.2, 111.5, 108.2, 111.2)]     # crossed again: a 3rd entry is NOT taken (2 a day)
     res = run_intraday("BANKNIFTY", DATES[:6], CLOSES[:6], day, entry_day_stop_pct=0.01)
     assert [t.exit_reason for t in res.trades] == ["ENTRY_DAY_STOP_EXIT", "ENTRY_DAY_STOP_EXIT"] and im.MAX_TRADES_PER_DAY == 2
+
+
+
+def test_a_late_opening_mcx_day_uses_its_own_first_15_minutes():
+    # GOLDTEN, 10 Nov 2026: MCX traded only from 17:00 (NSE holiday) and opened below the BUY's stop; the gap rule was skipped before
+    mcx_buy = [Minute(T(6, 9, 0), 105, 105, 105, 105), Minute(T(6, 9, 1), 109.95, 111, 109.95, 110.5), Minute(T(6, 9, 2), 111, 111, 111, 111)]
+    first = [Minute(T(9, 17, 0), 85, 88, 84, 86)] + [Minute(T(9, 17, k), 86, 87.5, 85.5, 86.5) for k in range(1, 15)]
+    hold = [Minute(T(9, 17, 15 + k), 86.5, 87, 85.0, 86.0) for k in range(5)]
+    brk = [Minute(T(9, 17, 15), 84.5, 84.6, 83.0, 83.4)]
+    early = run_intraday("GOLDM", DATES, CLOSES, mcx_buy + first[:8], session=MCX)
+    assert [(t.direction, t.exit_reason, t.gap_state) for t in early.trades] == [("BUY", "END_OF_BACKTEST", "GAP_PENDING")]   # before: stopped + SELL at 17:00
+    held = run_intraday("GOLDM", DATES, CLOSES, mcx_buy + first + hold, session=MCX)
+    assert [(t.direction, t.exit_reason, t.gap_state, t.protective_sl) for t in held.trades] == [("BUY", "END_OF_BACKTEST", "GAP_HELD", 84)]
+    broke = run_intraday("GOLDM", DATES, CLOSES, mcx_buy + first + brk, session=MCX)
+    assert [(t.direction, t.exit_reason) for t in broke.trades] == [("BUY", "GAP_EXIT_15M"), ("SELL", "END_OF_BACKTEST")]
+    assert broke.trades[1].entry_date == T(9, 17, 15) and broke.trades[1].entry_price == broke.trades[0].exit_price

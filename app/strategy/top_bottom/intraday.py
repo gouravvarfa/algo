@@ -70,6 +70,7 @@ CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
 NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
 STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
 FIRST_15_START, FIRST_15_END = dt.time(9, 15), dt.time(9, 30)
+LATE_OPEN = dt.timedelta(minutes=60)   # a day whose first minute is this much after the session start opened late: its first 15-minute candle starts then
 MAX_TRADES_PER_DAY = 2      # decided with the user, 10 Nov 2026: at most two entries (reversals included) per trading day
 
 
@@ -227,8 +228,14 @@ def run_intraday(
         day_open = first.open
 
         flag = {"date": day.isoformat(), "minutes": len(day_min), "time": day_min[-1].ts.isoformat(), "issues": []}
-        window = [m for m in day_min if session.first_start <= m.ts.time() < session.second_start]
-        first15_ok = len(window) == 15 and first.ts.time() == session.first_start
+        # The first 15-minute candle starts when the market OPENS that day. Normally the session's own start; but a day that opens LATE (MCX on an NSE
+        # holiday trades only from 17:00, e.g. 10 Nov 2026) starts its first candle at its first minute. Before, such a day had no 09:00-09:15 candle,
+        # the gap rule was skipped and the ordinary stop reversed a gapped position at the open.
+        late = (dt.datetime.combine(day, first.ts.time()) - dt.datetime.combine(day, session.first_start)) >= LATE_OPEN
+        d_first = first.ts.time().replace(second=0, microsecond=0) if late else session.first_start
+        d_second = (dt.datetime.combine(day, d_first) + dt.timedelta(minutes=15)).time()
+        window = [m for m in day_min if d_first <= m.ts.time() < d_second]
+        first15_ok = len(window) == 15 and first.ts.time() == d_first
         fc = FirstCandle(high=max(m.high for m in window), low=min(m.low for m in window), open=window[0].open) if first15_ok else None
         fc_source = "derived from the genuine 1-minute candles"
         stored = (first15 or {}).get(day)
@@ -308,7 +315,7 @@ def run_intraday(
         # nothing fires before it completes. (Seen in tests of 10 Nov 2026: before 09:30 the ordinary stop 'reversed' a gapped position at the open,
         # and at 09:30 the gap rule took that reversal back; a real account would have traded both.) A PAST day with missing minutes is different:
         # its window never completes, so the ordinary rules are used there, as before.
-        forming = day == last_day and day_min[-1].ts.time() < session.second_start
+        forming = day == last_day and day_min[-1].ts.time() < d_second
         if prev_close is not None:
             if open_t is not None and is_gap_through_stop(open_t.direction, day_open, open_t.active_stop):
                 if first15_ok:
@@ -363,7 +370,7 @@ def run_intraday(
             clock = c.ts.time()
             used_high = used_low = False  # a candle's high/low can each be "used" once on its assumed path
             # ------- gap decision pending: nothing fires before 09:30 ---------
-            if mode is not None and clock < session.second_start:
+            if mode is not None and clock < d_second:
                 continue
             # ------- GAP EXIT mode: ordinary stop suspended, 15-min level rules
             if mode == "exit" and open_t is not None:
@@ -523,7 +530,7 @@ def run_intraday(
                           "title": f"Gap {way} {abs(gap_pct):.2f}% - waiting for the first 15-minute candle",
                           "detail": (f"Market opened at {_f(day_open)} ({abs(gap_pct):.2f}% gap {way}) beyond the {mode_side} "
                                      f"{'stop' if open_t is not None else 'system point'} {_f(mode_level)}. Nothing is decided before the "
-                                     f"{session.first_start.strftime('%H:%M')}-{session.second_start.strftime('%H:%M')} candle completes.")})
+                                     f"{d_first.strftime('%H:%M')}-{d_second.strftime('%H:%M')} candle completes.")})
         elif mode == "exit" and open_t is not None:
             buy = open_t.direction == "BUY"
             protective = fc.low if buy else fc.high

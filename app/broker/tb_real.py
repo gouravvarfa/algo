@@ -37,7 +37,7 @@ NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
 IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
-GAP_WAIT_MAX_S = 300.0             # a gap open: wait for the strategy's 15-minute decision at most this long after the candle ends, then the ordinary stop
+GAP_WAIT_MAX_S = 1500.0            # a gap open: wait for the strategy's 15-minute decision at most this long (25 min), then the ordinary stop
 REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
@@ -593,21 +593,25 @@ class RealTB:
             self._miss(a, now, o["message"] or "the entry order was rejected")
 
     async def _gap_wait(self, broker, a: dict, p: dict, paper: dict | None, session: str, now: dt.datetime) -> bool:
-        """True = do not place the stop yet. The market opened BEYOND the stop (a gap): the strategy then suspends its stop until its first 15-minute
-        candle completes, and after it either exits (price breaks that candle's low / high) or holds with that low / high as today's stop. A stop
-        sent now would be refused by the exchange (its trigger is already passed) and the position closed at the gap, which the strategy does not do.
-        So the real position waits, as the strategy does, until the candle completes (NSE 09:30, MCX 09:15), at most GAP_WAIT_MAX_S longer."""
-        from app.strategy.top_bottom.gap_protocol import NSE, SESSIONS
-        s = SESSIONS.get(session, NSE)
-        end = dt.datetime.combine(now.date(), s.second_start)
-        if now >= end + dt.timedelta(seconds=GAP_WAIT_MAX_S):
-            return False                                       # the strategy should have decided by now: the ordinary stop (refused -> exit at once)
+        """True = do not place the stop yet. The FIRST stop of the day finds price already BEYOND it: the market opened through the stop (a gap). The
+        strategy then suspends its stop until its first 15-minute candle completes (it starts when the market opens that day: NSE 09:15, MCX 09:00, or
+        later on a late-opening day such as MCX's 17:00 session on an NSE holiday), and then either exits and reverses (that candle's low / high broke)
+        or holds with that low / high as today's stop. A stop sent now would be refused (its trigger is passed) and the position closed at the gap,
+        which the strategy does not do. So the real position waits for the strategy's decision, at most GAP_WAIT_MAX_S."""
+        today = now.date().isoformat()
         same = bool(paper and paper["direction"] == p["side"])
         if same and paper.get("protective_sl") is not None:
             return False                                       # decided and held: the stop goes to today's protective level
+        started = a.get("gap_wait_at") if a.get("gap_wait") == today else None
+        if started and _age(started, now) > GAP_WAIT_MAX_S:
+            return False                                       # no decision in time: the ordinary stop (refused -> exit at once)
         if same and paper.get("gap_state") == "GAP_PENDING":
             pending = True
-        elif now < end:
+        elif started:
+            pending = True                                     # waiting since the open: the strategy's decision is due
+        elif any(o["role"] == "stop" and (o.get("placed_at") or "")[:10] == today for o in a["orders"]):
+            pending = False                                    # a stop already went out today: this is not the open
+        else:
             try:
                 ltp = await broker.ltp(p["exch"], p["contract"], str(p["token"]))
             except Exception:
@@ -618,12 +622,10 @@ class RealTB:
                     ltp = float(sn["ltp"])
             # strictly beyond, as the strategy's own gap test (an open exactly AT the stop is no gap: the stop goes out as usual)
             pending = ltp is not None and ((ltp < a["stop_target"]) if p["side"] == "BUY" else (ltp > a["stop_target"]))
-        else:
-            pending = same and a.get("gap_wait") == now.date().isoformat()     # waiting since the open, the strategy's decision is due any moment
-        if pending and a.get("gap_wait") != now.date().isoformat():
-            a["gap_wait"] = now.date().isoformat()
-            self._ev(a, now, f"the market opened beyond the stop {a['stop_target']}: as the strategy's gap rule, no stop until the first 15-minute candle "
-                             f"completes ({s.second_start:%H:%M}); then that candle's {'low' if p['side'] == 'BUY' else 'high'} is the stop, or the position exits")
+        if pending and not started:
+            a["gap_wait"], a["gap_wait_at"] = today, _s(now)
+            self._ev(a, now, f"the market opened beyond the stop {a['stop_target']}: as the strategy's gap rule, no stop until its first 15-minute candle "
+                             f"completes; then that candle's {'low' if p['side'] == 'BUY' else 'high'} is the stop, or the position exits and reverses")
         return pending
 
     async def _manage_position(self, c, broker, a: dict, p: dict, snap: dict, now: dt.datetime) -> None:
