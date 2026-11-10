@@ -19,6 +19,8 @@ def _dryrun_and_shadow_files_stay_in_the_test_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(shadow, "LOG_PATH", tmp_path / "shadow_log.jsonl")
     from app.paper_trading import engine
     monkeypatch.setattr(engine, "SNAPSHOT_DIR", tmp_path / "snapshots")
+    from app.live import candle_store                      # the live 1-minute rules keep their candles here (data/paper_trading/candles.db)
+    monkeypatch.setattr(candle_store, "DB", tmp_path / "candles.db")
     yield
 
 

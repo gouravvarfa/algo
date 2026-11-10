@@ -364,8 +364,10 @@ class Shadow:
                     self._ev(a, now, "the paper position is closed: waiting for our stop order to fill")
             else:
                 target = self._stop_target(a, pp)
+                from app.paper_trading.engine import market_open
+                dryrun.note_trading_day(p, _p(p["entry_time"]).date() if p.get("entry_time") else now.date(), now, market_open(now))
                 if (target is not None and (a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9)
-                        and dryrun.may_move_stop(p["side"], a["stop_target"], target, _p(p["entry_time"]).date() if p.get("entry_time") else now.date(), p, now)):
+                        and dryrun.may_move_stop(p["side"], a["stop_target"], target, p, now)):
                     a["stop_target"] = target
                     for o in self._orders(a, "stop"):
                         o["pending_modify"] = {"at": _s(_after(self.cfg.latency_s, now)), "trigger": target, "price": self._stop_limit(a, p, target)}

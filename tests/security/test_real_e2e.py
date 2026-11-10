@@ -88,12 +88,12 @@ async def test_a_whole_trade_over_http_entry_stop_trail_reversal(e2e):
     e2e.sync(PAPER_BUY)
     await rt.tick(secs(5))
     [stop] = places(fa, "STOPLOSS_LIMIT")
-    assert stop["variety"] == "STOPLOSS" and stop["transactiontype"] == "SELL" and stop["triggerprice"] == "49500.00" and stop["price"] == "49490.00"
+    assert stop["variety"] == "STOPLOSS" and stop["transactiontype"] == "SELL" and stop["triggerprice"] == "49499.95" and stop["price"] == "49489.95"
     assert fa.net(CONTRACT) == 30 and e2e.state()["position"]["entry_price"] == 50002.5
     e2e.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 50002.5}, secs(10))              # break-even: the stop moves
     await rt.tick(secs(10))
     [mod] = [b for k, b in fa.requests if k == "modify"]
-    assert mod["triggerprice"] == "50002.50" and "transactiontype" not in mod and mod["orderid"] == fa.open_orders("STOPLOSS_LIMIT")[0]["orderid"]
+    assert mod["triggerprice"] == "50002.45" and "transactiontype" not in mod and mod["orderid"] == fa.open_orders("STOPLOSS_LIMIT")[0]["orderid"]
     e2e.sync(None, secs(60))                                                                              # the strategy reverses
     rt.handle([e2e.ev("EXIT", "BUY", now=secs(60), reason="TRAILING_STOP_REVERSAL", exit_price=50002.5),
                e2e.ev("ENTRY", "SELL", now=secs(60), entry_price=50000.0, active_stop=50500.0)], {}, secs(60))

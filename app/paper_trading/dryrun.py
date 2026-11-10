@@ -122,10 +122,20 @@ def _limit(contract: dict, symbol: str, side: str, ref: float) -> float:
     return rnd(ref + buf, tick, "up") if side == "BUY" else rnd(ref - buf, tick, "down")
 
 
+def stop_trigger(stop: float, tick: float, closing_side: str) -> float:
+    """The trigger of the stop order for the strategy's stop. The strategy exits only when price trades STRICTLY beyond its stop (a 1-minute low
+    below it for a BUY), while the exchange triggers a SELL stop when price trades AT or below the trigger. So the trigger is the first price-grid
+    step strictly beyond the stop: price touching the stop itself closes neither the strategy nor the real position (before, a touch closed the
+    real one only, and the paper kept the trade the real account had left)."""
+    q = stop / tick
+    n = math.floor(q - 1e-9) if closing_side == "SELL" else math.ceil(q + 1e-9)
+    return round(n * tick, 2)
+
+
 def _stop_order(contract: dict, symbol: str, direction: str, qty: int, stop: float) -> dict:
     tick, _ = _tick(contract)
     side = _side(direction, closing=True)
-    trigger = rnd(stop, tick)
+    trigger = stop_trigger(stop, tick, side)
     pts = stop_limit_points(symbol, trigger, contract.get("exch_seg"))
     limit = rnd(trigger - pts, tick, "down") if side == "SELL" else rnd(trigger + pts, tick, "up")
     return _payload(contract, side, qty, "STOPLOSS_LIMIT", price=limit, trigger=trigger)
@@ -210,14 +220,17 @@ def read(owner, limit: int = 300) -> list[dict]:
     return list(reversed([r for r in rows if r.get("owner") == owner][-limit:]))
 
 
-def may_move_stop(side: str, cur: float | None, target: float, entry_day: dt.date, pos: dict, now: dt.datetime) -> bool:
+def note_trading_day(pos: dict, entry_day: dt.date, now: dt.datetime, market_open: bool) -> None:
+    """Remember the first TRADING day after the entry (the first time the market is open on a later day): the one day a stop may widen."""
+    if market_open and now.date() > entry_day:
+        pos.setdefault("handover_day", now.date().isoformat())
+
+
+def may_move_stop(side: str, cur: float | None, target: float, pos: dict, now: dt.datetime) -> bool:
     """Real (and shadow) stops: may the resting stop move from `cur` to `target`? Always WITH the trade (BUY up, SELL down). Back (wider) only on the
-    first trading day after the entry, when the strategy hands its 1% entry-day stop over to the structural one (a rule); `pos` remembers that day.
-    After it, never back, whatever the strategy says: a wrong wider stop (paper, 10 Nov 2026: BANKNIFTY 54,823 -> 53,834) must never reach a real order."""
+    first trading day after the entry (note_trading_day), when the strategy hands its 1% entry-day stop over to the structural one (a rule).
+    After it, never back, whatever the strategy says: a wrong wider stop (paper, 10 Nov 2026: BANKNIFTY 54,823 -> 53,834) must never reach a real order.
+    (Today's gap protection, the first 15-minute candle's low / high, is the other rule that may widen it; the caller allows that one.)"""
     if cur is None or ((target > cur) if side == "BUY" else (target < cur)):
         return True
-    today = now.date()
-    if today <= entry_day:
-        return False
-    pos.setdefault("handover_day", today.isoformat())
-    return pos["handover_day"] == today.isoformat()
+    return pos.get("handover_day") == now.date().isoformat()

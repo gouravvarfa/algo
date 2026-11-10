@@ -183,6 +183,7 @@ def run_intraday(
             t.events.append((ts, WHIPSAW_EVENT))
         trades.append(t)
 
+    last_day = max(by_day) if by_day else None
     for day in sorted(by_day):
         day_min = sorted(by_day[day], key=lambda m: m.ts)
         if stopped_day is not None and day > stopped_day and lift_day is None:
@@ -295,11 +296,18 @@ def run_intraday(
         # ---- does the gap protocol apply today? ------------------------------
         mode, mode_side, mode_level, mode_anchor = None, None, None, None
         gap_pct = ((day_open - prev_close) / prev_close * 100.0) if prev_close else 0.0
+        # LIVE: today's first 15-minute candle is still FORMING (the last minute we have is before its end). A gap decision then waits for it:
+        # nothing fires before it completes. (Seen in tests of 10 Nov 2026: before 09:30 the ordinary stop 'reversed' a gapped position at the open,
+        # and at 09:30 the gap rule took that reversal back; a real account would have traded both.) A PAST day with missing minutes is different:
+        # its window never completes, so the ordinary rules are used there, as before.
+        forming = day == last_day and day_min[-1].ts.time() < session.second_start
         if prev_close is not None:
             if open_t is not None and is_gap_through_stop(open_t.direction, day_open, open_t.active_stop):
                 if first15_ok:
                     mode, mode_side = "exit", open_t.direction
                     mode_level = open_t.active_stop
+                elif forming:
+                    mode, mode_side, mode_level = "pending", open_t.direction, open_t.active_stop
                 else:
                     flag["issues"].append("gap through the stop but the 09:15-09:30 candle is incomplete: gap protocol NOT applied, ordinary rules used")
             elif open_t is None and top is not None and bot is not None:
@@ -310,6 +318,8 @@ def run_intraday(
                     if ok and is_gap_past_system_point(side, prev_close, day_open, lvl):
                         if first15_ok:
                             mode, mode_side, mode_level, mode_anchor = "entry", side, lvl, anchor
+                        elif forming:
+                            mode, mode_side, mode_level = "pending", side, lvl
                         else:
                             flag["issues"].append("gap past a system point but the 09:15-09:30 candle is incomplete: gap protocol NOT applied, ordinary rules used")
                         break
@@ -490,7 +500,15 @@ def run_intraday(
             # end of ordinary processing
 
         # ---- end of day bookkeeping for gap modes still unresolved -------------
-        if mode == "exit" and open_t is not None:
+        if mode == "pending":
+            if open_t is not None:
+                open_t.gap_state = "GAP_PENDING"        # the stop is suspended until the first 15-minute candle completes (a real account waits too)
+            notes.append({"kind": "GAP_PENDING", "side": mode_side, "pct": round(gap_pct, 2), "time": day_min[-1].ts.isoformat(),
+                          "title": f"Gap {way} {abs(gap_pct):.2f}% - waiting for the first 15-minute candle",
+                          "detail": (f"Market opened at {_f(day_open)} ({abs(gap_pct):.2f}% gap {way}) beyond the {mode_side} "
+                                     f"{'stop' if open_t is not None else 'system point'} {_f(mode_level)}. Nothing is decided before the "
+                                     f"{session.first_start.strftime('%H:%M')}-{session.second_start.strftime('%H:%M')} candle completes.")})
+        elif mode == "exit" and open_t is not None:
             buy = open_t.direction == "BUY"
             protective = fc.low if buy else fc.high
             open_t.gap_state = "GAP_HELD"

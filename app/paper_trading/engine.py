@@ -97,6 +97,7 @@ FAULT_RETRY_SECONDS = 5.0                # an instrument whose evaluation is fai
 SWEEP_DUTY = 2.0                        # ... and at least this many times the CPU the sweep used, so the engine never takes more than about a third of a core
                                         # (CPU, not wall time: a sweep that mostly WAITED for Angel One is not followed by a long pause)
 LIVE_RATE_LIMIT_COOLDOWN_SECONDS = 90   # after an Angel One 'Too many requests', do not ask for 1-minute data again for this long
+SINGLE_MINUTES_FROM = dt.date(2026, 10, 30)   # first day of the live 1-minute rules of an instrument not (yet) in a contract chain: fixed, see _single_minutes_from
 LIVE_REUSE_MAX_SECONDS = 20 * 60        # a previous good intraday result may be shown (clearly labelled) for at most this long
 GAP_15M_REFRESH_SECONDS = 600  # 15m bars for the daily gap protocol are re-fetched at most this often
 DEFAULT_LOOKBACK_DAYS = {"1m": 3, "5m": 10, "15m": 20, "30m": 40, "1H": 90, "1D": 365}
@@ -401,6 +402,10 @@ class PaperEngine:
         if chain is None and len(confirmed) < 5:
             raise PaperError("No candle data returned by Angel One" if raw.empty else "Not enough confirmed candles yet")
         active, rolls, roll_marks, prev_line = inst, [], [], None
+        # real_ready: may a real account act on this result? Only a proper intraday evaluation of a contract that still trades. The daily-close
+        # fallback (1-minute data unavailable) and the result of an EXPIRED own contract (the roll window, before the next contract's first minute)
+        # can show a different position than the live rules: a real account must not exit or move its stop on them, and they are not journaled.
+        real_ready = True
         if chain is not None:
             signals, trades = [], chain.trades
             ac = chain.active
@@ -437,6 +442,9 @@ class PaperEngine:
                     engine_warn = engine_note.startswith("WARNING")
                 else:
                     engine_note, engine_warn = "WARNING: intraday (1-minute) data unavailable right now, showing the daily-close result. A stop touched today may not be reflected until the next successful update", True
+                    real_ready = False
+                if inst.instrument_type == "FUTURE" and _expired(getattr(inst, "expiry", ""), now):
+                    real_ready = False              # the chain could not run yet (roll day, before the next contract's first minute): an expired contract's result
         ltp = float(raw["close"].iloc[-1])
         tick = self.feed.latest.get(active.token)
         live_tick = self.feed.healthy(active.token) and tick is not None
@@ -530,6 +538,7 @@ class PaperEngine:
             "rules": {"breakeven_pct": (breakeven_pct_for(inst.symbol) or 0.02) * 100, "struct_cap_pct": struct_cap_for(inst.symbol) * 100},
             "engine_note": engine_note,
             "engine_warning": engine_warn,
+            "real_ready": real_ready,
             "trades": rows[::-1],
             "candles": _candles_with_tick(raw, ltp if live_tick else None),
             "prev_contract_line": prev_line,
@@ -709,8 +718,9 @@ class PaperEngine:
                 # the index chain has tracked 1-minute data from a fixed day; a stock future starts on the day it was assigned
                 if inst.symbol in INDEX_TOKENS:
                     start = FIRST_CONTRACT_MINUTES_FROM
-                else:   # a stock: from a week before the first contract's cutoff (or the day it was assigned, if that is earlier), so the roll can be priced
-                    start = min(dt.date.fromisoformat(inst.added_at[:10]), contract_cutoff(contracts[0].expiry) - dt.timedelta(days=6))
+                else:   # a stock: the first day its single-contract rules used (so the first roll does not change its history), or a week before the
+                        # first contract's cutoff if that is earlier, so the roll can be priced
+                    start = min(self._single_minutes_from(inst), contract_cutoff(contracts[0].expiry) - dt.timedelta(days=6))
                 return await self._contract_minutes(c, start, now, start, lenient=inst.symbol not in INDEX_TOKENS)
             return await self._contract_minutes(c, contract_cutoff(contracts[0].expiry), now, lenient=inst.symbol not in INDEX_TOKENS)
 
@@ -726,6 +736,17 @@ class PaperEngine:
             daily_engine=daily_engine, reconstruct=lambda rows, fd: reconstruct_state(rows, fd, breakeven_pct_for(inst.symbol)),
             entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess)
 
+    @staticmethod
+    def _single_minutes_from(inst) -> dt.date:
+        """The FIXED first day of an instrument's live 1-minute rules while it is not in a contract chain (and of its first contract once it is, so
+        the history does not jump at the first roll): SINGLE_MINUTES_FROM, or LIVE_MINUTES_DAYS before the day it was added if that is later
+        (the window it had when it was added). It never moves afterwards."""
+        try:
+            added = dt.date.fromisoformat(str(getattr(inst, "added_at", ""))[:10])
+        except ValueError:
+            return SINGLE_MINUTES_FROM
+        return max(SINGLE_MINUTES_FROM, added - dt.timedelta(days=LIVE_MINUTES_DAYS))
+
     async def _live_intraday(self, inst: Instrument, confirmed: pd.DataFrame, daily_trades: list, now: dt.datetime):
         """Live version of the replay's hybrid mode. Structure (System Points) still comes from confirmed DAILY closes;
         the last LIVE_MINUTES_DAYS days are executed on real 1-minute candles, so a stop touch exits at the stop and the
@@ -739,20 +760,15 @@ class PaperEngine:
                 return good[1], f"WARNING: {why}. Showing the last successful intraday evaluation from {good[0]:%H:%M:%S}"
             return None
 
-        cool = self._cooldown_until.get(inst.id)
-        if cool and now < cool:
-            return reuse("Angel One rate limit, waiting before the next 1-minute request")
         try:
-            cached = self._minutes.get(inst.id)
-            refresh = LIVE_MINUTES_REFRESH_WITH_FEED if self.feed.healthy(inst.token) else LIVE_MINUTES_REFRESH_SECONDS
-            if cached and (now - cached[0]).total_seconds() < refresh:
-                mins = cached[1]
-            else:
-                df = await self._candles(inst.exch_seg, inst.token, "ONE_MINUTE", LIVE_MINUTES_DAYS, include_partial=True)
-                df = drop_incomplete_trailing_bars(df, 1, now)
-                mins = [Minute(ts.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for ts, r in df.iterrows()]
-                self._minutes[inst.id] = (now, mins)
-            mins = trim_partial_first_day(merge_minutes(mins, self.feed.builder.minutes(inst.token)), inst.symbol not in INDEX_TOKENS)   # REST is authoritative; ticks fill the closing / forming minute
+            # The same 1-minute source as the contract chain: a FIXED first day, the stored candles (data/paper_trading/candles.db), refreshed from
+            # Angel One in the background, the newest minutes from the live ticks. Before, the window was 'the last LIVE_MINUTES_DAYS days': its first
+            # day moved every night and was rebuilt from the daily closes, so the history after it, even the open position, could change overnight
+            # (GOLDTEN, 10 Nov 2026: the open BUY moved from 10:37 @ 144,426 to 09:00 @ 144,425 at midnight); and a refused candle request (about
+            # half of them in NSE hours) froze the result for up to 20 minutes, then fell back to the daily-close result.
+            start = self._single_minutes_from(inst)
+            ref = ContractRef(getattr(inst, "trading_symbol", "") or inst.symbol, inst.token, inst.exch_seg, getattr(inst, "expiry", "") or "", getattr(inst, "lot_size", None) or 0)
+            mins = await self._contract_minutes(ref, start, now, start, lenient=inst.symbol not in INDEX_TOKENS)
             if len(mins) < 30:
                 return None
             from app.strategy.top_bottom.warmup import reconstruct_state
@@ -848,7 +864,11 @@ class PaperEngine:
     # ---- live journal ------------------------------------------------------
     def _journal(self, inst: Instrument, snap: dict) -> None:
         """Append ENTRY / EXIT / SL->BREAKEVEN / GAP events for LIVE trades the first time they are seen.
-        Append-only: a later recomputation never rewrites what was recorded."""
+        Append-only: a later recomputation never rewrites what was recorded.
+        A result a real account may not act on (real_ready False: the daily-close fallback, an expired contract's result) is not journaled: its
+        trades are not the live rules' trades, and every one of them would look new."""
+        if not snap.get("real_ready", True):
+            return
         try:
             seen = json.loads(JOURNAL_SEEN.read_text()) if JOURNAL_SEEN.exists() else {}
         except ValueError:

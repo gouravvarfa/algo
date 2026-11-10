@@ -37,6 +37,7 @@ NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
 IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
+GAP_WAIT_MAX_S = 300.0             # a gap open: wait for the strategy's 15-minute decision at most this long after the candle ends, then the ordinary stop
 REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
@@ -111,9 +112,12 @@ class RealTB:
         self.queue.extend(e for e in events if not e.get("backfill"))
 
     def sync(self, inst_id: str, owner, symbol: str, snap: dict, now: dt.datetime) -> None:
+        if not snap.get("real_ready", True):
+            return          # not a result a real account may act on (the daily-close fallback, an expired contract's result): the last good one stays
         pp = snap.get("position")
         self.snaps[inst_id] = {"owner": owner, "symbol": symbol, "instrument": snap.get("instrument") or {}, "ltp": snap.get("ltp"), "snap_ltp_at": _s(now),
-                               "paper": {"direction": pp["direction"], "entry_price": pp["entry_price"], "active_stop": pp["active_stop"]} if pp else None}
+                               "paper": {"direction": pp["direction"], "entry_price": pp["entry_price"], "active_stop": pp["active_stop"],
+                                         "gap_state": pp.get("gap_state"), "protective_sl": pp.get("protective_sl")} if pp else None}
 
     # ------------------------------------------------------------------ state
     def _acct(self, c, user_id: str, inst_id: str, symbol: str, since: float) -> dict:
@@ -389,6 +393,11 @@ class RealTB:
                 continue
             b = book.get(str(o["broker_id"]))
             if b is None:
+                if o.get("placed_at") and _p(o["placed_at"]).date() < now.date():
+                    # a DAY order ends with its session and Angel One's book starts empty each day: an order of an earlier day that we never saw end
+                    # (the app was down at the close) is over. A stop is placed again when the market opens; it is never taken as still resting.
+                    self._mark(c, o, a, "cancelled", "a day order of an earlier session: no longer in Angel One's order book")
+                    self._ev(a, now, f"{o['role']} order of {o['placed_at'][:10]} is no longer at Angel One (a day order ends with its session)", order=o["id"])
                 continue
             st = (b.get("status") or b.get("orderstatus") or "").lower()
             try:
@@ -416,6 +425,11 @@ class RealTB:
                     self._miss(a, now, f"entry order rejected: {b.get('text') or ''}")
             elif st in ("open", "trigger pending", "open pending", "validation pending", "put order req received", "modify pending", "after market order req received"):
                 o["state"] = "open"
+                if o["role"] == "stop":
+                    if st == "open":                       # a stop-loss LIMIT order shows 'open' once its trigger was hit and its limit waits for a fill
+                        o.setdefault("triggered_at", _s(now))
+                    elif st == "trigger pending":
+                        o.pop("triggered_at", None)
 
     def _on_fill(self, c, a: dict, o: dict, avg: float | None, now: dt.datetime) -> None:
         if o["role"] == "entry":
@@ -582,22 +596,72 @@ class RealTB:
         if o is not None and o["state"] == "rejected":
             self._miss(a, now, o["message"] or "the entry order was rejected")
 
+    async def _gap_wait(self, broker, a: dict, p: dict, paper: dict | None, session: str, now: dt.datetime) -> bool:
+        """True = do not place the stop yet. The market opened BEYOND the stop (a gap): the strategy then suspends its stop until its first 15-minute
+        candle completes, and after it either exits (price breaks that candle's low / high) or holds with that low / high as today's stop. A stop
+        sent now would be refused by the exchange (its trigger is already passed) and the position closed at the gap, which the strategy does not do.
+        So the real position waits, as the strategy does, until the candle completes (NSE 09:30, MCX 09:15), at most GAP_WAIT_MAX_S longer."""
+        from app.strategy.top_bottom.gap_protocol import NSE, SESSIONS
+        s = SESSIONS.get(session, NSE)
+        end = dt.datetime.combine(now.date(), s.second_start)
+        if now >= end + dt.timedelta(seconds=GAP_WAIT_MAX_S):
+            return False                                       # the strategy should have decided by now: the ordinary stop (refused -> exit at once)
+        same = bool(paper and paper["direction"] == p["side"])
+        if same and paper.get("protective_sl") is not None:
+            return False                                       # decided and held: the stop goes to today's protective level
+        if same and paper.get("gap_state") == "GAP_PENDING":
+            pending = True
+        elif now < end:
+            try:
+                ltp = await broker.ltp(p["exch"], p["contract"], str(p["token"]))
+            except Exception:
+                ltp = None
+            if ltp is None:                                    # Angel One did not answer: the paper engine's live price of the same contract
+                sn = self.snaps.get(a["instrument_id"]) or {}
+                if (sn.get("instrument") or {}).get("trading_symbol") == p["contract"] and sn.get("ltp") is not None:
+                    ltp = float(sn["ltp"])
+            # strictly beyond, as the strategy's own gap test (an open exactly AT the stop is no gap: the stop goes out as usual)
+            pending = ltp is not None and ((ltp < a["stop_target"]) if p["side"] == "BUY" else (ltp > a["stop_target"]))
+        else:
+            pending = same and a.get("gap_wait") == now.date().isoformat()     # waiting since the open, the strategy's decision is due any moment
+        if pending and a.get("gap_wait") != now.date().isoformat():
+            a["gap_wait"] = now.date().isoformat()
+            self._ev(a, now, f"the market opened beyond the stop {a['stop_target']}: as the strategy's gap rule, no stop until the first 15-minute candle "
+                             f"completes ({s.second_start:%H:%M}); then that candle's {'low' if p['side'] == 'BUY' else 'high'} is the stop, or the position exits")
+        return pending
+
     async def _manage_position(self, c, broker, a: dict, p: dict, snap: dict, now: dt.datetime) -> None:
         ct = {"trading_symbol": p["contract"], "token": p["token"], "exch_seg": p["exch"], "tick_size": p["tick"], "lot_size": p.get("lot_size")}
         side_close = "SELL" if p["side"] == "BUY" else "BUY"
         stops, exits = self._active(a, "stop"), self._active(a, "exit")
         paper = snap.get("paper")
-        if paper and paper["direction"] == p["side"] and paper.get("active_stop") is not None:
-            target = dryrun.rnd(float(paper["active_stop"]), p["tick"])
-            if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
-                if dryrun.may_move_stop(p["side"], a["stop_target"], target, _p(p["entry_at"]).date() if p.get("entry_at") else now.date(), p, now):
-                    a["stop_target"] = target
-                    a.pop("held_stop", None)
-                    self._ev(a, now, f"stop target is now {target}")
-                elif a.get("held_stop") != target:
-                    a["held_stop"] = target
-                    self._ev(a, now, f"the strategy asked to move the stop BACK to {target}; a real stop never moves back after the day after entry, it stays at {a['stop_target']}")
-        market = self._market_open((snap.get("instrument") or {}).get("session", "NSE"), now)
+        session = (snap.get("instrument") or {}).get("session", "NSE")
+        market = self._market_open(session, now)
+        dryrun.note_trading_day(p, _p(p["entry_at"]).date() if p.get("entry_at") else now.date(), now, market)
+        if paper and paper["direction"] == p["side"]:
+            prot = paper.get("protective_sl")       # today's gap protection: the first 15-minute candle's low (BUY) / high (SELL) is the strategy's stop today
+            raw = prot if prot is not None else paper.get("active_stop")
+            if raw is not None:
+                target = dryrun.rnd(float(raw), p["tick"])
+                if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
+                    if prot is not None or dryrun.may_move_stop(p["side"], a["stop_target"], target, p, now):
+                        a["stop_target"] = target
+                        a.pop("held_stop", None)
+                        self._ev(a, now, f"stop target is now {target}" + (" (today's gap protection: the first 15-minute candle)" if prot is not None else ""))
+                    elif a.get("held_stop") != target:
+                        a["held_stop"] = target
+                        self._ev(a, now, f"the strategy asked to move the stop BACK to {target}; a real stop never moves back after the first trading day after entry, it stays at {a['stop_target']}")
+        # our stop triggered but its limit did not fill (price ran past it): do not wait for the strategy to notice, exit with a LIMIT order
+        trig = next((o for o in stops if o.get("triggered_at")), None)
+        if trig and market and not a["exit_since"] and _age(trig["triggered_at"], now) > STOP_GRACE_S:
+            try:
+                ltp = await broker.ltp(p["exch"], p["contract"], str(p["token"]))
+            except Exception:
+                ltp = None
+            past = ltp is not None and trig["trigger"] is not None and ((ltp <= trig["trigger"]) if p["side"] == "BUY" else (ltp >= trig["trigger"]))
+            if past:
+                a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+                self._ev(a, now, f"the stop triggered at {trig['trigger']} but did not fill within {int(STOP_GRACE_S)} s (price {ltp} ran past its limit): exiting with a LIMIT order", order=trig["id"])
         # exit LIMIT order not filled: cancel, then place again next round at the live price
         if exits:
             if _age(exits[0]["placed_at"], now) > RETRY_AFTER_S:
@@ -621,14 +685,17 @@ class RealTB:
         if not market:
             return
         if not stops and a["stop_target"] is not None and not a["exit_since"]:
+            if await self._gap_wait(broker, a, p, paper, session, now):
+                return
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
             o = await self._place(c, broker, a, now, "stop", payload, "stop-loss for the open position", ct)
             if o is not None and o["state"] == "rejected":
                 a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
                 self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
-        elif stops and a["stop_target"] is not None:
+        elif stops and a["stop_target"] is not None and not stops[0].get("triggered_at"):
             o = stops[0]
-            if o["trigger"] is None or abs(a["stop_target"] - o["trigger"]) >= p["tick"] - 1e-9:
+            want = dryrun.stop_trigger(a["stop_target"], dryrun._tick(ct)[0], side_close)
+            if o["trigger"] is None or abs(want - o["trigger"]) >= p["tick"] - 1e-9:
                 payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
                 try:
                     await broker.modify(o["broker_id"], payload)

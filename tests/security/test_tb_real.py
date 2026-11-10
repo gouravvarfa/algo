@@ -156,7 +156,7 @@ async def test_system_point_places_a_limit_entry_then_a_stop_after_the_fill(env)
     a = env.state()
     assert a["position"]["side"] == "BUY" and a["position"]["entry_price"] == 50002.5 and a["pending_entry"] is None
     sid, s = env.fb.last("stop")
-    assert s["p"]["variety"] == "STOPLOSS" and s["p"]["ordertype"] == "STOPLOSS_LIMIT" and s["p"]["transactiontype"] == "SELL" and s["p"]["triggerprice"] == "49500.00" and s["p"]["price"] == "49490.00"
+    assert s["p"]["variety"] == "STOPLOSS" and s["p"]["ordertype"] == "STOPLOSS_LIMIT" and s["p"]["transactiontype"] == "SELL" and s["p"]["triggerprice"] == "49499.95" and s["p"]["price"] == "49489.95"
     rows = env.db.execute("SELECT role, status FROM real_tb_orders ORDER BY created_at").fetchall()
     assert [(r["role"], r["status"]) for r in rows] == [("entry", "filled"), ("stop", "placed")]
 
@@ -171,7 +171,7 @@ async def test_the_stop_follows_the_strategys_stop_by_modifying_the_resting_orde
     env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 50002.5}, secs(10))
     await env.rt.tick(secs(10))
     mods = [c for c in env.fb.calls if c[0] == "modify"]
-    assert len(mods) == 1 and mods[0][2]["triggerprice"] == "50002.50" and mods[0][2]["price"] == "49992.50"
+    assert len(mods) == 1 and mods[0][2]["triggerprice"] == "50002.45" and mods[0][2]["price"] == "49992.45"
     assert env.state()["stop_target"] == 50002.5
 
 
@@ -516,7 +516,7 @@ async def test_an_mcx_future_is_ordered_in_lots_x_lotsize_on_the_rupee_grid(env)
     await go(env, now=secs(5), position={"direction": "BUY", "entry_price": 125000.0, "active_stop": 124000.0})
     _, stop = env.fb.last("stop")
     sp = stop["p"]
-    assert float(sp["triggerprice"]) == 124000.0 and float(sp["price"]) == 124000.0 - 248.0 and sp["quantity"] == "100"   # the stop's limit ~0.2% past the trigger
+    assert float(sp["triggerprice"]) == 123999.0 and float(sp["price"]) == 123751.0 and sp["quantity"] == "100"   # the stop's limit ~0.2% past the trigger
 
 
 @async_test
@@ -549,8 +549,124 @@ async def test_a_real_stop_never_moves_back_after_the_handover_day(env):
     env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49000.0}, wed)
     await env.rt.tick(wed)
     a = env.state()
-    assert a["stop_target"] == 49800.0 and mod_triggers()[-1] == "49800.00"                    # never back
+    assert a["stop_target"] == 49800.0 and mod_triggers()[-1] == "49799.95"                    # never back
     assert any("never moves back" in ev["text"] if isinstance(ev, dict) else "never moves back" in str(ev) for ev in a["events"])
     env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 50100.0}, wed + dt.timedelta(minutes=1))
     await env.rt.tick(wed + dt.timedelta(minutes=1))
     assert env.state()["stop_target"] == 50100.0                                             # and still trails forward
+
+
+# ---------------------------------------------------------------- deep check before real accounts (10 Nov 2026)
+TUE = dt.datetime(2026, 11, 10, 9, 15, 5)
+
+
+def _texts(env):
+    return [e["text"] for e in env.state()["events"]]
+
+
+async def _new_day_without_yesterdays_stop(env, sid):
+    env.fb.orders[sid]["status"] = "cancelled"                                                 # the exchange ends a DAY order at the close
+
+
+@async_test
+async def test_a_gap_open_beyond_the_stop_waits_for_the_strategys_15_minute_decision_then_uses_its_protective_stop(env):
+    sid = await open_long(env)                                                                # Monday: BUY, stop 49,500
+    await _new_day_without_yesterdays_stop(env, sid)
+    env.fb.ltp_value = 49300.0                                                                # Tuesday opens at 49,300: below the stop
+    env.sync(PAPER_BUY, TUE)                                                                  # the strategy has not seen today's first minute yet
+    await env.rt.tick(TUE)
+    assert env.fb.last("stop") == (None, None) and not [c for c in env.fb.calls if c[0] == "place" and c[1]["ordertype"] == "LIMIT" and c[1]["transactiontype"] == "SELL"]
+    assert any("opened beyond the stop" in t for t in _texts(env))                            # before: a stop into the gap, refused -> sold at the open
+    env.sync({**PAPER_BUY, "gap_state": "GAP_PENDING"}, TUE.replace(minute=25))
+    await env.rt.tick(TUE.replace(minute=25))
+    assert env.fb.last("stop") == (None, None) and env.state()["position"] is not None
+    t931 = TUE.replace(minute=31)
+    env.sync({**PAPER_BUY, "gap_state": "GAP_HELD", "protective_sl": 49200.0}, t931)         # held: the 15-minute candle's low is today's stop
+    await env.rt.tick(t931)
+    _, s = env.fb.last("stop")
+    assert s["p"]["triggerprice"] == "49199.95" and env.state()["stop_target"] == 49200.0     # wider than 49,500, allowed: it is the strategy's gap rule
+
+
+@async_test
+async def test_a_gap_exit_by_the_15_minute_rule_sends_the_exit_order_at_once(env):
+    sid = await open_long(env)
+    await _new_day_without_yesterdays_stop(env, sid)
+    env.fb.ltp_value = 49300.0
+    env.sync({**PAPER_BUY, "gap_state": "GAP_PENDING"}, TUE)
+    await env.rt.tick(TUE)
+    t930 = TUE.replace(minute=30, second=20)
+    env.fb.ltp_value = 49140.0
+    await go(env, env.ev("EXIT", "BUY", now=t930, reason="GAP_EXIT_15M", exit_price=49150.0), now=t930, position=None)
+    ex = [c[1] for c in env.fb.calls if c[0] == "place" and c[1]["ordertype"] == "LIMIT" and c[1]["transactiontype"] == "SELL"]
+    assert len(ex) == 1 and env.fb.last("stop") == (None, None)
+
+
+@async_test
+async def test_the_gap_wait_ends_five_minutes_after_the_candle_and_the_ordinary_stop_goes_out(env):
+    sid = await open_long(env)
+    await _new_day_without_yesterdays_stop(env, sid)
+    env.fb.ltp_value = 49300.0
+    env.sync(PAPER_BUY, TUE)
+    await env.rt.tick(TUE)
+    assert env.fb.last("stop") == (None, None)
+    late = TUE.replace(minute=35, second=10)                                                   # no decision from the strategy by 09:35
+    await env.rt.tick(late)
+    assert env.fb.last("stop")[1]["p"]["triggerprice"] == "49499.95"                         # (Angel One refuses it -> the position is exited at once)
+
+
+@async_test
+async def test_a_stop_order_of_an_earlier_day_missing_from_the_book_is_not_taken_as_resting(env):
+    sid = await open_long(env)
+    del env.fb.orders[sid]                                                                    # a new day: Angel One's book no longer has it
+    t = dt.datetime(2026, 11, 10, 9, 20)
+    env.sync(PAPER_BUY, t)
+    await env.rt.tick(t)
+    old = [o for o in env.state()["orders"] if o["broker_id"] == sid][0]
+    assert old["state"] == "cancelled"
+    nid, s = env.fb.last("stop")
+    assert nid != sid and s["p"]["triggerprice"] == "49499.95"                                # protected again, not left to an order that is gone
+
+
+@async_test
+async def test_a_triggered_stop_that_does_not_fill_is_replaced_by_an_exit_order_without_waiting_for_the_strategy(env):
+    sid = await open_long(env)
+    env.fb.orders[sid]["status"] = "open"                                                     # the trigger was hit; the limit waits
+    env.fb.ltp_value = 49400.0                                                                # price ran past the stop's limit (49,489.95)
+    await env.rt.tick(secs(10))
+    await env.rt.tick(secs(45))
+    assert env.fb.orders[sid]["status"] == "cancelled"
+    ex = [c[1] for c in env.fb.calls if c[0] == "place" and c[1]["ordertype"] == "LIMIT" and c[1]["transactiontype"] == "SELL"]
+    assert len(ex) == 1
+
+
+@async_test
+async def test_an_open_status_without_the_price_past_the_trigger_does_not_exit(env):
+    sid = await open_long(env)
+    env.fb.orders[sid]["status"] = "open"
+    env.fb.ltp_value = 49900.0                                                                # nowhere near the trigger: a status we do not trust alone
+    await env.rt.tick(secs(10))
+    await env.rt.tick(secs(45))
+    assert env.fb.orders[sid]["status"] == "open" and env.state()["exit_since"] is None
+
+
+@async_test
+async def test_a_result_the_real_account_may_not_act_on_is_ignored(env):
+    await open_long(env)
+    env.rt.sync(IID, env.uid, SYM, {"instrument": dict(INST), "ltp": 50001.0, "real_ready": False,           # e.g. the daily-close fallback showing a SELL
+                                    "position": {"direction": "SELL", "entry_price": 50000.0, "active_stop": 50500.0}}, secs(20))
+    await env.rt.tick(secs(20))
+    await env.rt.tick(secs(60))
+    a = env.state()
+    assert a["exit_since"] is None and a["position"]["side"] == "BUY" and a["stop_target"] == 49500.0
+
+
+@async_test
+async def test_the_stop_may_widen_only_on_the_first_trading_day_after_the_entry(env):
+    await open_long(env)                                                                      # Monday
+    early = dt.datetime(2026, 11, 10, 8, 0)                                                    # Tuesday before the open: not a trading moment yet
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 49000.0}, early)
+    await env.rt.tick(early)
+    assert env.state()["stop_target"] == 49500.0
+    t = dt.datetime(2026, 11, 10, 9, 20)                                                       # Tuesday, open: the handover day
+    await env.rt.tick(t)
+    assert env.state()["stop_target"] == 49000.0

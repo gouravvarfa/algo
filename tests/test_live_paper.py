@@ -14,6 +14,7 @@ IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 def no_candle_sharing(monkeypatch):
     """These tests move a simulated clock; the cross-user candle sharing (15 s of REAL time) would hide the repeated Angel One calls they check."""
     monkeypatch.setattr(pe, "CANDLE_SHARE_SECONDS", 0)
+    monkeypatch.setattr(pe, "SINGLE_MINUTES_FROM", dt.date(2026, 1, 1))     # the synthetic candles here are older than the live start day
 
 
 # ---------------------------------------------------------------- login
@@ -123,13 +124,16 @@ def _engine(provider):
     import asyncio
     e = pe.PaperEngine.__new__(pe.PaperEngine)
     from app.live.ticks import TickFeed
-    e.provider, e._minutes, e._live_good, e._cooldown_until = provider, {}, {}, {}
+    e.provider, e._minutes, e._live_good, e._cooldown_until, e._chain_cache = provider, {}, {}, {}, {}
     e.feed = TickFeed(lambda: None)
+    e.refreshes = []
+    e._refresh_later = lambda key, load: e.refreshes.append(key)      # background refreshes are recorded, not run (a simulated clock)
     return e
 
 
 class _I:
     id, symbol, exch_seg, token = "i1", "BANKNIFTY", "NFO", "1"
+    trading_symbol, expiry, lot_size, added_at = "BANKNIFTYFUT", "", 30, "2026-01-01T00:00:00"
     sess = pe.NSE            # every real Instrument has its trading session (NSE unless it is gold / silver)
 
 
@@ -140,12 +144,13 @@ def test_live_intraday_failure_never_breaks_the_instrument(caplog):
     assert out is None                                             # nothing to reuse: caller keeps the daily result AND shows a warning
 
 
-def test_rate_limit_reuses_last_good_result_then_cools_down_and_expires():
+def test_a_refused_refresh_keeps_evaluating_on_the_stored_candles_instead_of_freezing():
+    """Before: a refused 1-minute request froze the result ('last successful evaluation') for up to 20 minutes, then fell back to the daily-close
+    result. Now the evaluation goes on with the stored candles (and the live ticks) and Angel One is asked again in the background only."""
     import asyncio
     conf = _daily(60)
     day = (conf.index[-1] + pd.offsets.BDay(1)).strftime("%Y-%m-%d")
-    good = _Provider(_minutes(day, [100 + (i % 7) * .1 for i in range(120)]))
-    eng = _engine(good)
+    eng = _engine(_Provider(_minutes(day, [100 + (i % 7) * .1 for i in range(120)])))
     t0 = dt.datetime.fromisoformat(day + "T11:30:00").replace(tzinfo=IST)
     first = asyncio.run(eng._live_intraday(_I, conf, [], t0))
     assert first is not None and not first[1].startswith("WARNING")
@@ -154,14 +159,9 @@ def test_rate_limit_reuses_last_good_result_then_cools_down_and_expires():
             self.calls += 1
             raise RuntimeError("Too many requests")
     lim = Limited(); eng.provider = lim
-    t1 = t0 + dt.timedelta(minutes=2)
-    r = asyncio.run(eng._live_intraday(_I, conf, [], t1))
-    assert r is not None and r[1].startswith("WARNING") and "last successful intraday evaluation" in r[1] and r[0] == first[0]
-    calls = lim.calls
-    r2 = asyncio.run(eng._live_intraday(_I, conf, [], t1 + dt.timedelta(seconds=30)))      # inside the cooldown: no new Angel call
-    assert lim.calls == calls and r2[1].startswith("WARNING")
-    r3 = asyncio.run(eng._live_intraday(_I, conf, [], t0 + dt.timedelta(minutes=30)))     # too old to show as current
-    assert r3 is None
+    r = asyncio.run(eng._live_intraday(_I, conf, [], t0 + dt.timedelta(minutes=2)))
+    assert r is not None and not r[1].startswith("WARNING") and [(t.direction, t.entry_date) for t in r[0]] == [(t.direction, t.entry_date) for t in first[0]]
+    assert lim.calls == 0 and eng.refreshes == [("m", _I.token)]          # not waited for: the sweep goes on, the refresh runs in the background
 
 
 def test_live_intraday_too_few_minutes_keeps_daily_result():
