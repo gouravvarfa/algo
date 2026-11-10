@@ -92,6 +92,17 @@ def struct_cap_for(symbol: str) -> float:
 
 
 INDEX_TOKENS = {"BANKNIFTY": ("NSE", "99926009"), "NIFTY": ("NSE", "99926000")}
+# The scrolling market bar (display only: never traded, never part of a strategy). Tokens from Angel One's scrip master, checked 10 Nov 2026.
+TICKER_INDICES: dict[str, tuple[str, str, str]] = {
+    "NIFTY": ("NSE", "99926000", "NIFTY 50"), "BANKNIFTY": ("NSE", "99926009", "BANKNIFTY"), "SENSEX": ("BSE", "99919000", "SENSEX"),
+    "FINNIFTY": ("NSE", "99926037", "FINNIFTY"), "MIDCPNIFTY": ("NSE", "99926074", "MIDCAP SELECT"), "INDIA VIX": ("NSE", "99926017", "INDIA VIX"),
+    "NIFTYNXT50": ("NSE", "99926013", "NIFTY NEXT 50"), "NIFTY MIDCAP 100": ("NSE", "99926011", "MIDCAP 100"),
+    "NIFTY SMLCAP 100": ("NSE", "99926032", "SMALLCAP 100"), "NIFTY IT": ("NSE", "99926008", "NIFTY IT"), "NIFTY AUTO": ("NSE", "99926029", "NIFTY AUTO"),
+    "NIFTY FMCG": ("NSE", "99926021", "NIFTY FMCG"), "NIFTY PHARMA": ("NSE", "99926023", "NIFTY PHARMA"), "NIFTY METAL": ("NSE", "99926030", "NIFTY METAL"),
+    "NIFTY ENERGY": ("NSE", "99926020", "NIFTY ENERGY"), "NIFTY REALTY": ("NSE", "99926018", "NIFTY REALTY"), "NIFTY MEDIA": ("NSE", "99926031", "NIFTY MEDIA"),
+    "NIFTY PSU BANK": ("NSE", "99926025", "PSU BANK"), "NIFTY INFRA": ("NSE", "99926019", "NIFTY INFRA"),
+}
+INDEX_CHART_TF = {"1D": ("ONE_DAY", 400, 900), "15m": ("FIFTEEN_MINUTE", 20, 120), "5m": ("FIVE_MINUTE", 5, 60)}   # interval, days, cache seconds
 SWEEP_MIN_SLEEP = 0.25                  # between two sweeps of the engine while ticks flow (seconds)
 FAULT_RETRY_SECONDS = 5.0                # an instrument whose evaluation is failing is looked at again after this long, not on every sweep
 SWEEP_DUTY = 2.0                        # ... and at least this many times the CPU the sweep used, so the engine never takes more than about a third of a core
@@ -1047,6 +1058,10 @@ class PaperEngine:
             self.feed.subscribe(inst.exch_seg, inst.token)
         for ex, tok in INDEX_TOKENS.values():        # index prices for the day-change display
             self.feed.subscribe(ex, tok)
+        for key, (ex, tok, _label) in TICKER_INDICES.items():     # the market bar: shown only, their ticks never wake the strategy loop
+            if key not in INDEX_TOKENS:
+                self.feed.display_only.add(tok)
+            self.feed.subscribe(ex, tok)
         self.feed.start()
         self._task = asyncio.create_task(self._loop())
 
@@ -1066,21 +1081,68 @@ class PaperEngine:
             cached = await self._load_index_close(name)            # nothing to show yet: this one answer has to wait
         elif cached is None or (now - cached[0]).total_seconds() > 600:
             self._refresh_later(("i", name), lambda: self._load_index_close(name))    # a live price never waits for the candle queue
-        prev_close, last_close = cached[1:] if cached else (None, None)
+        prev_close, last_close = cached[1:3] if cached else (None, None)
         price = tick.ltp if live else last_close
         change = None if price is None or prev_close is None else round(price - prev_close, 2)
         return {"symbol": name, "price": price, "prev_close": prev_close, "change": change,
                 "pct": None if change is None or not prev_close else round(change / prev_close * 100, 2),
                 "live": live, "age_s": self.feed.age(tok), "source": "WebSocket tick" if live else "REST daily candle"}
 
+    def ticker(self) -> list[dict]:
+        """The market bar: every TICKER_INDICES index with its price and change versus the previous close. It never waits: the live tick, else the last
+        daily close. The previous close is loaded ONCE a day per index, in the background (it shares Angel One's candle quota with the strategy)."""
+        now = now_ist()
+        out = []
+        for key, (ex, tok, label) in TICKER_INDICES.items():
+            cached = self._prev_close.get(key)
+            if cached is None or cached[0].date() != now.date():
+                self._refresh_later(("i", key), lambda k=key: self._load_index_close(k))
+            tick = self.feed.latest.get(tok)
+            prev_close, last_close, before_last, last_day = cached[1:5] if cached and len(cached) >= 5 else (None, None, None, None)
+            if tick is not None and tick.exch_ts.date() == now.date():
+                price, ref, session = tick.ltp, prev_close, now.date()              # trading today: today's change against the previous session's close
+            else:
+                # no trade today (holiday, weekend, before the open): the LAST session's close and its change against the session before it,
+                # as brokers show it (10 Nov 2026, an NSE holiday, showed 0.00% everywhere before)
+                price, ref, session = last_close, before_last, last_day
+            change = None if price is None or ref is None else round(price - ref, 2)
+            closes = [m[4] for m in self.feed.builder.minutes(tok) if m[0].date() == now.date()]     # today's minutes built from live ticks: no API call
+            step = max(1, -(-len(closes) // 48))                                                       # at most 48 points + the last
+            spark = (closes[::step] + ([closes[-1]] if (len(closes) - 1) % step else [])) if closes else []
+            out.append({"key": key, "label": label, "exchange": ex, "price": price, "prev_close": ref, "change": change,
+                        "pct": None if change is None or not ref else round(change / ref * 100, 2), "session": session.isoformat() if session else None,
+                        "today": session == now.date(), "live": bool(tick is not None and self.feed.healthy(tok) and session == now.date()), "spark": spark})
+        return out
+
+    async def index_chart(self, key: str, tf: str) -> list[dict]:
+        """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call)."""
+        ex, tok, _label = TICKER_INDICES[key]
+        interval, days, ttl = INDEX_CHART_TF[tf]
+        now = now_ist()
+        cache = self.__dict__.setdefault("_index_charts", {})
+        hit = cache.get((key, tf))
+        if hit and (now - hit[0]).total_seconds() < ttl:
+            df = hit[1]
+        else:
+            df = await self._candles(ex, tok, interval, days, include_partial=True)
+            cache[(key, tf)] = (now, df)
+        tick = self.feed.latest.get(tok)
+        if df is None or not len(df):
+            return []
+        rows = _candles_with_tick(df, tick.ltp if tick is not None and self.feed.healthy(tok) else None)
+        vols = [float(v) for v in df["volume"]] if "volume" in df.columns else [0.0] * len(rows)     # an index has no traded volume (Angel One gives 0)
+        return [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)]
+
     async def _load_index_close(self, name: str) -> tuple:
-        ex, tok = INDEX_TOKENS[name]
+        ex, tok = INDEX_TOKENS[name] if name in INDEX_TOKENS else TICKER_INDICES[name][:2]
         now = now_ist()
         df = await self._candles(ex, tok, "ONE_DAY", 10, include_partial=True)
         prev = None if df is None or df.empty else df[df.index.date < now.date()]
         prev_close = float(prev["close"].iloc[-1]) if prev is not None and not prev.empty else None
         last_close = float(df["close"].iloc[-1]) if df is not None and not df.empty else None
-        self._prev_close[name] = (now, prev_close, last_close)
+        before_last = float(df["close"].iloc[-2]) if df is not None and len(df) >= 2 else None       # the close before the last session
+        last_day = df.index[-1].date() if df is not None and not df.empty else None
+        self._prev_close[name] = (now, prev_close, last_close, before_last, last_day)
         return self._prev_close[name]
 
     # ---- views -----------------------------------------------------------

@@ -110,6 +110,7 @@ class TickFeed:
         self.reconnects = 0
         self.last_error: str | None = None
         self.updated = asyncio.Event()           # set on every accepted tick; consumers clear it
+        self.display_only: set[str] = set()      # tokens shown only (the market bar's indices): their ticks never wake the strategy loop
         self.listeners: list[Callable[[Tick], None]] = []   # called with every accepted tick (the dry-run shadow account); a failing listener never stops the feed
         self._listener_errors = 0
         self._ws = None
@@ -233,7 +234,8 @@ class TickFeed:
                                 self.latest[t.token] = t
                                 self.builder.add(t)
                                 self._notify(t)
-                                self.updated.set()
+                                if t.token not in self.display_only:
+                                    self.updated.set()
                         elif isinstance(msg, str) and msg != "pong":
                             try:
                                 body = json.loads(msg)

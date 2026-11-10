@@ -255,6 +255,28 @@ async def shadow_api(request: Request):
     return engine.shadow_view(_owner(request))
 
 
+@app.get("/api/market/ticker")
+async def market_ticker():
+    """The scrolling market bar: index prices and day change (display only)."""
+    from app.paper_trading.engine import NSE, SESSIONS, market_open
+    if engine is None:
+        return {"items": [], "nse_open": False, "mcx_open": False}
+    return {"items": engine.ticker(), "nse_open": market_open(session=NSE), "mcx_open": market_open(session=SESSIONS["MCX"])}
+
+
+@app.get("/api/market/chart/{key}")
+async def market_chart(key: str, tf: str = "1D"):
+    """Candles of one market-bar index (opened by a click on the bar)."""
+    from app.paper_trading.engine import INDEX_CHART_TF, TICKER_INDICES
+    key = key.upper()
+    if engine is None or key not in TICKER_INDICES or tf not in INDEX_CHART_TF:
+        raise HTTPException(404, "unknown index or timeframe")
+    try:
+        return {"key": key, "label": TICKER_INDICES[key][2], "tf": tf, "candles": await engine.index_chart(key, tf)}
+    except Exception as exc:
+        raise HTTPException(502, f"chart unavailable: {str(exc)[:80]}")
+
+
 @app.get("/api/index/{name}")
 async def index_quote(name: str):
     name = name.upper()

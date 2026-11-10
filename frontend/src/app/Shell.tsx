@@ -11,6 +11,7 @@ import { Icon, type IconName } from './Icon'
 import { Hamburger, NavBackdrop } from './MobileNav'
 import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
+import { MarketTicker } from '../features/market/MarketTicker'
 
 interface Item { to: string; label: string; icon: IconName }
 
@@ -127,6 +128,7 @@ export function Shell() {
       <Sidebar />
       <NavBackdrop open={nav} onClose={() => setNav(false)} />
       <StatusBar navOpen={nav} onNav={() => setNav((v) => !v)} />
+      <MarketTicker />
       <Notices />
       <Outlet />
     </div>
