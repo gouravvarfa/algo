@@ -33,9 +33,13 @@ PRODUCTS = ("INTRADAY", "CARRYFORWARD")
 SIDES = ("BUY", "SELL")
 OPEN_T, CLOSE_T = dt.time(9, 15), dt.time(15, 30)
 
-_sessions: dict[str, tuple[float, ao.AngelOneSession]] = {}
+# One Angel One session per person for the whole day (Angel One ends sessions at midnight IST), shared by the real-order executor and every
+# account screen. A new login is made only on a new day or when Angel One says the session is no longer valid (drop_if_dead): every login adds a
+# session on the account, and the person's account can be the very one the market data uses (it was, Nov 2026); a login every 10 minutes
+# (the rule before) only multiplied them.
+_sessions: dict[str, tuple[dt.date, ao.AngelOneSession]] = {}
+_session_locks: dict[str, asyncio.Lock] = {}
 _last_send: dict[str, float] = {}
-SESSION_TTL_S = 600.0
 
 
 class OrderError(Exception):
@@ -160,16 +164,34 @@ def parse(body: dict) -> dict:
 
 
 async def _session(c, user_id: str, fresh: bool = False) -> ao.AngelOneSession:
+    """The person's session of today. `fresh`: log in now (Test connection, the preflight check) and keep that one for everybody."""
+    today = now_ist().date()
     hit = _sessions.get(user_id)
-    if hit and not fresh and time.monotonic() - hit[0] < SESSION_TTL_S:
+    if hit and not fresh and hit[0] == today:
         return hit[1]
-    s = await account._login_or_record(c, user_id)
-    _sessions[user_id] = (time.monotonic(), s)
-    return s
+    lock = _session_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:                                    # two callers at once (the executor and a screen) make ONE login, not two
+        hit = _sessions.get(user_id)
+        if hit and not fresh and hit[0] == today:
+            return hit[1]
+        s = await account._login_or_record(c, user_id)
+        _sessions[user_id] = (today, s)
+        return s
 
 
 def _drop(user_id: str) -> None:
     _sessions.pop(user_id, None)
+
+
+def drop_if_dead(user_id: str, exc: BaseException, session: ao.AngelOneSession | None = None) -> bool:
+    """Forget the cached session only when Angel One said it is no longer valid; the next call then logs in once. A rate-limit page or a network
+    error keeps it (a new login lifts neither). `session`: the one that failed; a newer one somebody already made is kept."""
+    if not ao.session_dead(exc):
+        return False
+    hit = _sessions.get(user_id)
+    if hit and (session is None or hit[1] is session):
+        _sessions.pop(user_id, None)
+    return True
 
 
 async def _context(c, user_id: str, req: dict):
@@ -199,7 +221,7 @@ async def _context(c, user_id: str, req: dict):
                 except ao.AngelOneApiError:
                     margin = None                      # the Margin check then fails (the order is not sent) but the person still sees the rest of the preview
     except ao.AngelOneApiError as exc:
-        _drop(user_id)
+        drop_if_dead(user_id, exc)
         raise OrderError(502, "BROKER_READ", f"Could not read your Angel One account: {exc}") from exc
     return r, contract, ltp, positions, funds, (float(margin) if margin is not None else None), s
 
@@ -267,10 +289,9 @@ async def send(c, user_id: str, preview_id: str, actor: dict | None) -> dict:
         status, message, bid = "placed", "Sent to Angel One", oid
     except ao.AngelOneApiError as exc:
         status, message, bid = "rejected", f"Angel One refused: {exc}", None
-        _drop(user_id)
+        drop_if_dead(user_id, exc)
     except angel_orders.Unknown as exc:
         status, message, bid = "unknown", f"{exc} Check your Angel One order book before doing anything else.", None
-        _drop(user_id)
     _finish(c, preview_id, status, message, bid)
     audit.append(c, "broker.order", actor_id=user_id, actor_role=actor["role"] if actor else None, target_type="user", target_id=user_id,
                  detail={"order": preview_id, "contract": contract.symbol, "side": row["side"], "lots": row["lots"], "price": row["price"], "intent": intent, "status": status, "broker_order_id": bid})

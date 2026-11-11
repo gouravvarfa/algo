@@ -23,7 +23,13 @@ class FakeAngel:
         self.ltp, self.cash, self.margin = 50001.0, 500000.0, 100000.0
         self.timeout_paths: set[str] = set()
         self.reject_next: str | None = None
+        self.reject_all: str | None = None          # every new order is refused with this text
+        self.late_cancel = False                    # the next cancel is accepted, but the order had already filled at the exchange
+        self.expire_on_place = False                # the next order finds the session expired (another login happened): Invalid Token, nothing received
+        self.fail_rms = 0                           # this many funds reads answer with an error
+        self.hits: dict[str, int] = {}              # requests per path
         self.jwt = "jwt-fake-1"
+        self.logins = 0
         self.app = self._build()
 
     # ---- what a test does ----
@@ -62,6 +68,7 @@ class FakeAngel:
                 return bad("Invalid clientcode or password", "AB1007")
             if not pyotp.TOTP(fa.totp_secret).verify(b.get("totp", ""), valid_window=1):
                 return bad("Invalid totp", "AB1050")
+            fa.logins += 1
             return {"status": True, "message": "SUCCESS", "data": {"jwtToken": fa.jwt, "refreshToken": "r", "feedToken": "f"}}
 
         @app.post("/rest/secure/angelbroking/user/v1/logout")
@@ -72,6 +79,9 @@ class FakeAngel:
         async def rms(req: Request):
             if not authed(req):
                 return bad("Invalid Token", "AG8001")
+            if fa.fail_rms > 0:
+                fa.fail_rms -= 1
+                return bad("Something Went Wrong, Please Try After Sometime", "AB1004")
             return {"status": True, "data": {"availablecash": str(fa.cash), "net": str(fa.cash), "m2mrealized": "0", "m2munrealized": "0"}}
 
         @app.get("/rest/secure/angelbroking/order/v1/getPosition")
@@ -102,6 +112,8 @@ class FakeAngel:
 
         @app.post("/rest/secure/angelbroking/order/v1/placeOrder")
         async def place(req: Request):
+            if fa.expire_on_place:
+                fa.expire_on_place, fa.jwt = False, fa.jwt + "x"       # someone logged in again: this session is gone, the order is not received
             if not authed(req):
                 return bad("Invalid Token", "AG8001")
             b = await req.json()
@@ -119,6 +131,8 @@ class FakeAngel:
             if fa.reject_next:
                 msg, fa.reject_next = fa.reject_next, None
                 return bad(msg)
+            if fa.reject_all:
+                return bad(fa.reject_all)
             oid = str(next(fa.ids))
             fa.orders[oid] = {**b, "orderid": oid, "status": "trigger pending" if b["variety"] == "STOPLOSS" else "open", "filledshares": "0", "averageprice": "0", "text": ""}
             return {"status": True, "message": "SUCCESS", "data": {"script": b["tradingsymbol"], "orderid": oid, "uniqueorderid": "u" + oid}}
@@ -146,7 +160,12 @@ class FakeAngel:
             o = fa.orders.get(b.get("orderid", ""))
             if o is None or o["status"] not in ("open", "trigger pending"):
                 return bad("order cannot be cancelled")
-            o["status"] = "cancelled"
+            if fa.late_cancel:                                         # accepted by Angel One, refused by the exchange: it had filled
+                fa.late_cancel = False
+                px = o.get("triggerprice") if o["ordertype"] == "STOPLOSS_LIMIT" else o.get("price")
+                o.update(status="complete", averageprice=str(px if px and float(px) > 0 else fa.ltp), filledshares=o["quantity"])
+            else:
+                o["status"] = "cancelled"
             return {"status": True, "message": "SUCCESS", "data": {"orderid": o["orderid"]}}
 
         return app
@@ -158,6 +177,7 @@ class FakeAngel:
 
         class T(httpx.AsyncBaseTransport):
             async def handle_async_request(self, request):
+                fa.hits[request.url.path] = fa.hits.get(request.url.path, 0) + 1
                 if request.url.path in fa.timeout_paths:
                     fa.timeout_paths.discard(request.url.path)
                     await inner.handle_async_request(request)           # it DID arrive...

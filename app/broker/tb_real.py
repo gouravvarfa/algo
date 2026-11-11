@@ -2,16 +2,21 @@
 
 What it does, for each person and instrument whose real switch is ON (and the account in effective real mode):
   * Starts at the NEXT new System Point after the switch was turned on. A position the paper account already holds then is not copied; its exit finds no real position and is ignored.
-  * ENTRY: a LIMIT order near the live price (never beyond a small band from the strategy's price: a missed entry is never chased), then, once it fills, a STOPLOSS_LIMIT order
-    for exactly that quantity sits on the exchange. An entry order that is not filled in 30 s is cancelled and placed again at the live price, three attempts at most.
+  * ENTRY: a LIMIT order at the live price plus a small allowance; not filled in 3 s -> cancelled, then a MARKET order (decided with the user, 10 Nov 2026: an entry is never
+    skipped for price). Once it fills, a STOPLOSS_LIMIT order for exactly that quantity sits on the exchange, its trigger one tick beyond the strategy's stop.
   * EXIT, method B: the stop order closes the position; only then does the opposite entry go out (a reversal never holds two quantities). If the strategy has exited and our stop has
-    not filled within 30 s, the stop is cancelled and an exit LIMIT order is sent. Gap exits and rolls send the exit order at once.
-  * The stop follows the strategy's stop (break-even, gap protection) by modifying the resting stop order.
+    not filled within 3 s, the stop is cancelled and an exit LIMIT order is sent (then MARKET). Gap exits and rolls send the exit order at once.
+  * The stop follows the strategy's stop (break-even, gap protection, the trail after the close) by modifying the resting stop order; it never moves back after the first trading day.
   * Before every ENTRY: lots within the person's limit, today's loss under the cap, margin available (fail closed), market hours of the instrument's session, at most 40 orders a day.
-  * Anything it cannot be sure of HALTS that instrument (a request that timed out, a broker position that does not match what we hold): no further order is sent until the person
-    clears the halt after looking at Angel One. Nothing is retried blind.
+  * A CANCEL counts only once Angel One's order book shows the order cancelled: an order can fill in the very instant it is cancelled, and Angel One accepts the cancel request
+    anyway. Until then nothing new is sent for it (a MARKET retry or an exit after a "cancelled" order that had in fact filled would double the position).
+  * After the app closes a position it checks that Angel One shows it closed too; an answer that says the session expired means nothing was received and the order goes again
+    after a fresh login (it is never taken as a refusal, which would exit a position or drop an entry).
+  * Anything it cannot be sure of HALTS that instrument (a request that timed out, a broker position that does not match what we hold, exits refused again and again): no further
+    order is sent until the person clears the halt after looking at Angel One. Nothing is retried blind.
   * Switching the instrument off, or the account leaving real mode, cancels an entry that has not filled. An open position keeps its resting stop order and is then the person's to manage.
-Every order is stored (real_tb_orders) and audited. The state survives a restart. Orders are never market orders.
+Every order is stored (real_tb_orders) and audited. The state survives a restart. Angel One allows about one order-book / positions read a second, so each round reads
+them once per person for all of that person's instruments.
 """
 from __future__ import annotations
 
@@ -43,7 +48,17 @@ EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lot
 MAX_ORDERS_PER_DAY = 40
 TICK_S = 5.0
 KEEP_EVENTS = 80
-ACTIVE = ("placed", "open")
+ACTIVE = ("placed", "open")                  # live at Angel One: managed (waited for, modified, cancelled)
+TRACKED = ACTIVE + ("cancelling",)           # outcome not known yet: read from the order book every round (a cancel sent but not yet confirmed)
+CANCEL_CONFIRM_S = 15.0                      # a cancel the order book has not confirmed in this long is sent again ...
+MAX_CANCEL_TRIES = 3                         # ... and after this many the instrument halts
+CONFIRM_PAUSE_S = 1.1                        # before reading the order book again to confirm a cancel (about one read a second is allowed)
+MAX_EXIT_REJECTS = 3                         # exit orders refused in a row -> halt (an endless stream of refused orders helps nobody)
+STALL_RELOGIN_S = 90.0                       # Angel One failing every call this long: log in again once (a dead session that does not say so)
+RELOGIN_MIN_GAP_S = 300.0
+MISSING_HALT_S = 60.0                        # an order Angel One accepted today but its order book does not list after this long: how it ended is unknown
+GUARD_FUNDS = "could not read your funds"    # entry checks that a busy Angel One can fail: asked again for up to NO_PRICE_MISS_S before the entry is dropped
+GUARD_MARGIN = "margin could not be computed, so the entry is not sent"
 
 
 def now_ist() -> dt.datetime:
@@ -98,6 +113,35 @@ async def angel_broker_for(c, user_id: str) -> AngelBroker:
     return AngelBroker(await orders._session(c, user_id))
 
 
+class _RoundBroker:
+    """One person's broker for one executor round. The order book and the positions are read ONCE per round for all of that person's instruments
+    (Angel One answers about one such read a second; a read per instrument made it refuse them). A failed read is remembered for the round too,
+    so the person's other instruments wait for the next round instead of hammering Angel One. book(fresh=True) reads again (a cancel confirmation)."""
+
+    def __init__(self, inner, memo: dict):
+        self._inner, self._memo = inner, memo
+
+    async def _once(self, key: str, call, fresh: bool = False):
+        if fresh or key not in self._memo:
+            try:
+                self._memo[key] = (True, await call())
+            except Exception as exc:
+                self._memo[key] = (False, exc)
+        ok, v = self._memo[key]
+        if not ok:
+            raise v
+        return v
+
+    async def book(self, fresh: bool = False):
+        return await self._once("book", self._inner.book, fresh)
+
+    async def positions(self):
+        return await self._once("positions", self._inner.positions)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 class RealTB:
     def __init__(self, broker_for=angel_broker_for) -> None:
         self.broker_for = broker_for
@@ -106,6 +150,8 @@ class RealTB:
         self.queue: list[dict] = []
         self.lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
+        self._fail_since: dict[str, dt.datetime] = {}               # per person: since when every round's first Angel One read has failed
+        self._relogin_at: dict[str, dt.datetime] = {}
 
     # ------------------------------------------------------------------ what the paper engine tells us (cheap, synchronous, never raises into it)
     def handle(self, events: list[dict], snap: dict, now: dt.datetime) -> None:
@@ -152,6 +198,14 @@ class RealTB:
     def _active(self, a: dict, role: str) -> list[dict]:
         return [o for o in a["orders"] if o["role"] == role and o["state"] in ACTIVE]
 
+    def _cancelling(self, a: dict, role: str | None = None) -> list[dict]:
+        """Orders whose cancel Angel One accepted but whose end the order book has not shown yet: they may still have filled."""
+        return [o for o in a["orders"] if o["state"] == "cancelling" and (role is None or o["role"] == role)]
+
+    @staticmethod
+    def _unsettled(a: dict) -> bool:
+        return any(o["state"] in TRACKED for o in a["orders"])
+
     def _orders_today(self, c, user_id: str) -> int:
         start = dt.datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         return c.execute("SELECT COUNT(*) FROM real_tb_orders WHERE user_id=? AND created_at>=? AND status IN ('placed','open','filled','unknown')", (user_id, start)).fetchone()[0]
@@ -171,7 +225,12 @@ class RealTB:
         try:
             o["broker_id"] = await broker.place(payload)
         except ao.AngelOneApiError as exc:
-            o["state"], status, msg = "rejected", "rejected", f"Angel One refused: {exc}"
+            if self._dead_session(a, broker, exc):
+                # the session had expired, so Angel One received nothing: NOT a refusal of this order (a refused stop would exit the position, a refused
+                # entry would be dropped). The same step runs again next round, after a fresh login.
+                o["state"], status, msg = "not_sent", "not_sent", f"not received, Angel One's session had expired ({exc}): sent again after a fresh login"
+            else:
+                o["state"], status, msg = "rejected", "rejected", f"Angel One refused: {exc}"
             o["message"] = msg
         except angel_orders.Unknown as exc:
             o["state"], status, msg = "unknown", "unknown", str(exc)
@@ -185,7 +244,13 @@ class RealTB:
                      detail={"order": oid, "instrument": a["symbol"], "role": role, "side": o["side"], "qty": o["qty"], "type": o["type"], "price": o["price"], "trigger": o["trigger"],
                              "status": status, "broker_order_id": o["broker_id"]})
         self._ev(a, now, f"{role} order {status}: {o['side']} {o['qty']} {o['type']} {o['price']}" + (f" trigger {o['trigger']}" if o["trigger"] is not None else "") + f" ({why})" + (f": {msg}" if msg else ""), order=oid)
-        return o
+        return None if o["state"] == "not_sent" else o
+
+    @staticmethod
+    def _dead_session(a: dict, broker, exc: BaseException) -> bool:
+        """Angel One said the session is no longer valid: forget it (the next round logs in once) and tell the caller nothing was done."""
+        from app.broker import orders as _orders
+        return _orders.drop_if_dead(a["user_id"], exc, getattr(broker, "s", None))
 
     def _mark(self, c, o: dict, a: dict, status: str, msg: str | None = None, avg: float | None = None) -> None:
         o["state"] = "filled" if status == "filled" else status
@@ -195,19 +260,35 @@ class RealTB:
         c.commit()
 
     async def _cancel(self, c, broker, a: dict, o: dict, now: dt.datetime, why: str) -> bool:
+        """Ask Angel One to cancel. True = the request was accepted, which does NOT mean the order is cancelled: it may have filled in the same instant
+        (the exchange then refuses the cancel while Angel One already said yes). The order stays 'cancelling' until the order book shows how it ended."""
         if o["state"] not in ACTIVE or not o.get("broker_id"):
             return True
         try:
             await broker.cancel(o["broker_id"])
         except ao.AngelOneApiError as exc:
+            self._dead_session(a, broker, exc)
             self._ev(a, now, f"cancel of {o['role']} order refused ({exc}); it may already have filled", order=o["id"])
             return False
         except angel_orders.Unknown as exc:
             self._halt(c, a, now, f"a cancel got no clear answer from Angel One ({exc}). Look at your Angel One orders, then clear the halt.")
             return False
-        self._mark(c, o, a, "cancelled", why)
-        self._ev(a, now, f"{o['role']} order cancelled: {why}", order=o["id"])
+        o["state"], o["cancel_at"], o["cancel_tries"] = "cancelling", _s(now), o.get("cancel_tries", 0) + 1
+        c.execute("UPDATE real_tb_orders SET status='cancelling', message=?, updated_at=? WHERE id=?", (why, time.time(), o["id"]))
+        c.commit()
+        self._ev(a, now, f"{o['role']} order: cancel sent ({why}); waiting for Angel One's order book to confirm it", order=o["id"])
         return True
+
+    async def _confirm_cancels(self, c, broker, a: dict, now: dt.datetime) -> None:
+        """Read the order book again (after a short pause: about one read a second is allowed) so a cancel just sent is settled in this round."""
+        if not self._cancelling(a):
+            return
+        await asyncio.sleep(CONFIRM_PAUSE_S)
+        try:
+            book = {str(x.get("orderid")): x for x in await broker.book(fresh=True)}
+        except Exception:
+            return                                                         # settled next round
+        await self._update_orders(c, a, book, now)
 
     # ------------------------------------------------------------------ the strategy's signals
     async def _on_event(self, c, e: dict, now: dt.datetime) -> None:
@@ -323,36 +404,36 @@ class RealTB:
                         log.exception("real order step failed for an event")
                 keys = {(r["user_id"], r["instrument_id"]): r["symbol"] for r in c.execute("SELECT user_id, instrument_id, symbol FROM user_instrument_real WHERE real_on=1")}
                 for (uid, iid), a in list(self.state.items()):
-                    if a["position"] or a["pending_entry"] or self._active(a, "entry") or self._active(a, "stop") or self._active(a, "exit"):
+                    if a["position"] or a["pending_entry"] or self._unsettled(a) or a.get("expect_flat"):
                         keys.setdefault((uid, iid), a["symbol"])
+                memo: dict[str, dict] = {}                                  # per person: this round's order book and positions, read once
                 for (uid, iid), sym in keys.items():
                     try:
-                        await self._step(c, uid, iid, sym, now)
+                        await self._step(c, uid, iid, sym, now, memo.setdefault(uid, {}))
                     except Exception:
                         log.exception("real order step failed for %s", sym)
             finally:
                 c.close()
 
-    async def _step(self, c, uid: str, iid: str, sym: str, now: dt.datetime) -> None:
+    async def _step(self, c, uid: str, iid: str, sym: str, now: dt.datetime, memo: dict | None = None) -> None:
         row = c.execute("SELECT real_on, changed_at FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (uid, iid)).fetchone()
         a = self._acct(c, uid, iid, sym, row["changed_at"] if row else 0)
-        busy = bool(a["position"] or a["pending_entry"] or any(o["state"] in ACTIVE for o in a["orders"]) or a.get("_cancel_entry"))
+        busy = bool(a["position"] or a["pending_entry"] or self._unsettled(a) or a.get("_cancel_entry") or a.get("expect_flat"))
         if not busy:
             return                                                        # nothing open, nothing waiting: no call to Angel One at all
         session = (a["pending_entry"] or {}).get("contract", {}).get("session") or (self.snaps.get(iid) or {}).get("instrument", {}).get("session", "NSE")
-        quiet = a.get("released") or (not a["pending_entry"] and not a.get("exit_since") and not self._market_open(session, now))
+        quiet = a.get("released") or (not a["pending_entry"] and not a.get("exit_since") and not self._cancelling(a) and not self._market_open(session, now))
         if quiet and a.get("polled_at") and _age(a["polled_at"], now) < IDLE_POLL_S:
             return
         a["polled_at"] = _s(now)
         try:
-            broker = await self.broker_for(c, uid)
+            broker = _RoundBroker(await self.broker_for(c, uid), memo if memo is not None else {})
             book = {str(o.get("orderid")): o for o in await broker.book()}
         except Exception as exc:
-            from app.broker import orders as _orders
-            _orders._drop(uid)                                            # the next round logs in afresh
-            self._ev(a, now, f"Angel One not reachable this round ({type(exc).__name__}); nothing was sent")
+            self._unreachable(c, a, uid, exc, now)
             self._save(c, a)
             return
+        self._fail_since.pop(uid, None)
         await self._update_orders(c, a, book, now)
         real_ok = bool(row and row["real_on"]) and store.instrument_real(c, uid, iid)
         if a.get("manual_exit") and not a["position"]:
@@ -374,7 +455,10 @@ class RealTB:
                 if a["pending_entry"]:
                     a["pending_entry"] = None
                     self._ev(a, now, "real orders are off: the waiting entry was dropped")
-                if a["position"] and not a["released"]:
+                if a["position"] and a.get("unwanted_fill") and not a["halted"]:
+                    self._halt(c, a, now, f"an entry filled although it was being cancelled after real orders were switched off: {a['position']['side']} "
+                                          f"{a['position']['qty']} {a['position']['contract']} is open at Angel One with NO stop order. Close it there now, then clear the halt.")
+                elif a["position"] and not a["released"]:
                     a["released"] = True
                     self._ev(a, now, f"real orders are off: the open position ({a['position']['contract']}) stays at Angel One with its resting stop order; manage it there")
                 self._save(c, a)
@@ -387,10 +471,29 @@ class RealTB:
             await self._advance(c, broker, a, now)
         self._save(c, a)
 
+    def _unreachable(self, c, a: dict, uid: str, exc: BaseException, now: dt.datetime) -> None:
+        """This round could not read Angel One, so nothing was sent. An expired session is forgotten at once (the next round logs in once). Anything
+        else (a rate-limit page, network trouble) keeps the session: a new login lifts neither, and every login adds a session on the account. Only
+        when every call has failed for STALL_RELOGIN_S (a dead session that does not say so) is there one fresh login, at most one per RELOGIN_MIN_GAP_S."""
+        from app.broker import orders as _orders
+        if _orders.drop_if_dead(uid, exc):
+            note = "Angel One's session had expired: a fresh login next round"
+        else:
+            since = self._fail_since.setdefault(uid, now)
+            last = self._relogin_at.get(uid)
+            if (now - since).total_seconds() >= STALL_RELOGIN_S and (last is None or (now - last).total_seconds() >= RELOGIN_MIN_GAP_S):
+                _orders._drop(uid)
+                self._relogin_at[uid] = now
+                note = f"every call has failed for {int((now - since).total_seconds())} s: one fresh login next round"
+            else:
+                note = "trying again next round"
+        self._ev(a, now, f"Angel One not reachable this round ({type(exc).__name__}: {str(exc)[:80]}); nothing was sent; {note}")
+
     async def _update_orders(self, c, a: dict, book: dict, now: dt.datetime) -> None:
         for o in a["orders"]:
-            if o["state"] not in ACTIVE or not o.get("broker_id"):
+            if o["state"] not in TRACKED or not o.get("broker_id"):
                 continue
+            was_cancelling = o["state"] == "cancelling"
             b = book.get(str(o["broker_id"]))
             if b is None:
                 if o.get("placed_at") and _p(o["placed_at"]).date() < now.date():
@@ -398,6 +501,9 @@ class RealTB:
                     # (the app was down at the close) is over. A stop is placed again when the market opens; it is never taken as still resting.
                     self._mark(c, o, a, "cancelled", "a day order of an earlier session: no longer in Angel One's order book")
                     self._ev(a, now, f"{o['role']} order of {o['placed_at'][:10]} is no longer at Angel One (a day order ends with its session)", order=o["id"])
+                elif not a["halted"] and _age(o.get("placed_at"), now) > MISSING_HALT_S:
+                    self._halt(c, a, now, f"a {o['role']} order Angel One accepted today (order id {o['broker_id']}) is not in its order book after "
+                                          f"{int(_age(o.get('placed_at'), now))} s, so how it ended is unknown. Look at your Angel One orders, then clear the halt.")
                 continue
             st = (b.get("status") or b.get("orderstatus") or "").lower()
             try:
@@ -414,15 +520,28 @@ class RealTB:
                 except ValueError:
                     avg = o.get("price")
                 self._mark(c, o, a, "filled", avg=avg)
+                if was_cancelling:
+                    self._ev(a, now, f"the {o['role']} order had FILLED before the cancel reached the exchange: it counts as filled", order=o["id"])
                 self._on_fill(c, a, o, avg, now)
             elif st in ("rejected", "cancelled"):
                 self._mark(c, o, a, st, b.get("text") or st)
-                self._ev(a, now, f"{o['role']} order {st} by Angel One: {b.get('text') or ''}", order=o["id"])
-                if o["role"] == "stop" and st == "rejected" and a["position"]:
+                self._ev(a, now, f"{o['role']} order {st}" + (" (confirmed by Angel One's order book)" if was_cancelling else f" by Angel One: {b.get('text') or ''}"), order=o["id"])
+                if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling:
                     a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
                     self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
-                if o["role"] == "entry" and st == "rejected" and a["pending_entry"]:
+                if o["role"] == "entry" and st == "rejected" and a["pending_entry"] and not was_cancelling:
                     self._miss(a, now, f"entry order rejected: {b.get('text') or ''}")
+            elif was_cancelling:
+                # still open (or 'cancel pending') after the cancel was accepted: wait; if it lasts, the cancel is sent again, and in the end a person looks
+                if _age(o.get("cancel_at"), now) > CANCEL_CONFIRM_S:
+                    if a["halted"]:
+                        pass                                                   # a person is already looking
+                    elif o.get("cancel_tries", 1) >= MAX_CANCEL_TRIES:
+                        self._halt(c, a, now, f"Angel One accepted {o['cancel_tries']} cancels of a {o['role']} order but its order book still shows it '{st}'. "
+                                              "Look at the order at Angel One (cancel it there, or note that it filled), then clear the halt.")
+                    else:
+                        o["state"] = "open"                                    # managed again: the usual step cancels it once more
+                        self._ev(a, now, f"the {o['role']} order still shows '{st}' {int(_age(o.get('cancel_at'), now))} s after its cancel was accepted: cancelling again", order=o["id"])
             elif st in ("open", "trigger pending", "open pending", "validation pending", "put order req received", "modify pending", "after market order req received"):
                 o["state"] = "open"
                 if o["role"] == "stop":
@@ -433,7 +552,18 @@ class RealTB:
 
     def _on_fill(self, c, a: dict, o: dict, avg: float | None, now: dt.datetime) -> None:
         if o["role"] == "entry":
-            pe = a["pending_entry"] or {}
+            held = a["position"]
+            if held:
+                # a second entry fill on top of an open position: never planned (a cancel is confirmed before any retry), so a person looks
+                held["qty"] += o["qty"] if held["side"] == o["side"] else -o["qty"]
+                self._ev(a, now, f"ENTRY FILLED AGAIN: {o['side']} {o['qty']} {o['contract']} at {avg} on top of the open position", order=o["id"])
+                if not a["halted"]:
+                    self._halt(c, a, now, f"two entry orders filled: this app now holds {held['qty']} of {o['contract']} ({held['side']}) while the stop order covers less. "
+                                          "Bring the position at Angel One back to what you want, then clear the halt.")
+                return
+            pe = a["pending_entry"]
+            wanted = bool(pe and pe.get("side") == o["side"])
+            pe = pe or {}
             ct = pe.get("contract") or {}
             a["position"] = {"side": o["side"], "qty": o["qty"], "contract": o["contract"], "token": o["token"], "exch": o["exch"], "tick": o["tick"], "lot_size": o["lot_size"],
                              "entry_price": avg, "entry_at": _s(now), "strategy_price": pe.get("strategy_price"), "symbol": a["symbol"], "tick_assumed": dryrun._tick(ct)[1] if ct else True}
@@ -442,16 +572,28 @@ class RealTB:
             a["pending_entry"] = None
             a["exit_since"] = None
             a["released"] = False
+            a.pop("expect_flat", None)
             self._ev(a, now, f"ENTRY FILLED: {o['side']} {o['qty']} {o['contract']} at {avg}", order=o["id"])
+            if not wanted:
+                # it filled while it was being cancelled because the strategy no longer wanted it (or real orders were switched off): close it again
+                a["unwanted_fill"] = True
+                a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+                self._ev(a, now, "this entry filled although it was being cancelled (the strategy no longer wants it): it is closed again now")
         else:
             p = a["position"]
             if p:
                 pnl = ((avg or 0) - (p["entry_price"] or 0)) * p["qty"] * (1 if p["side"] == "BUY" else -1)
                 self._ev(a, now, f"POSITION CLOSED by the {o['role']} order at {avg}; real P&L before charges {pnl:,.2f}", order=o["id"])
+                a["expect_flat"] = {"contract": p["contract"], "at": _s(now)}         # _reconcile checks that Angel One shows it closed too
+            elif not a["halted"]:
+                self._halt(c, a, now, f"a {o['role']} order ({o['side']} {o['qty']} {o['contract']}) filled while this app held no position, so Angel One now "
+                                      "shows a position this app did not want (an exit filled twice). Close it at Angel One now, then clear the halt.")
             a["position"] = None
             a["exit_since"] = None
             a["stop_target"] = None
             a.pop("exit_tries", None)
+            a.pop("exit_rejects", None)
+            a.pop("unwanted_fill", None)
             a["_clean_stops"] = True
 
     async def _reconcile(self, c, broker, a: dict, now: dt.datetime) -> None:
@@ -474,8 +616,21 @@ class RealTB:
                         pass
             return n
 
-        live = [o for o in a["orders"] if o["state"] in ACTIVE]
+        live = [o for o in a["orders"] if o["state"] in TRACKED]
         if not a["position"] and not live:
+            ef = a.get("expect_flat")
+            if ef:
+                # this app just closed its position: Angel One must show the contract back at the person's own quantity. Anything else means an
+                # exit filled twice (or a fill this app never saw): never taken as the person's own position (the baseline below would do that)
+                base = (a.get("baseline") or {}).get(ef["contract"], 0)
+                net = net_of(ef["contract"])
+                if net == base:
+                    a.pop("expect_flat", None)
+                elif _age(ef["at"], now) >= MISMATCH_HALT_S and not a["halted"]:
+                    a.pop("expect_flat", None)
+                    self._halt(c, a, now, f"this app closed its position in {ef['contract']}, but Angel One still shows a net quantity of {net} there "
+                                          f"(expected {base}). Close what should not be open at Angel One now, then clear the halt.")
+                return                                             # the baseline is not taken again until this is settled
             # flat: remember what the person holds by hand in the contracts we may trade, so a manual position never looks like ours
             watch = {o["contract"] for o in a["orders"][-10:] if o.get("contract")}
             if a["pending_entry"]:
@@ -483,8 +638,8 @@ class RealTB:
             a["baseline"] = {k: net_of(k) for k in watch if k}
             a.pop("mismatch_since", None)
             return
-        if self._active(a, "entry") or self._active(a, "exit"):
-            a.pop("mismatch_since", None)
+        if self._active(a, "entry") or self._active(a, "exit") or self._cancelling(a, "entry") or self._cancelling(a, "exit"):
+            a.pop("mismatch_since", None)                          # an order whose outcome is still coming: the position is not settled yet
             return
         contract = a["position"]["contract"] if a["position"] else live[0]["contract"]
         base = (a.get("baseline") or {}).get(contract, 0)
@@ -506,6 +661,10 @@ class RealTB:
         if a.pop("_clean_stops", False):
             for o in self._active(a, "stop") + self._active(a, "exit"):
                 await self._cancel(c, broker, a, o, now, "the position is closed")
+            await self._confirm_cancels(c, broker, a, now)              # a leftover stop that fills now must be seen before the next entry
+            if a["halted"]:
+                return
+            p, pe = a["position"], a["pending_entry"]
         # the paper position is gone while a real one is held: close ours (method B waits for the stop first)
         if p and a["instrument_id"] in self.snaps and (snap.get("paper") is None or snap["paper"]["direction"] != p["side"]) and a["exit_since"] is None:
             a["exit_since"] = _s(now)
@@ -539,15 +698,17 @@ class RealTB:
             funds = await broker.funds()
             cash = float(funds.get("availablecash"))
             pnl = float(funds.get("m2mrealized") or 0) + float(funds.get("m2munrealized") or 0)
-        except Exception:
-            return "could not read your funds"
+        except Exception as exc:
+            self._dead_session(a, broker, exc)
+            return GUARD_FUNDS
         if r["max_daily_loss"] is not None and pnl <= -r["max_daily_loss"]:
             return f"today's loss {pnl:,.0f} reached your daily cap of {r['max_daily_loss']:,.0f}"
         try:
             m = await broker.margin([{"exchange": ct.get("exch_seg", "NFO"), "qty": pe["qty"], "price": 0, "productType": "CARRYFORWARD", "token": str(ct["token"]), "tradeType": pe["side"], "orderType": "MARKET"}])
             need = float(m.get("totalMarginRequired"))
-        except Exception:
-            return "margin could not be computed, so the entry is not sent"
+        except Exception as exc:
+            self._dead_session(a, broker, exc)
+            return GUARD_MARGIN
         if need > cash:
             return f"margin needed {need:,.0f} but only {cash:,.0f} is available"
         return None
@@ -558,7 +719,11 @@ class RealTB:
             o = live[0]
             if _age(o["placed_at"], now) > RETRY_AFTER_S:
                 await self._cancel(c, broker, a, o, now, f"not filled within {int(RETRY_AFTER_S)} s")
-            return
+                await self._confirm_cancels(c, broker, a, now)
+            if not (a["pending_entry"] and not self._unsettled(a)):
+                return                                              # filled after all, or the cancel is not confirmed yet: nothing new goes out
+        if self._cancelling(a):
+            return                                                  # an order whose cancel is not confirmed yet may still fill: wait for its end
         if not self._market_open(pe["contract"].get("session", "NSE"), now):
             pe["created_at"] = _s(now)                              # waiting for the session: the patience clock starts when it opens
             return
@@ -575,10 +740,17 @@ class RealTB:
             if _age(pe["created_at"], now) > NO_PRICE_MISS_S:
                 self._miss(a, now, "no live price for the contract")
             return
+        if self._orders_today(c, a["user_id"]) >= MAX_ORDERS_PER_DAY:
+            return self._miss(a, now, f"{MAX_ORDERS_PER_DAY} orders were already sent today")
         reason = await self._entry_guard(c, broker, a, pe, now)
         if reason:
             if reason in ("market closed",):
                 return                                              # wait for the session
+            if reason in (GUARD_FUNDS, GUARD_MARGIN) and _age(pe["created_at"], now) <= NO_PRICE_MISS_S:
+                if pe.get("waiting") != reason:                     # a busy Angel One is asked again next round (the entry is not dropped for that)
+                    pe["waiting"] = reason
+                    self._ev(a, now, f"entry waits: {reason}; asking Angel One again")
+                return
             return self._miss(a, now, reason)
         side = pe["side"]
         buf, tick = dryrun.entry_buffer(a["symbol"], ltp, ct.get("exch_seg")), dryrun._tick(ct)[0]
@@ -587,9 +759,12 @@ class RealTB:
             payload = dryrun._payload(ct, side, pe["qty"], "LIMIT", price=dryrun.rnd(ltp + buf, tick, "up") if side == "BUY" else dryrun.rnd(ltp - buf, tick, "down"))
         else:
             payload = dryrun._payload(ct, side, pe["qty"], "MARKET", price=0)
-        pe["attempts"] += 1
-        o = await self._place(c, broker, a, now, "entry", payload, f"entry attempt {pe['attempts']} at live {ltp}", ct, attempt=pe["attempts"])
-        if o is not None and o["state"] == "rejected":
+        attempt = pe["attempts"] + 1
+        o = await self._place(c, broker, a, now, "entry", payload, f"entry attempt {attempt} at live {ltp}", ct, attempt=attempt)
+        if o is None:
+            return                                                  # nothing reached Angel One (its session had expired): the same attempt next round
+        pe["attempts"] = attempt
+        if o["state"] == "rejected":
             self._miss(a, now, o["message"] or "the entry order was rejected")
 
     async def _gap_wait(self, broker, a: dict, p: dict, paper: dict | None, session: str, now: dt.datetime) -> bool:
@@ -660,32 +835,49 @@ class RealTB:
             if past:
                 a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
                 self._ev(a, now, f"the stop triggered at {trig['trigger']} but did not fill within {int(STOP_GRACE_S)} s (price {ltp} ran past its limit): exiting with a LIMIT order", order=trig["id"])
-        # exit LIMIT order not filled: cancel, then place again next round at the live price
+        # exit order not filled in RETRY_AFTER_S: cancel it; only once Angel One's order book confirms the cancel does the next exit go (at the market)
         if exits:
             if _age(exits[0]["placed_at"], now) > RETRY_AFTER_S:
                 await self._cancel(c, broker, a, exits[0], now, f"exit not filled within {int(RETRY_AFTER_S)} s")
+                await self._confirm_cancels(c, broker, a, now)
+            if a["position"] is not p or a["halted"] or self._active(a, "exit") or self._cancelling(a, "exit"):
+                return                                         # it filled after all (the position is closed), or the cancel is not confirmed yet
+        elif self._cancelling(a, "exit"):
             return
         # the stop did not close the position in time: take the stop away and exit with a LIMIT order
         if a["exit_since"] and _age(a["exit_since"], now) > STOP_GRACE_S and market:
             for o in stops:
                 if not await self._cancel(c, broker, a, o, now, "exiting with a LIMIT order instead"):
                     return
+            await self._confirm_cancels(c, broker, a, now)
+            if a["position"] is not p or a["halted"] or self._active(a, "stop") or self._cancelling(a, "stop"):
+                return                                         # the stop filled in that instant (closed: no exit order), or its cancel is not confirmed yet
             try:
                 ltp = await broker.ltp(p["exch"], p["contract"], str(p["token"]))
-            except Exception:
+            except Exception as exc:
+                self._dead_session(a, broker, exc)
                 ltp = None
             if ltp is None:
                 self._ev(a, now, "exit waiting for a live price")
                 return
             tries = a.get("exit_tries", 0)
-            a["exit_tries"] = tries + 1
             payload = (dryrun._payload(ct, side_close, p["qty"], "LIMIT", price=dryrun._limit(ct, a["symbol"], side_close, ltp)) if tries == 0
                        else dryrun._payload(ct, side_close, p["qty"], "MARKET", price=0))          # a LIMIT first; not filled in RETRY_AFTER_S -> the MARKET
-            await self._place(c, broker, a, now, "exit", payload, "exit the open position", ct)
+            o = await self._place(c, broker, a, now, "exit", payload, "exit the open position", ct)
+            if o is None:
+                return                                         # nothing reached Angel One (its session had expired): again next round
+            a["exit_tries"] = tries + 1
+            if o["state"] == "rejected":
+                a["exit_rejects"] = a.get("exit_rejects", 0) + 1
+                if a["exit_rejects"] >= MAX_EXIT_REJECTS and not a["halted"]:
+                    self._halt(c, a, now, f"Angel One refused {a['exit_rejects']} exit orders in a row (last: {o['message']}). The position {p['side']} {p['qty']} "
+                                          f"{p['contract']} is still OPEN with no stop order: close it at Angel One now, then clear the halt.")
+            else:
+                a.pop("exit_rejects", None)
             return
         if not market:
             return
-        if not stops and a["stop_target"] is not None and not a["exit_since"]:
+        if not stops and not self._cancelling(a, "stop") and a["stop_target"] is not None and not a["exit_since"]:
             if await self._gap_wait(broker, a, p, paper, session, now):
                 return
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
@@ -701,6 +893,7 @@ class RealTB:
                 try:
                     await broker.modify(o["broker_id"], payload)
                 except ao.AngelOneApiError as exc:
+                    self._dead_session(a, broker, exc)                 # the resting stop stays where it was; the move is tried again next round
                     self._ev(a, now, f"stop could not be moved to {a['stop_target']}: {exc}", order=o["id"])
                 except angel_orders.Unknown as exc:
                     self._halt(c, a, now, f"a stop modification got no clear answer from Angel One ({exc}). Check the stop order at Angel One, then clear the halt.")

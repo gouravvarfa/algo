@@ -37,6 +37,14 @@ async def _post(s: AngelOneSession, route: str, body: dict[str, Any]) -> dict[st
         raise Unknown("Angel One sent an unreadable answer. The order may or may not have been received.") from exc
 
 
+def _refused(d: dict[str, Any], default: str) -> AngelOneApiError:
+    """Angel One's refusal, with its error code in the text (AB1010 / AG8001 = the session had expired: nothing was received, see
+    angelone_client.session_dead; any other code = this request itself was refused)."""
+    msg = str(d.get("message") or default)
+    code = d.get("errorcode") or d.get("errorCode")
+    return AngelOneApiError(f"{msg} ({code})" if code and str(code) not in msg else msg, "data", retryable=False)
+
+
 async def place_limit(s: AngelOneSession, *, trading_symbol: str, token: str, side: str, qty: int, price: float, product: str) -> str:
     """One NFO limit order, day validity. Returns Angel One's order id; raises AngelOneApiError when Angel One refused it, Unknown when we cannot tell."""
     body = {"variety": "NORMAL", "tradingsymbol": trading_symbol, "symboltoken": token, "transactiontype": side, "exchange": "NFO", "ordertype": "LIMIT",
@@ -47,13 +55,13 @@ async def place_limit(s: AngelOneSession, *, trading_symbol: str, token: str, si
         return str(oid)
     if d.get("status") is True:
         raise Unknown("Angel One accepted the request but gave no order id. Check your Angel One order book.")
-    raise AngelOneApiError(d.get("message") or "Angel One rejected the order", "data", retryable=False)
+    raise _refused(d, "Angel One rejected the order")
 
 
 async def cancel(s: AngelOneSession, order_id: str) -> None:
     d = await _post(s, CANCEL, {"variety": "NORMAL", "orderid": order_id})
     if d.get("status") is not True:
-        raise AngelOneApiError(d.get("message") or "Angel One did not cancel the order", "data", retryable=False)
+        raise _refused(d, "Angel One did not cancel the order")
 
 
 MODIFY = "/rest/secure/angelbroking/order/v1/modifyOrder"
@@ -82,7 +90,7 @@ async def place_payload(s: AngelOneSession, payload: dict[str, Any]) -> str:
         return str(oid)
     if d.get("status") is True:
         raise Unknown("Angel One accepted the request but gave no order id. Check your Angel One order book.")
-    raise AngelOneApiError(d.get("message") or "Angel One rejected the order", "data", retryable=False)
+    raise _refused(d, "Angel One rejected the order")
 
 
 async def modify_payload(s: AngelOneSession, order_id: str, payload: dict[str, Any]) -> None:
@@ -92,4 +100,4 @@ async def modify_payload(s: AngelOneSession, order_id: str, payload: dict[str, A
     body = {**{k: p[k] for k in keys if k in p}, "orderid": order_id}                   # exactly the fields Angel One's modify call takes
     d = await _post(s, MODIFY, body)
     if d.get("status") is not True:
-        raise AngelOneApiError(d.get("message") or "Angel One did not modify the order", "data", retryable=False)
+        raise _refused(d, "Angel One did not modify the order")

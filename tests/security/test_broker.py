@@ -2,7 +2,7 @@
 All credentials below are made up; the Angel One calls are replaced by stubs."""
 import pytest
 
-from app.broker import account, store
+from app.broker import account, store, orders
 from app.providers import angelone_client as ao
 from tests.security.helpers import api, login, make_owner, make_user
 
@@ -76,7 +76,9 @@ def test_the_test_button_logs_in_and_records_the_verdict(db, new_client, monkeyp
     monkeypatch.setattr(ao, "login", fake_login)
     monkeypatch.setattr(ao, "logout", fake_logout)
     r = api(c_user, "POST", "/api/me/broker/test")
-    assert r.status_code == 200 and r.json()["status"] == "connected" and seen["client_code"] == "A123456" and seen["pin"] == "864297" and seen["logout"]
+    assert r.status_code == 200 and r.json()["status"] == "connected" and seen["client_code"] == "A123456" and seen["pin"] == "864297"
+    assert "logout" not in seen                    # no logout: it ended the session the real-order executor was using (one session per person and day)
+    assert orders._sessions[user.id][1].jwt_token == "jwt"                                    # the fresh login is the session everybody uses now
     assert "A123456" not in r.text
 
     async def bad_login(**_):
@@ -207,7 +209,16 @@ def test_preflight_reports_every_step_and_never_orders(db, new_client, monkeypat
     monkeypatch.setattr(ao, "get_funds", bad_funds)
     j = api(c_user, "POST", "/api/me/broker/preflight").json()
     assert j["ok"] is False and [x["name"] for x in j["steps"] if not x["ok"]] == ["Funds"] and "Nothing was ordered" in j["hint"]
-    assert c_user.get("/api/me/broker").json()["status"] == "error"
+    # the login worked: a read that failed is shown in red but never switches real trading off (status 'error' put the account on paper)
+    assert c_user.get("/api/me/broker").json()["status"] == "connected"
+
+    async def refused(**k):
+        raise ao.AngelOneApiError("Invalid clientcode or password", "auth")
+
+    monkeypatch.setattr(ao, "login", refused)
+    j = api(c_user, "POST", "/api/me/broker/preflight").json()
+    assert j["ok"] is False and j["steps"][0]["name"] == "Login" and "IP address" in j["hint"]
+    assert c_user.get("/api/me/broker").json()["status"] == "error"                       # wrong login details do mark it
 
 
 def test_a_network_hiccup_at_login_does_not_mark_the_account_failed_and_a_good_login_heals_it(db, new_client, monkeypatch):

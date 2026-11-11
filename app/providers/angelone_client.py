@@ -81,6 +81,22 @@ class AngelOneApiError(Exception):
         self.retryable = retryable
 
 
+# Angel One's answers when the session (JWT) is no longer valid: "Invalid Token" (AG8001), "Token Expired" (AG8002), "Token missing" (AG8003),
+# "Invalid Session or Session Expired Please Re-Login" (AB1010), an invalid refresh token (AB8050 / AB8051). Sessions end at midnight IST.
+_DEAD_SESSION = ("invalid token", "token expired", "token missing", "invalid session", "session expired", "session is expired", "re-login", "relogin",
+                 "unauthori", "ag8001", "ag8002", "ag8003", "ab1010", "ab8050", "ab8051")
+
+
+def session_dead(exc: BaseException) -> bool:
+    """True when Angel One refused a call because the session is no longer valid, so a fresh login cures it and NOTHING was done (an order was
+    not received). False for a rate-limit page or network trouble (logging in again lifts neither, and every login adds a session on the
+    account) and for a refusal of the request itself (margin, price, quantity)."""
+    if not isinstance(exc, AngelOneApiError) or exc.retryable or exc.kind == "network":
+        return False
+    msg = str(exc).lower()
+    return any(k in msg for k in _DEAD_SESSION)
+
+
 @dataclass
 class AngelOneSession:
     api_key: str

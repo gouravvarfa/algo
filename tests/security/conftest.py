@@ -64,3 +64,9 @@ def not_near_a_totp_boundary():
         time.sleep(30 - into_window + 0.2)
     yield
 
+
+@pytest.fixture(autouse=True)
+def quick_cancel_confirm(monkeypatch):
+    """The real-order executor pauses ~1 s before reading Angel One's order book again to confirm a cancel (its rate limit); a fake needs no pause."""
+    from app.broker import tb_real
+    monkeypatch.setattr(tb_real, "CONFIRM_PAUSE_S", 0.0, raising=False)

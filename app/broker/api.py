@@ -40,6 +40,7 @@ def _save(c, user_id: str, body: BrokerBody, actor_id: str, actor_role: str | No
         store.save(c, user_id, body.client_code, body.api_key, body.pin, body.totp_secret, actor_id)
     except store.BrokerError as e:
         raise AuthError(e.status, e.code, e.message)
+    orders._drop(user_id)                                         # new login details: the day's session of the old ones is not used again
     audit.append(c, "broker.save", actor_id=actor_id, actor_role=actor_role, target_type="user", target_id=user_id, detail={"actor": actor_name, "broker": "angelone"})
 
 
@@ -61,6 +62,7 @@ def delete_my_broker(request: Request, c=Depends(db)):
     u = getattr(request.state, "user", None)
     uid = user_id_of(request)
     store.delete(c, uid)
+    orders._drop(uid)
     audit.append(c, "broker.delete", actor_id=uid, actor_role=u["role"] if u else None, target_type="user", target_id=uid, detail={"actor": u["username"] if u else "local"})
     return store.public(None)
 
@@ -121,6 +123,7 @@ def admin_set(user_id: str, body: BrokerBody, actor=Depends(require("users.manag
 def admin_delete(user_id: str, actor=Depends(require("users.manage")), c=Depends(db)):
     _managed(c, actor, user_id)
     store.delete(c, user_id)
+    orders._drop(user_id)
     audit.append(c, "broker.delete", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id, detail={"actor": actor["username"]})
     return store.public(None)
 
@@ -360,7 +363,7 @@ async def my_tb_margin(instrument_id: str, request: Request, c=Depends(db)):
         b = await tb_real.angel_broker_for(c, uid)
         f = await b.funds()
     except Exception as exc:
-        orders._drop(uid)
+        orders.drop_if_dead(uid, exc)                             # only an expired session is forgotten: a busy Angel One is asked again next time
         return {"connected": True, "error": f"Angel One not reachable: {str(exc)[:160] or type(exc).__name__}"}
     need, err, ltp = {"BUY": None, "SELL": None}, None, None
     for side in ("BUY", "SELL"):                                  # one side per call: a BUY+SELL basket would net the margin out
@@ -403,7 +406,7 @@ async def my_positions(request: Request, c=Depends(db)):
         b = await tb_real.angel_broker_for(c, uid)
         rows = await b.positions()
     except Exception as exc:
-        orders._drop(uid)
+        orders.drop_if_dead(uid, exc)
         return {"connected": True, "error": f"Angel One not reachable ({type(exc).__name__})"}
     rt = _executor()
     managed = {x["position"]["contract"]: x for x in (rt.view(c, uid) if rt is not None else []) if x["position"]}
@@ -434,8 +437,8 @@ async def my_funds(request: Request, c=Depends(db)):
         return hit[1]
     try:
         f = await (await tb_real.angel_broker_for(c, uid)).funds()
-    except Exception:
-        orders._drop(uid)
+    except Exception as exc:
+        orders.drop_if_dead(uid, exc)
         return {"connected": True, "error": "Angel One not reachable right now"}
     out = {"connected": True, **account._funds(f), "mode": store.effective_mode(r), "at": time.time()}
     _FUNDS[uid] = (time.time(), out)
