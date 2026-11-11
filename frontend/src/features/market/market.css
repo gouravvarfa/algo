@@ -13,11 +13,9 @@
 .tk-viewport::before, .tk-viewport::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none; }
 .tk-viewport::before { left: 0; width: 24px; background: linear-gradient(90deg, var(--bg-surface), color-mix(in srgb, var(--bg-surface) 0%, transparent)); }
 .tk-viewport::after { right: 0; width: 44px; background: linear-gradient(270deg, var(--bg-surface), color-mix(in srgb, var(--bg-surface) 0%, transparent)); }
-.tk-track { display: flex; width: max-content; height: 100%; animation: tk-scroll linear infinite; will-change: transform; backface-visibility: hidden;
-  -webkit-backface-visibility: hidden; transform: translate3d(0, 0, 0); }
-@media (hover: hover) { .mticker:hover .tk-track { animation-play-state: paused; } }
-.mticker:has(.tk-item:focus-visible) .tk-track { animation-play-state: paused; }
-@keyframes tk-scroll { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(-50%, 0, 0); } }
+/* moved by script frame by frame (MarketTicker useMarquee), not by a CSS animation: iPad Safari left a CSS-animated strip mostly unpainted (11 Nov 2026) */
+.tk-track { display: flex; width: max-content; height: 100%; will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  transform: translate3d(0, 0, 0); }
 .tk-item { display: flex; align-items: center; gap: 8px; padding: 0 18px; height: 100%; border: 0; border-right: 1px solid var(--border); background: transparent;
   color: var(--text-primary); font: inherit; cursor: pointer; white-space: nowrap; transition: background .15s; }
 .tk-item:hover, .tk-item:focus-visible { background: var(--bg-hover); outline: none; }
@@ -25,7 +23,7 @@
 .tk-price { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .tk-chg { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .up .tk-chg { color: var(--success); } .down .tk-chg { color: var(--danger); } .flat .tk-chg { color: var(--text-muted); }
-@media (prefers-reduced-motion: reduce) { .tk-track { animation: none; } .tk-viewport { overflow-x: auto; } }
+@media (prefers-reduced-motion: reduce) { .tk-viewport { overflow-x: auto; } }
 
 .tk-modal { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 18px; background: color-mix(in srgb, #050a14 55%, transparent);
   backdrop-filter: blur(3px); animation: tk-fade .15s ease-out; }
@@ -58,10 +56,9 @@
 .tk-badge { flex-direction: row; gap: 6px; }
 .tk-bl { font-size: 11px; } .tk-bx { font-size: 10px; font-weight: 600; color: var(--text-muted); padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; }
 .tk-item { border-radius: 0; }
-.tk-item.fu .tk-price { animation: tk-fu .7s ease-out; } .tk-item.fd .tk-price { animation: tk-fd .7s ease-out; }
-@keyframes tk-fu { 0% { background: color-mix(in srgb, var(--success) 28%, transparent); color: var(--success); } 100% { background: transparent; } }
-@keyframes tk-fd { 0% { background: color-mix(in srgb, var(--danger) 28%, transparent); color: var(--danger); } 100% { background: transparent; } }
-.tk-price { padding: 1px 3px; border-radius: 4px; }
+/* a new price: only its colour changes for a moment (a coloured box on every tick repainted the whole moving strip) */
+.tk-item.fu .tk-price { color: var(--success); } .tk-item.fd .tk-price { color: var(--danger); }
+.tk-price { padding: 1px 3px; border-radius: 4px; transition: color .5s ease-out; }
 .tk-spark { margin-left: 2px; overflow: visible; } .tk-spark path { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
 .tk-spark.up path { stroke: var(--success); } .tk-spark.down path { stroke: var(--danger); } .tk-spark.flat path { stroke: var(--text-muted); }
 .tk-livepill, .tk-closedpill { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }

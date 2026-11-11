@@ -65,6 +65,46 @@ function useFlash(items: TickerItem[]) {
   return flash
 }
 
+/** At most one new set of prices a second on the moving bar: the ticks of 19 indices arrive many times a second, and every repaint of the moving
+ * strip costs (on an iPad most of all). A new list from the server shows at once. */
+function useThrottled(next: TickerItem[], base: TickerItem[], ms: number): TickerItem[] {
+  const [shown, setShown] = useState(next)
+  const at = useRef(0)
+  const lastBase = useRef(base)
+  useEffect(() => {
+    const wait = lastBase.current !== base ? 0 : Math.max(0, ms - (Date.now() - at.current))
+    lastBase.current = base
+    const t = window.setTimeout(() => { at.current = Date.now(); setShown(next) }, wait)
+    return () => window.clearTimeout(t)
+  }, [next, base, ms])
+  return shown
+}
+
+/** The strip is moved by script, frame by frame, not by a CSS animation: iPad Safari left most of a CSS-animated strip unpainted once its prices
+ * changed every second (only the item just repainted showed, 11 Nov 2026). Paused while `held()` (the mouse on it, a chart open); still for people
+ * who prefer reduced motion. */
+function useMarquee(track: React.RefObject<HTMLDivElement>, run: boolean, secondsPerLoop: number, held: () => boolean) {
+  const heldRef = useRef(held)
+  heldRef.current = held
+  useEffect(() => {
+    const el = track.current
+    if (!el || !run || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    let x = 0, last = performance.now(), raf = 0
+    const frame = (now: number) => {
+      const dt = Math.min(64, now - last)
+      last = now
+      const half = el.scrollWidth / 2
+      if (!heldRef.current() && half > 0) {
+        x = (x + (half / secondsPerLoop) * (dt / 1000)) % half
+        el.style.transform = `translate3d(${(-x).toFixed(1)}px, 0, 0)`
+      }
+      raf = window.requestAnimationFrame(frame)
+    }
+    raf = window.requestAnimationFrame(frame)
+    return () => window.cancelAnimationFrame(raf)
+  }, [track, run, secondsPerLoop])
+}
+
 /** The scrolling market bar under the top bar: index prices and day change (display only, never part of a strategy). A click opens the index's chart. */
 export function MarketTicker() {
   // prices are PUSHED (SSE) as each tick arrives; the server's list (names, previous closes, today's small line) is read every 30 s, or every 2 s
@@ -76,9 +116,14 @@ export function MarketTicker() {
   const { ticks, status } = useLiveTicks(specs, !!q.data?.nse_open)
   pushed.current = status === 'live'
   const sig = base.map((i) => { const t = i.token ? ticks[i.token] : undefined; return fresh(t) ? `${t.ltp}@${t.ts}` : '' }).join('|')
-  const items = useMemo(() => base.map((it) => withTick(it, it.token ? ticks[it.token] : undefined)), [base, sig]) // eslint-disable-line react-hooks/exhaustive-deps
+  const merged = useMemo(() => base.map((it) => withTick(it, it.token ? ticks[it.token] : undefined)), [base, sig]) // eslint-disable-line react-hooks/exhaustive-deps
+  const items = useThrottled(merged, base, 1000)
   const flash = useFlash(items)
   const [open, setOpen] = useState<string | null>(null)
+  const track = useRef<HTMLDivElement>(null)
+  const mouseOn = useRef(false)
+  const keyFocus = useRef(false)
+  useMarquee(track, items.length > 0, Math.max(45, items.length * 5), () => mouseOn.current || keyFocus.current || open != null)
   const qc = useQueryClient()
   // start loading an index's chart as soon as the pointer / finger is on it, so it is usually ready by the time the click lands
   const warm = (key: string) => { void qc.prefetchQuery({ queryKey: ['market-chart', key, '5m'], queryFn: () => chartOf(key, '5m'), staleTime: 25_000 }) }
@@ -97,12 +142,14 @@ export function MarketTicker() {
   const current = open ? items.find((i) => i.key === open) : undefined
   return (
     <>
-      <div className="mticker" role="region" aria-label="Market indices">
+      <div className="mticker" role="region" aria-label="Market indices"
+        onPointerEnter={(e) => { if (e.pointerType === 'mouse') mouseOn.current = true }} onPointerLeave={() => { mouseOn.current = false }}
+        onFocus={() => { keyFocus.current = true }} onBlur={() => { keyFocus.current = false }}>
         <div className={'tk-badge ' + (nse ? 'on' : 'off')} title={nse ? 'NSE is open: prices are live' : 'NSE is closed: last session close and its change'}>
           <span className="tk-dot" /><span className="tk-bl">{nse ? 'LIVE' : 'CLOSED'}</span><span className="tk-bx">NSE</span>
         </div>
         <div className="tk-viewport">
-          <div className="tk-track" style={{ animationDuration: `${Math.max(45, items.length * 5)}s` }}>{row(false)}{row(true)}</div>
+          <div className="tk-track" ref={track}>{row(false)}{row(true)}</div>
         </div>
       </div>
       {current && <IndexChart item={current} onClose={close} />}
