@@ -180,3 +180,63 @@ def test_the_last_session_before_a_day_skips_weekends_and_calendar_holidays(monk
     assert em._last_session_before(dt.date(2026, 11, 11)) == dt.date(2026, 11, 9)            # Tuesday 10 Nov 2026 was an NSE holiday
     assert em._last_session_before(dt.date(2026, 11, 9)) == dt.date(2026, 11, 6)             # Monday -> the Friday before
 
+
+
+def test_after_a_restart_a_chart_opens_from_the_stored_copy_even_when_angel_one_refuses():
+    # 11 Nov 2026, 09:43: right after a restart PSU BANK's chart said "not available (Angel One did not answer)"
+    e = _eng()
+    idx = pd.date_range("2026-11-02", periods=5, freq="B", tz=IST)
+    df = pd.DataFrame({"open": [1.0] * 5, "high": [2.0] * 5, "low": [0.5] * 5, "close": [1.5] * 5, "volume": 0.0}, index=idx)
+
+    async def ok(*a, **k):
+        return df
+    e._candles = ok
+    asyncio.run(e.index_chart("NIFTY PSU BANK", "1D"))                       # seen once: kept on disk too
+    fresh = _eng()                                                             # a new process, and Angel One refusing
+
+    async def refused(*a, **k):
+        raise RuntimeError("Angel One refused recently (HTTP 403 / rate limit)")
+    fresh._candles = refused
+    out = asyncio.run(fresh.index_chart("NIFTY PSU BANK", "1D"))
+    assert len(out) == 5 and out[-1]["close"] == 1.5 and ("ic", "NIFTY PSU BANK", "1D") in fresh.refreshes
+
+
+def test_todays_candles_come_from_the_live_ticks_when_angel_one_refuses_and_nothing_is_stored(monkeypatch):
+    e = _eng()
+
+    async def refused(*a, **k):
+        raise RuntimeError("Angel One refused recently (HTTP 403 / rate limit)")
+    e._candles = refused
+    now = dt.datetime.combine(em.now_ist().date(), dt.time(9, 47))
+    monkeypatch.setattr(em, "now_ist", lambda: now)
+    day = now.date()
+    e.feed.builder.bars["99926000"] = {dt.datetime.combine(day, dt.time(9, m), tzinfo=IST): [25000.0 + m, 25010.0 + m, 24990.0 + m, 25005.0 + m]
+                                        for m in (15, 16, 19, 20, 24, 45, 46)}
+    out = asyncio.run(e.index_chart("NIFTY", "5m"))
+    starts = [dt.datetime.fromtimestamp(c["time"], dt.timezone.utc).strftime("%H:%M") for c in out]       # IST wall time encoded as UTC
+    assert starts == ["09:15", "09:20", "09:45"]
+    first = out[0]
+    assert first["open"] == 25015.0 and first["high"] == 25029.0 and first["low"] == 25005.0 and first["close"] == 25024.0
+    with pytest.raises(RuntimeError):                                          # nothing at all to show: the screen says "not available" and tries again
+        asyncio.run(_eng_refusing().index_chart("NIFTY IT", "5m"))
+
+
+def _eng_refusing():
+    e = _eng()
+
+    async def refused(*a, **k):
+        raise RuntimeError("Angel One refused recently (HTTP 403 / rate limit)")
+    e._candles = refused
+    return e
+
+
+def test_a_live_price_is_never_written_into_an_old_candle():
+    e = _eng()
+    now = em.now_ist()
+    idx = pd.DatetimeIndex([dt.datetime.combine(now.date() - dt.timedelta(days=d), dt.time(0, 0)) for d in (3, 2, 1)]).tz_localize(IST)
+    df = pd.DataFrame({"open": 100.0, "high": 110.0, "low": 90.0, "close": [101.0, 102.0, 103.0], "volume": 0.0}, index=idx)
+    e._index_charts = {("NIFTY IT", "1D"): (now, df)}                          # the copy ends YESTERDAY
+    e.feed.latest["99926008"] = SimpleNamespace(ltp=150.0, exch_ts=now)
+    e.feed.healthy = lambda tok=None: True
+    out = asyncio.run(e.index_chart("NIFTY IT", "1D"))
+    assert out[-1]["close"] == 103.0 and out[-1]["high"] == 110.0              # yesterday's candle keeps its own close

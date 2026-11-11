@@ -222,6 +222,60 @@ def _candles_with_tick(raw: pd.DataFrame, tick_ltp: float | None) -> list[dict]:
     return out
 
 
+INDEX_CHART_BUCKET = {"FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}
+
+
+def _naive(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Candles indexed by IST wall time without a zone (Angel One's answer carries +05:30, the stored copy does not)."""
+    if df is None or not len(df) or getattr(df.index, "tz", None) is None:
+        return df
+    out = df.copy()
+    out.index = out.index.tz_localize(None)
+    return out
+
+
+def _tick_buckets(minutes: list, size: int, now: dt.datetime, start: dt.time = dt.time(9, 15)) -> pd.DataFrame:
+    """Today's `size`-minute candles built from the 1-minute bars of live ticks, on Angel One's grid (09:15, 09:20, ...). No API call."""
+    base = dt.datetime.combine(now.date(), start)
+    rows: dict = {}
+    for m, o, h, l, c in minutes:
+        t = m.replace(tzinfo=None) if m.tzinfo else m
+        if t.date() != now.date() or t < base:
+            continue
+        k = base + dt.timedelta(minutes=(int((t - base).total_seconds()) // 60) // size * size)
+        r = rows.get(k)
+        rows[k] = [o, h, l, c] if r is None else [r[0], max(r[1], h), min(r[2], l), c]
+    if not rows:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    keys = sorted(rows)
+    return pd.DataFrame([rows[k] + [0.0] for k in keys], index=pd.DatetimeIndex(keys), columns=["open", "high", "low", "close", "volume"])
+
+
+def _with_tick_buckets(df: pd.DataFrame | None, ticks: pd.DataFrame) -> pd.DataFrame | None:
+    """Angel One's candles are kept as they are; candles built from ticks only stretch the last one (the forming candle) and add the periods
+    Angel One has not given yet."""
+    if ticks is None or ticks.empty:
+        return df
+    if df is None or not len(df):
+        return ticks
+    last = df.index[-1]
+    out = df.copy()
+    if last in ticks.index:
+        r = ticks.loc[last]
+        out.loc[last, "high"], out.loc[last, "low"], out.loc[last, "close"] = max(out.loc[last, "high"], r.high), min(out.loc[last, "low"], r.low), r.close
+    newer = ticks[ticks.index > last]
+    return pd.concat([out, newer]) if len(newer) else out
+
+
+def _is_current_bar(t, interval: str, now: dt.datetime) -> bool:
+    """Is the candle starting at `t` the one of the period now running? (A live price must never be written into an older candle.)"""
+    t = t.to_pydatetime().replace(tzinfo=None) if hasattr(t, "to_pydatetime") else t
+    if interval == "ONE_DAY":
+        return t.date() == now.date()
+    size = INDEX_CHART_BUCKET.get(interval, 1)
+    return now - dt.timedelta(minutes=size) < t <= now
+
+
 def _ts(d: dt.datetime) -> int:
     # IST wall-clock encoded as if UTC, so the chart axis reads in IST.
     return calendar.timegm(d.timetuple())
@@ -1161,23 +1215,41 @@ class PaperEngine:
 
     async def index_chart(self, key: str, tf: str) -> list[dict]:
         """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call).
-        A chart seen before opens AT ONCE from the cache and is refreshed in the background when older than its time to live (the candle requests
-        queue behind the strategy's own, so waiting for a fresh one made opening slow). Only the very first look waits for Angel One."""
+        A chart seen before opens AT ONCE from the cache, and after a restart from the copy kept on disk (candles.db), and is refreshed in the
+        background when older than its time to live. Today's 5 / 15-minute candles are also built from the live ticks, so the chart is current and
+        still shows when Angel One refuses the candle request (it refuses about half of them in market hours: the chart said "not available" right
+        after the restart of 11 Nov 2026). Only a chart with nothing at all to show waits for Angel One (and says so when it fails)."""
         ex, tok, _label = TICKER_INDICES[key]
-        _interval, _days, ttl = INDEX_CHART_TF[tf]
+        interval, days, ttl = INDEX_CHART_TF[tf]
         now = now_ist()
-        hit = self.__dict__.setdefault("_index_charts", {}).get((key, tf))
+        charts = self.__dict__.setdefault("_index_charts", {})
+        hit = charts.get((key, tf))
         if hit is None:
-            df = await self._load_index_chart(key, tf)
+            stored = candle_store.get(tok, interval, now - dt.timedelta(days=days + 3))
+            if len(stored):
+                hit = charts[(key, tf)] = (now - dt.timedelta(seconds=ttl), stored)          # shown now, refreshed in the background below
+        df, err = None, None
+        if hit is None:
+            try:
+                df = await self._load_index_chart(key, tf)
+            except Exception as exc:
+                err = exc                                       # today's candles from live ticks may still be shown
         else:
             df = hit[1]
             if (now - hit[0]).total_seconds() >= ttl:
                 self._refresh_later(("ic", key, tf), lambda: self._load_index_chart(key, tf))
-        tick = self.feed.latest.get(tok)
+        df = _naive(df)
+        size = INDEX_CHART_BUCKET.get(interval)
+        if size:
+            df = _with_tick_buckets(df, _tick_buckets(self.feed.builder.minutes(tok), size, now))
         if df is None or not len(df):
+            if err is not None:
+                raise err
             return []
-        rows = _candles_with_tick(df, tick.ltp if tick is not None and self.feed.healthy(tok) else None)
-        vols = [float(v) for v in df["volume"]] if "volume" in df.columns else [0.0] * len(rows)     # an index has no traded volume (Angel One gives 0)
+        tick = self.feed.latest.get(tok)
+        live = tick.ltp if tick is not None and self.feed.healthy(tok) and _is_current_bar(df.index[-1], interval, now) else None
+        rows = _candles_with_tick(df, live)                     # only the bar of the current period follows the tick (never an older one)
+        vols = [float(v) if v == v else 0.0 for v in df["volume"]] if "volume" in df.columns else []      # an index has no traded volume (Angel One gives 0)
         return [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)]
 
     async def _load_index_chart(self, key: str, tf: str):
@@ -1185,6 +1257,10 @@ class PaperEngine:
         interval, days, _ttl = INDEX_CHART_TF[tf]
         df = await self._candles(ex, tok, interval, days, include_partial=True)
         self.__dict__.setdefault("_index_charts", {})[(key, tf)] = (now_ist(), df)
+        try:
+            candle_store.put(tok, interval, df)                 # a restart then opens the chart at once from this copy
+        except Exception:
+            log.warning("could not keep the %s chart candles of %s", tf, key)
         return df
 
     async def _load_index_close(self, name: str) -> tuple:

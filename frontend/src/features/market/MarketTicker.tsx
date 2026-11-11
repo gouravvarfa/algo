@@ -118,8 +118,9 @@ interface Hover { c: Candle; rsi: number | null; bb: { mid: number; upper: numbe
 function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }) {
   const [tf, setTf] = useState<string>('5m')
   const [ind, setInd] = useState<Ind>({ bb: true, vol: true, rsi: true })
+  // not available yet (Angel One busy, nothing kept on the server): asked again every 5 s instead of waiting for the usual 30 s / 5 min refresh
   const q = useQuery({ queryKey: ['market-chart', item.key, tf], queryFn: () => chartOf(item.key, tf), staleTime: 25_000, placeholderData: keepPreviousData,
-    refetchInterval: tf === '1D' ? 300_000 : 30_000, retry: 1 })
+    refetchInterval: (query) => (query.state.status === 'error' || !query.state.data?.candles.length ? 5000 : tf === '1D' ? 300_000 : 30_000), retry: 1 })
   const box = useRef<HTMLDivElement>(null)
   const rbox = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<Hover | null>(null)
