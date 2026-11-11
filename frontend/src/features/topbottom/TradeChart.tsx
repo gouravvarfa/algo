@@ -19,6 +19,7 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
   const [themeTick, setThemeTick] = useState(0)
   const [ohlc, setOhlc] = useState('')
   const fitted = useRef(false)
+  const shown = useRef('')                      // the instrument (and contract) on screen: another one is fitted afresh
   const [focused, setFocused] = useState(false)
 
   useEffect(() => {
@@ -61,6 +62,15 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
   useEffect(() => {
     const ch = chart.current, ls = line.current, cs = candle.current
     if (!ch || !ls || !cs) return
+    // Another instrument on the same chart (the tabs keep this component): fit it afresh. Before, it kept the last instrument's view: once the
+    // chart had been dragged up / down (a finger on the iPad, or the price axis) its price axis stays where it was left, e.g. around BANKNIFTY's
+    // 59,000, and GOLDTEN at 1,41,000 was off-screen: a blank chart until it was moved by hand (11 Nov 2026).
+    const key = `${snap.instrument.id}|${snap.instrument.trading_symbol}`
+    if (shown.current !== key) {
+      shown.current = key
+      fitted.current = false
+      ch.priceScale('right').applyOptions({ autoScale: true })
+    }
     ls.setData(snap.candles.map((k) => ({ time: k.time as UTCTimestamp, value: k.close })))
     cs.setData(snap.candles.map((k) => ({ time: k.time as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close })))
     ls.applyOptions({ visible: kind === 'line' })
@@ -106,7 +116,9 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
   }, [liveLtp, snap.candles]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (fitSignal && chart.current) chart.current.timeScale().setVisibleLogicalRange({ from: Math.max(0, snap.candles.length - 45), to: snap.candles.length + 6 })
+    if (!fitSignal || !chart.current) return
+    chart.current.priceScale('right').applyOptions({ autoScale: true })                // Fit also undoes a price axis dragged by hand
+    chart.current.timeScale().setVisibleLogicalRange({ from: Math.max(0, snap.candles.length - 45), to: snap.candles.length + 6 })
   }, [fitSignal]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
