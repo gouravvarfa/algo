@@ -121,6 +121,7 @@ export interface IndexQuote {
   symbol: string
   price: number | null
   prev_close: number | null
+  ref_today?: number | null        // the last close before today: the reference for today's ticks
   change: number | null
   pct: number | null
   live: boolean

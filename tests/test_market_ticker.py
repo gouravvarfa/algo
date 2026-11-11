@@ -42,9 +42,10 @@ def test_change_is_against_the_previous_close_and_loaded_once_a_day(monkeypatch)
     it = next(i for i in e.ticker() if i["key"] == "NIFTY IT")
     assert it["price"] == 38380.0 and it["change"] == 380.0 and it["pct"] == 1.0 and it["live"]
     assert ("i", "NIFTY IT") not in e.refreshes                         # loaded today already: no candle request
-    e._prev_close["NIFTY IT"] = (now - dt.timedelta(days=1), [(y - dt.timedelta(days=1), 37900.0), (y, 38000.0)])
+    prev = em._last_session_before(now.date())
+    e._prev_close["NIFTY IT"] = (dt.datetime.combine(prev, dt.time(11, 0)), [(prev - dt.timedelta(days=1), 37900.0), (prev, 38000.0)])
     e.ticker()
-    assert ("i", "NIFTY IT") in e.refreshes                             # a new day: loaded again
+    assert ("i", "NIFTY IT") in e.refreshes                             # loaded while that session still ran (its close unfinished): asked again
 
 
 def test_index_ticks_never_wake_the_strategy_loop():
@@ -152,3 +153,30 @@ def test_the_first_closes_file_layout_is_still_read():
     e = _eng()
     it = next(i for i in e.ticker() if i["key"] == "NIFTY")
     assert it["price"] == 25044.65 and it["change"] == 58.25 and it["session"] == "2026-11-09"
+
+
+def test_index_closes_are_asked_only_when_incomplete_and_never_on_every_poll():
+    # 11 Nov 2026: after a restart in market hours the 19 indices were asked again on every poll of the bar and the strategy's own candles waited ~5 min
+    e = _eng()
+    now = em.now_ist()
+    prev = em._last_session_before(now.date())
+    closes = [(prev - dt.timedelta(days=1), 37900.0), (prev, 38000.0)]
+    e._prev_close["NIFTY IT"] = (dt.datetime.combine(prev, dt.time(16, 0)), closes)          # loaded after the last session ended: complete
+    for _ in range(5):
+        items = e.ticker()
+    assert ("i", "NIFTY IT") not in e.refreshes                                               # Angel One is not asked at all
+    it = next(i for i in items if i["key"] == "NIFTY IT")
+    assert it["token"] == "99926008" and it["ref_today"] == 38000.0                           # what the browser needs for pushed ticks
+    assert sum(1 for k in e.refreshes if k[0] == "i") == 18                                   # the other 18: once each, not once per poll
+    e._prev_close["NIFTY IT"] = (dt.datetime.combine(prev, dt.time(11, 0)), closes)           # loaded DURING that session: its close was unfinished
+    for _ in range(5):
+        e.ticker()
+    assert e.refreshes.count(("i", "NIFTY IT")) == 1
+
+
+def test_the_last_session_before_a_day_skips_weekends_and_calendar_holidays(monkeypatch):
+    from app.ops import market_calendar
+    monkeypatch.setattr(market_calendar, "entry", lambda d, ex="NSE": {"kind": "holiday"} if d == dt.date(2026, 11, 10) else None)
+    assert em._last_session_before(dt.date(2026, 11, 11)) == dt.date(2026, 11, 9)            # Tuesday 10 Nov 2026 was an NSE holiday
+    assert em._last_session_before(dt.date(2026, 11, 9)) == dt.date(2026, 11, 6)             # Monday -> the Friday before
+

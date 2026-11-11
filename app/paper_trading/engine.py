@@ -74,6 +74,7 @@ CANDLE_BACKOFF_FIRST = 5               # after a 403 / rate-limit refusal, ask A
 CANDLE_BACKOFF_MAX = 60                # ... doubling on each further refusal up to this; the stored candles are used meanwhile
 LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
 DAILY_RAW_CACHE_WITH_FEED = 120
+INDEX_CLOSE_RETRY_S = 300.0           # a market-bar / sidebar index's closes are asked from Angel One at most this often (see _index_close_due)
 CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
 ALL = object()                        # "every owner" (internal callers and tests)
 LEGACY_OWNER_PATH = Path("data/paper_trading/legacy_owner.txt")   # the account that adopted the pre-platform watchlist and journal
@@ -173,6 +174,17 @@ def _settled(expiry, last_ts, now: dt.datetime) -> bool:
 
 def _last_ts(df) -> object | None:
     return df.index[-1] if df is not None and len(df) else None
+
+
+def _last_session_before(day: dt.date, exchange: str = "NSE") -> dt.date:
+    """The last weekday before `day` that is not in the market calendar as a holiday (or a special session)."""
+    from app.ops import market_calendar
+    d = day - dt.timedelta(days=1)
+    for _ in range(14):
+        if d.weekday() < 5 and market_calendar.entry(d, exchange) is None:
+            return d
+        d -= dt.timedelta(days=1)
+    return d
 
 
 def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
@@ -1079,16 +1091,35 @@ class PaperEngine:
         cached = self._prev_close.get(name)
         tick = self.feed.latest.get(tok)
         live = self.feed.healthy(tok) and tick is not None
-        if cached is None and not live:
-            cached = await self._load_index_close(name)            # nothing to show yet: this one answer has to wait
-        elif cached is None or (now - cached[0]).total_seconds() > 600:
-            self._refresh_later(("i", name), lambda: self._load_index_close(name))    # a live price never waits for the candle queue
+        if self._index_close_due(name, cached, now):
+            if cached is None and not live:
+                cached = await self._load_index_close(name)        # nothing to show yet: this one answer has to wait
+            else:
+                self._refresh_later(("i", name), lambda: self._load_index_close(name))    # a live price never waits for the candle queue
         price, ref, session = self._index_view(name, tok, now)
         change = None if price is None or ref is None else round(price - ref, 2)
         today = session == now.date()
-        return {"symbol": name, "price": price, "prev_close": ref, "change": change, "pct": None if change is None or not ref else round(change / ref * 100, 2),
+        ref_today = next((c for d, c in reversed(cached[1]) if d < now.date()), None) if cached else None     # the reference for today's ticks
+        return {"symbol": name, "price": price, "prev_close": ref, "ref_today": ref_today, "change": change, "pct": None if change is None or not ref else round(change / ref * 100, 2),
                 "session": session.isoformat() if session else None, "today": today, "live": bool(live and today), "age_s": self.feed.age(tok),
                 "source": "WebSocket tick" if live and today else "REST daily candle"}
+
+    def _index_close_due(self, key: str, cached, now: dt.datetime) -> bool:
+        """Ask Angel One for an index's daily closes now? Only when the reference is not complete: the closes must hold the last session before today
+        AND have been loaded after that session ended (a load during a session holds its unfinished candle). At most once per INDEX_CLOSE_RETRY_S
+        per index. These closes are only the reference for the change (the price itself comes from live ticks), and they share the candle queue and
+        Angel One's rate limit with the strategy: after a restart in market hours the 19 market-bar indices were asked again on every poll and the
+        strategy's own candles waited about 5 minutes (11 Nov 2026)."""
+        tried = self.__dict__.setdefault("_index_tried", {})
+        last_try = tried.get(key)
+        if last_try is not None and (now - last_try).total_seconds() < INDEX_CLOSE_RETRY_S:
+            return False
+        if cached is not None and cached[1]:
+            prev = _last_session_before(now.date())
+            if cached[1][-1][0] >= prev and cached[0] >= dt.datetime.combine(prev, NSE.close) + dt.timedelta(minutes=5):
+                return False
+        tried[key] = now
+        return True
 
     def _index_view(self, key: str, tok: str, now: dt.datetime) -> tuple:
         """(price, reference close, session date). Traded today: the live tick against the last close BEFORE today. No trade today (a holiday, a
@@ -1114,7 +1145,7 @@ class PaperEngine:
         out = []
         for key, (ex, tok, label) in TICKER_INDICES.items():
             cached = self._prev_close.get(key)
-            if cached is None or cached[0].date() != now.date():
+            if self._index_close_due(key, cached, now):
                 self._refresh_later(("i", key), lambda k=key: self._load_index_close(k))
             tick = self.feed.latest.get(tok)
             price, ref, session = self._index_view(key, tok, now)
@@ -1122,7 +1153,8 @@ class PaperEngine:
             closes = [m[4] for m in self.feed.builder.minutes(tok) if m[0].date() == now.date()]     # today's minutes built from live ticks: no API call
             step = max(1, -(-len(closes) // 48))                                                       # at most 48 points + the last
             spark = (closes[::step] + ([closes[-1]] if (len(closes) - 1) % step else [])) if closes else []
-            out.append({"key": key, "label": label, "exchange": ex, "price": price, "prev_close": ref, "change": change,
+            ref_today = next((c for d, c in reversed(cached[1]) if d < now.date()), None) if cached else None
+            out.append({"key": key, "label": label, "exchange": ex, "token": tok, "ref_today": ref_today, "price": price, "prev_close": ref, "change": change,
                         "pct": None if change is None or not ref else round(change / ref * 100, 2), "session": session.isoformat() if session else None,
                         "today": session == now.date(), "live": bool(tick is not None and self.feed.healthy(tok) and session == now.date()), "spark": spark})
         return out
@@ -1188,7 +1220,7 @@ class PaperEngine:
             if k in self._prev_close or not isinstance(v, list):
                 continue
             try:
-                at = dt.datetime.fromisoformat(v[0]) - dt.timedelta(days=1)           # older than today: a background refresh is still asked for
+                at = dt.datetime.fromisoformat(v[0])                               # when it was loaded: _index_close_due decides what is missing
                 if len(v) == 2 and isinstance(v[1], list):
                     closes = [(dt.date.fromisoformat(d), float(c)) for d, c in v[1]]
                 elif len(v) == 5 and v[4]:                     # the first layout (10 Nov 2026): last close, the close before it, the last session's date

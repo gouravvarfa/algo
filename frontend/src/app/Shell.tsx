@@ -40,9 +40,12 @@ function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string
   const token = name === 'BANKNIFTY' ? '99926009' : '99926000'
   const { ticks } = useLiveTicks([`NSE:${token}`])
   const t = ticks[token]
+  // a tick of TODAY is compared with the last close before today (ref_today), whatever the 15 s answer still says (at the open it can still be the
+  // day before's view); without one, the server's own view: the last session and its change
+  const ref = fresh(t) && d?.ref_today ? d.ref_today : d?.prev_close
   const price = fresh(t) ? t.ltp : d?.price
-  const change = price != null && d?.prev_close ? price - d.prev_close : null
-  const pct = change != null && d?.prev_close ? (change / d.prev_close) * 100 : d?.pct
+  const change = price != null && ref ? price - ref : null
+  const pct = change != null && ref ? (change / ref) * 100 : d?.pct
   return (
     <div className="idxcard" title={d ? `${d.live ? 'Live tick' : 'Last REST candle'} · previous close ${num(d.prev_close)}` : ''}>
       <b>{label}</b>

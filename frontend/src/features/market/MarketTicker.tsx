@@ -2,12 +2,14 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { createChart, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { get } from '../../lib/api'
+import { fresh, type Tick, useLiveTicks } from '../../lib/stream'
 import { bollinger, rsi } from './indicators'
 import './market.css'
 
 export interface TickerItem {
   key: string; label: string; exchange: string; price: number | null; prev_close: number | null; change: number | null; pct: number | null; live: boolean; spark?: number[]
   session?: string | null; today?: boolean
+  token?: string; ref_today?: number | null      // the index's feed token, and the last close before today (the reference for today's ticks)
 }
 interface TickerData { items: TickerItem[]; nse_open: boolean; mcx_open: boolean }
 interface Candle { time: number; open: number; high: number; low: number; close: number; volume?: number }
@@ -17,6 +19,17 @@ const fmt = (v: number | null | undefined, d = 2) => (v == null ? '–' : v.toLo
 const sgn = (v: number | null | undefined) => (v == null ? '' : v > 0 ? '+' : v < 0 ? '−' : '')
 const tone = (v: number | null | undefined) => (v == null || v === 0 ? 'flat' : v > 0 ? 'up' : 'down')
 const chg = (c: number | null, p: number | null) => (c == null ? '' : `${sgn(c)}${fmt(Math.abs(c))} (${sgn(p)}${fmt(Math.abs(p ?? 0))}%)`)
+
+const IST_MS = 5.5 * 3600_000
+const istDay = (ms: number) => new Date(ms + IST_MS).toISOString().slice(0, 10)
+
+/** The price pushed tick by tick (SSE, the same line as the sidebar's NIFTY / BANKNIFTY) against the last close before today. Without a fresh tick of
+ * TODAY (before the open, a holiday, the line down) the server's own view stays: the last session and its change. */
+export function withTick(it: TickerItem, t: Tick | undefined, nowMs = Date.now()): TickerItem {
+  if (!t || !fresh(t) || it.ref_today == null || !it.ref_today || istDay(t.ts) !== istDay(nowMs)) return it
+  const change = Math.round((t.ltp - it.ref_today) * 100) / 100
+  return { ...it, price: t.ltp, prev_close: it.ref_today, change, pct: Math.round((change / it.ref_today) * 10000) / 100, today: true, live: true }
+}
 
 /** "today", or the date of the last session when nothing traded today (holiday, weekend, before the open). */
 function sessionLabel(it: TickerItem): string {
@@ -54,8 +67,16 @@ function useFlash(items: TickerItem[]) {
 
 /** The scrolling market bar under the top bar: index prices and day change (display only, never part of a strategy). A click opens the index's chart. */
 export function MarketTicker() {
-  const q = useQuery({ queryKey: ['market-ticker'], queryFn: () => get<TickerData>('/api/market/ticker'), refetchInterval: 2000, retry: false })
-  const items = useMemo(() => q.data?.items ?? [], [q.data])
+  // prices are PUSHED (SSE) as each tick arrives; the server's list (names, previous closes, today's small line) is read every 30 s, or every 2 s
+  // while the push line is not up (switched off, reconnecting)
+  const pushed = useRef(false)
+  const q = useQuery({ queryKey: ['market-ticker'], queryFn: () => get<TickerData>('/api/market/ticker'), refetchInterval: () => (pushed.current ? 30_000 : 2000), retry: false })
+  const base = useMemo(() => q.data?.items ?? [], [q.data])
+  const specs = useMemo(() => base.filter((i) => i.token).map((i) => `${i.exchange}:${i.token}`), [base])
+  const { ticks, status } = useLiveTicks(specs, !!q.data?.nse_open)
+  pushed.current = status === 'live'
+  const sig = base.map((i) => { const t = i.token ? ticks[i.token] : undefined; return fresh(t) ? `${t.ltp}@${t.ts}` : '' }).join('|')
+  const items = useMemo(() => base.map((it) => withTick(it, it.token ? ticks[it.token] : undefined)), [base, sig]) // eslint-disable-line react-hooks/exhaustive-deps
   const flash = useFlash(items)
   const [open, setOpen] = useState<string | null>(null)
   const qc = useQueryClient()
