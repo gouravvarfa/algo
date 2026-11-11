@@ -74,6 +74,7 @@ CANDLE_BACKOFF_FIRST = 5               # after a 403 / rate-limit refusal, ask A
 CANDLE_BACKOFF_MAX = 60                # ... doubling on each further refusal up to this; the stored candles are used meanwhile
 LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
 DAILY_RAW_CACHE_WITH_FEED = 120
+INDEX_WARM_GAP_S = 20.0               # the market bar's 5-minute index charts are loaded ahead of time, one index at most this often (see _warm_index_charts)
 INDEX_CLOSE_RETRY_S = 300.0           # a market-bar / sidebar index's closes are asked from Angel One at most this often (see _index_close_due)
 CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
 ALL = object()                        # "every owner" (internal callers and tests)
@@ -1196,6 +1197,7 @@ class PaperEngine:
         daily close. The previous close is loaded ONCE a day per index, in the background (it shares Angel One's candle quota with the strategy)."""
         now = now_ist()
         self._closes_from_disk()
+        self._warm_index_charts(now)
         out = []
         for key, (ex, tok, label) in TICKER_INDICES.items():
             cached = self._prev_close.get(key)
@@ -1212,6 +1214,29 @@ class PaperEngine:
                         "pct": None if change is None or not ref else round(change / ref * 100, 2), "session": session.isoformat() if session else None,
                         "today": session == now.date(), "live": bool(tick is not None and self.feed.healthy(tok) and session == now.date()), "spark": spark})
         return out
+
+    def _warm_index_charts(self, now: dt.datetime) -> None:
+        """Keep every market-bar index's 5-minute chart at hand, so it opens at once even the first time it is clicked: a copy kept on disk is
+        taken into memory, and a chart with none is loaded from Angel One, ONE index per INDEX_WARM_GAP_S and only while Angel One is not
+        refusing candle requests (the strategy's own candles come first). Once kept, a chart costs no call until someone opens it."""
+        import time as _t
+        last = self.__dict__.get("_warm_at")
+        if last is not None and (now - last).total_seconds() < INDEX_WARM_GAP_S:
+            return
+        if getattr(self, "_backoff_until", 0.0) > _t.monotonic():
+            return
+        charts = self.__dict__.setdefault("_index_charts", {})
+        interval, days, _ttl = INDEX_CHART_TF["5m"]
+        for key, (_ex, tok, _label) in TICKER_INDICES.items():
+            if (key, "5m") in charts:
+                continue
+            stored = candle_store.get(tok, interval, now - dt.timedelta(days=days + 3))
+            if len(stored):
+                charts[(key, "5m")] = (now - dt.timedelta(hours=1), stored)       # at hand; refreshed in the background when it is opened
+                continue
+            self._warm_at = now
+            self._refresh_later(("ic", key, "5m"), lambda k=key: self._load_index_chart(k, "5m"))
+            return
 
     async def index_chart(self, key: str, tf: str) -> dict:
         """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call).

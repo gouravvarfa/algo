@@ -29,7 +29,7 @@ def test_every_index_token_is_known_and_the_bar_never_waits():
     assert len(em.TICKER_INDICES) == 19 and em.TICKER_INDICES["SENSEX"][:2] == ("BSE", "99919000")
     e = _eng()
     items = e.ticker()                                                   # nothing loaded yet: answers at once, loads in the background
-    assert len(items) == 19 and all(i["price"] is None for i in items) and len(e.refreshes) == 19
+    assert len(items) == 19 and all(i["price"] is None for i in items) and len([k for k in e.refreshes if k[0] == "i"]) == 19
 
 
 def test_change_is_against_the_previous_close_and_loaded_once_a_day(monkeypatch):
@@ -243,3 +243,25 @@ def test_a_live_price_is_never_written_into_an_old_candle():
     e.feed.healthy = lambda tok=None: True
     out = asyncio.run(e.index_chart("NIFTY IT", "1D"))["candles"]
     assert out[-1]["close"] == 103.0 and out[-1]["high"] == 110.0              # yesterday's candle keeps its own close
+
+
+def test_the_5_minute_index_charts_are_loaded_ahead_one_at_a_time_and_kept_ones_are_taken_from_disk(monkeypatch):
+    e = _eng()
+    t0 = em.now_ist()
+    monkeypatch.setattr(em, "now_ist", lambda: t0)
+    e.ticker()
+    e.ticker()                                                                  # the same moment: still only one
+    warm = [k for k in e.refreshes if k[0] == "ic"]
+    assert warm == [("ic", "NIFTY", "5m")]
+    monkeypatch.setattr(em, "now_ist", lambda: t0 + dt.timedelta(seconds=em.INDEX_WARM_GAP_S + 1))
+    e.ticker()
+    assert len([k for k in e.refreshes if k[0] == "ic"]) == 2                   # the next index, one gap later
+    idx = pd.date_range(t0.replace(hour=9, minute=15, second=0, microsecond=0), periods=3, freq="5min")
+    df = pd.DataFrame({"open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 0.0}, index=idx)
+    from app.live import candle_store
+    for _ex, tok, _l in em.TICKER_INDICES.values():
+        candle_store.put(tok, "FIVE_MINUTE", df)                                # every chart kept on disk (an earlier run)
+    fresh = _eng()
+    fresh.ticker()
+    assert not [k for k in fresh.refreshes if k[0] == "ic"] and len(fresh._index_charts) == len(em.TICKER_INDICES)   # no call: all at hand at once
+

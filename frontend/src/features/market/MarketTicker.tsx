@@ -1,5 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createChart, type UTCTimestamp } from 'lightweight-charts'
+import { createChart, type ISeriesApi, type LogicalRange, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { get } from '../../lib/api'
 import { fresh, type Tick, useLiveTicks } from '../../lib/stream'
@@ -12,7 +12,7 @@ export interface TickerItem {
   token?: string; ref_today?: number | null      // the index's feed token, and the last close before today (the reference for today's ticks)
 }
 interface TickerData { items: TickerItem[]; nse_open: boolean; mcx_open: boolean }
-interface Candle { time: number; open: number; high: number; low: number; close: number; volume?: number }
+export interface Candle { time: number; open: number; high: number; low: number; close: number; volume?: number }
 interface ChartData { key: string; label: string; tf: string; candles: Candle[]; partial?: boolean }   // partial: only today's candles (from live ticks) so far
 
 const fmt = (v: number | null | undefined, d = 2) => (v == null ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }))
@@ -159,6 +159,31 @@ export function MarketTicker() {
 
 const TFS = [['5m', '5 min'], ['15m', '15 min'], ['1D', '1 day']] as const
 const chartOf = (key: string, tf: string) => get<ChartData>(`/api/market/chart/${encodeURIComponent(key)}?tf=${tf}`)
+
+/** The candle a tick belongs to, as the server writes candle times (IST wall clock encoded as UTC seconds): the day (1D) or the 5 / 15-minute slot
+ * counted from 09:15, like Angel One's. null before the open. */
+export function bucketTime(tickMs: number, tf: string): number | null {
+  const d = new Date(tickMs + IST_MS)
+  const y = d.getUTCFullYear(), mo = d.getUTCMonth(), day = d.getUTCDate()
+  if (tf === '1D') return Date.UTC(y, mo, day) / 1000
+  const size = tf === '15m' ? 15 : 5
+  const mins = d.getUTCHours() * 60 + d.getUTCMinutes() - (9 * 60 + 15)
+  if (mins < 0) return null
+  const start = 9 * 60 + 15 + Math.floor(mins / size) * size
+  return Date.UTC(y, mo, day, Math.floor(start / 60), start % 60) / 1000
+}
+
+/** The forming candle after one more tick: the server's last candle (or the one already being built) stretched to the price, or a new candle when
+ * the tick opens the next slot. null when the tick is older than the server's last candle. */
+export function liveBar(candles: Candle[], built: Candle | null, tick: { ltp: number; ts: number }, tf: string): Candle | null {
+  const bucket = bucketTime(tick.ts, tf)
+  const last = candles[candles.length - 1]
+  if (bucket == null || !last || bucket < last.time) return null
+  const base = bucket === last.time ? last : null
+  const seed = built && built.time === bucket ? built : base
+  if (!seed) return { time: bucket, open: tick.ltp, high: tick.ltp, low: tick.ltp, close: tick.ltp, volume: 0 }
+  return { ...seed, open: (base ?? seed).open, high: Math.max(seed.high, base?.high ?? -Infinity, tick.ltp), low: Math.min(seed.low, base?.low ?? Infinity, tick.ltp), close: tick.ltp }
+}
 type Ind = { bb: boolean; vol: boolean; rsi: boolean }
 interface Hover { c: Candle; rsi: number | null; bb: { mid: number; upper: number; lower: number } | null }
 
@@ -171,6 +196,12 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
   const box = useRef<HTMLDivElement>(null)
   const rbox = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<Hover | null>(null)
+  // live: every tick of the index (pushed, SSE) moves the forming candle up / down, and the next 5 / 15-minute slot opens a new candle
+  const { ticks } = useLiveTicks([item.token ? `${item.exchange}:${item.token}` : null])
+  const tick = item.token ? ticks[item.token] : undefined
+  const ser = useRef<{ s: ISeriesApi<'Candlestick'>; bb: Partial<Record<'upper' | 'lower' | 'mid', ISeriesApi<'Line'>>> | null; r: ISeriesApi<'Line'> | null } | null>(null)
+  const built = useRef<{ tf: string; bar: Candle } | null>(null)
+  const view = useRef<{ tf: string; range: LogicalRange } | null>(null)        // the zoom / scroll a person chose survives the 30 s refresh
   const candles = useMemo(() => q.data?.candles ?? [], [q.data])
   const closes = useMemo(() => candles.map((k) => k.close), [candles])
   const bands = useMemo(() => bollinger(closes, 20, 2), [closes])
@@ -212,12 +243,15 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
     })
     const t = (k: Candle) => k.time as UTCTimestamp
     const s = c.addCandlestickSeries({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false })
+    const bbs: Partial<Record<'upper' | 'lower' | 'mid', ISeriesApi<'Line'>>> = {}
+    let rsiLine: ISeriesApi<'Line'> | null = null
     s.setData(candles.map((k) => ({ time: t(k), open: k.open, high: k.high, low: k.low, close: k.close })))
     if (item.prev_close != null && tf !== '1D') s.createPriceLine({ price: item.prev_close, color: muted, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Prev close' })
     if (ind.bb) {
       const band = (pick: 'upper' | 'lower' | 'mid', color: string, style: 0 | 2) => {
         const ls = c.addLineSeries({ color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
         ls.setData(candles.flatMap((k, i) => (bands[i] ? [{ time: t(k), value: bands[i]![pick] }] : [])))
+        bbs[pick] = ls
       }
       band('upper', purple, 0)
       band('lower', purple, 0)
@@ -238,6 +272,7 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
       })
       const r = rc.addLineSeries({ color: purple, lineWidth: 1, priceLineVisible: false, lastValueVisible: true,
         autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) })
+      rsiLine = r
       // whitespace before the first RSI value keeps both panes on the same bar index
       r.setData(candles.map((k, i) => (rs[i] != null ? { time: t(k), value: rs[i]! } : { time: t(k) })))
       r.createPriceLine({ price: 70, color: down, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' })
@@ -250,11 +285,40 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
       const i = p.time != null ? at.get(p.time as number) : undefined
       setHover(i == null ? null : { c: candles[i], rsi: rs[i], bb: bands[i] })
     })
-    c.timeScale().fitContent()
-    return () => { c.remove(); rc?.remove() }
-  }, [candles, tf, item.prev_close, ind.bb, ind.rsi, showVol, bands, rs])
+    if (view.current?.tf === tf) c.timeScale().setVisibleLogicalRange(view.current.range)
+    else c.timeScale().fitContent()
+    ser.current = { s, bb: ind.bb ? bbs : null, r: rsiLine }
+    paintLive()                                                                  // the candle built from ticks since the last refresh
+    return () => {
+      const r = c.timeScale().getVisibleLogicalRange()
+      if (r) view.current = { tf, range: r }
+      ser.current = null
+      c.remove(); rc?.remove()
+    }
+  }, [candles, tf, item.prev_close, ind.bb, ind.rsi, showVol, bands, rs]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // draws built.current (the forming candle) and the indicators' last points; the rest of the chart stays as the server gave it
+  function paintLive() {
+    const sr = ser.current, b = built.current?.tf === tf ? built.current.bar : null
+    const last = candles[candles.length - 1]
+    if (!sr || !b || !last || b.time < last.time) return
+    const t = b.time as UTCTimestamp
+    sr.s.update({ time: t, open: b.open, high: b.high, low: b.low, close: b.close })
+    const cl = b.time === last.time ? [...closes.slice(0, -1), b.close] : [...closes, b.close]
+    const x = sr.bb ? bollinger(cl, 20, 2)[cl.length - 1] : null
+    if (sr.bb && x) for (const k of ['upper', 'lower', 'mid'] as const) sr.bb[k]?.update({ time: t, value: x[k] })
+    if (sr.r) { const v = rsi(cl, 14)[cl.length - 1]; sr.r.update(v != null ? { time: t, value: v } : { time: t }) }
+  }
+  useEffect(() => {
+    if (!tick || !fresh(tick) || !candles.length) return
+    const bar = liveBar(candles, built.current?.tf === tf ? built.current.bar : null, tick, tf)
+    if (!bar) return
+    built.current = { tf, bar }
+    paintLive()
+  }, [tick?.ltp, tick?.ts, candles, tf]) // eslint-disable-line react-hooks/exhaustive-deps
   const li = candles.length - 1
-  const shown: Hover | null = hover ?? (li >= 0 ? { c: candles[li], rsi: rs[li], bb: bands[li] } : null)
+  const lb = built.current?.tf === tf && li >= 0 && built.current.bar.time >= candles[li].time ? built.current.bar : null   // the forming candle, live
+  const shown: Hover | null = hover ?? (li >= 0 ? { c: lb ?? candles[li], rsi: rs[li], bb: bands[li] } : null)
   const pos = day && item.price != null && day.high > day.low ? Math.min(100, Math.max(0, ((item.price - day.low) / (day.high - day.low)) * 100)) : null
   const toggle = (k: keyof Ind) => setInd((x) => ({ ...x, [k]: !x[k] }))
   return (
