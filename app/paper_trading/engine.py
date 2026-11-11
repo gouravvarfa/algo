@@ -1213,12 +1213,13 @@ class PaperEngine:
                         "today": session == now.date(), "live": bool(tick is not None and self.feed.healthy(tok) and session == now.date()), "spark": spark})
         return out
 
-    async def index_chart(self, key: str, tf: str) -> list[dict]:
+    async def index_chart(self, key: str, tf: str) -> dict:
         """Candles of one market-bar index for its chart (asked for only when a person opens it; cached, so many viewers cost one Angel One call).
         A chart seen before opens AT ONCE from the cache, and after a restart from the copy kept on disk (candles.db), and is refreshed in the
         background when older than its time to live. Today's 5 / 15-minute candles are also built from the live ticks, so the chart is current and
         still shows when Angel One refuses the candle request (it refuses about half of them in market hours: the chart said "not available" right
-        after the restart of 11 Nov 2026). Only a chart with nothing at all to show waits for Angel One (and says so when it fails)."""
+        after the restart of 11 Nov 2026). Only a chart with nothing at all to show waits for Angel One (and says so when it fails).
+        Returns {"candles": [...], "partial": True when the earlier candles are still missing (only today's from the ticks: the screen asks again soon)}."""
         ex, tok, _label = TICKER_INDICES[key]
         interval, days, ttl = INDEX_CHART_TF[tf]
         now = now_ist()
@@ -1245,12 +1246,13 @@ class PaperEngine:
         if df is None or not len(df):
             if err is not None:
                 raise err
-            return []
+            return {"candles": [], "partial": False}
+        partial = err is not None                               # Angel One refused and nothing was kept: today's candles from the ticks only
         tick = self.feed.latest.get(tok)
         live = tick.ltp if tick is not None and self.feed.healthy(tok) and _is_current_bar(df.index[-1], interval, now) else None
         rows = _candles_with_tick(df, live)                     # only the bar of the current period follows the tick (never an older one)
         vols = [float(v) if v == v else 0.0 for v in df["volume"]] if "volume" in df.columns else []      # an index has no traded volume (Angel One gives 0)
-        return [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)]
+        return {"candles": [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)], "partial": partial}
 
     async def _load_index_chart(self, key: str, tf: str):
         ex, tok, _label = TICKER_INDICES[key]

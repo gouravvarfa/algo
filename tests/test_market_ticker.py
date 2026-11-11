@@ -63,7 +63,7 @@ def test_the_chart_is_cached_and_carries_the_live_price():
         e.calls.append(a)
         return df
     e._candles = candles
-    out = asyncio.run(e.index_chart("NIFTY IT", "1D"))
+    out = asyncio.run(e.index_chart("NIFTY IT", "1D"))["candles"]
     asyncio.run(e.index_chart("NIFTY IT", "1D"))
     assert len(out) == 5 and len(e.calls) == 1 and e.calls[0][:3] == ("NSE", "99926008", "ONE_DAY")
     assert out[0]["volume"] == 0.0 and {"time", "open", "high", "low", "close", "volume"} <= set(out[0])
@@ -104,7 +104,7 @@ def test_a_chart_seen_before_opens_at_once_and_refreshes_in_the_background():
     e._candles = candles
     asyncio.run(e.index_chart("NIFTY", "5m"))                                     # first look: waits for Angel One
     e._index_charts[("NIFTY", "5m")] = (em.now_ist() - dt.timedelta(minutes=10), df)     # an old copy
-    out = asyncio.run(e.index_chart("NIFTY", "5m"))
+    out = asyncio.run(e.index_chart("NIFTY", "5m"))["candles"]
     assert len(out) == 5 and len(e.calls) == 1 and ("ic", "NIFTY", "5m") in e.refreshes   # served at once, refreshed in the background
 
 
@@ -197,8 +197,9 @@ def test_after_a_restart_a_chart_opens_from_the_stored_copy_even_when_angel_one_
     async def refused(*a, **k):
         raise RuntimeError("Angel One refused recently (HTTP 403 / rate limit)")
     fresh._candles = refused
-    out = asyncio.run(fresh.index_chart("NIFTY PSU BANK", "1D"))
-    assert len(out) == 5 and out[-1]["close"] == 1.5 and ("ic", "NIFTY PSU BANK", "1D") in fresh.refreshes
+    res = asyncio.run(fresh.index_chart("NIFTY PSU BANK", "1D"))
+    out = res["candles"]
+    assert res["partial"] is False and len(out) == 5 and out[-1]["close"] == 1.5 and ("ic", "NIFTY PSU BANK", "1D") in fresh.refreshes
 
 
 def test_todays_candles_come_from_the_live_ticks_when_angel_one_refuses_and_nothing_is_stored(monkeypatch):
@@ -212,7 +213,9 @@ def test_todays_candles_come_from_the_live_ticks_when_angel_one_refuses_and_noth
     day = now.date()
     e.feed.builder.bars["99926000"] = {dt.datetime.combine(day, dt.time(9, m), tzinfo=IST): [25000.0 + m, 25010.0 + m, 24990.0 + m, 25005.0 + m]
                                         for m in (15, 16, 19, 20, 24, 45, 46)}
-    out = asyncio.run(e.index_chart("NIFTY", "5m"))
+    res = asyncio.run(e.index_chart("NIFTY", "5m"))
+    out = res["candles"]
+    assert res["partial"] is True                                              # the screen asks again soon for the earlier candles
     starts = [dt.datetime.fromtimestamp(c["time"], dt.timezone.utc).strftime("%H:%M") for c in out]       # IST wall time encoded as UTC
     assert starts == ["09:15", "09:20", "09:45"]
     first = out[0]
@@ -238,5 +241,5 @@ def test_a_live_price_is_never_written_into_an_old_candle():
     e._index_charts = {("NIFTY IT", "1D"): (now, df)}                          # the copy ends YESTERDAY
     e.feed.latest["99926008"] = SimpleNamespace(ltp=150.0, exch_ts=now)
     e.feed.healthy = lambda tok=None: True
-    out = asyncio.run(e.index_chart("NIFTY IT", "1D"))
+    out = asyncio.run(e.index_chart("NIFTY IT", "1D"))["candles"]
     assert out[-1]["close"] == 103.0 and out[-1]["high"] == 110.0              # yesterday's candle keeps its own close

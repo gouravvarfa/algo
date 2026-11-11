@@ -13,7 +13,7 @@ export interface TickerItem {
 }
 interface TickerData { items: TickerItem[]; nse_open: boolean; mcx_open: boolean }
 interface Candle { time: number; open: number; high: number; low: number; close: number; volume?: number }
-interface ChartData { key: string; label: string; tf: string; candles: Candle[] }
+interface ChartData { key: string; label: string; tf: string; candles: Candle[]; partial?: boolean }   // partial: only today's candles (from live ticks) so far
 
 const fmt = (v: number | null | undefined, d = 2) => (v == null ? '–' : v.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d }))
 const sgn = (v: number | null | undefined) => (v == null ? '' : v > 0 ? '+' : v < 0 ? '−' : '')
@@ -167,7 +167,7 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
   const [ind, setInd] = useState<Ind>({ bb: true, vol: true, rsi: true })
   // not available yet (Angel One busy, nothing kept on the server): asked again every 5 s instead of waiting for the usual 30 s / 5 min refresh
   const q = useQuery({ queryKey: ['market-chart', item.key, tf], queryFn: () => chartOf(item.key, tf), staleTime: 25_000, placeholderData: keepPreviousData,
-    refetchInterval: (query) => (query.state.status === 'error' || !query.state.data?.candles.length ? 5000 : tf === '1D' ? 300_000 : 30_000), retry: 1 })
+    refetchInterval: (query) => (query.state.status === 'error' || !query.state.data?.candles.length || query.state.data?.partial ? 5000 : tf === '1D' ? 300_000 : 30_000), retry: 1 })
   const box = useRef<HTMLDivElement>(null)
   const rbox = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<Hover | null>(null)
@@ -299,7 +299,8 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
         )}
         <div className={'tk-chart' + (ind.rsi ? ' with-rsi' : '')} ref={box}>
           {q.isLoading && <div className="tk-msg"><span className="tk-spin" />Loading chart…</div>}
-          {q.isError && <div className="tk-msg">Chart is not available right now (Angel One did not answer). It will try again in a moment.</div>}
+          {q.isError && <div className="tk-msg">Chart is not available right now (Angel One did not answer). Trying again every 5 seconds…</div>}
+          {q.data?.partial && candles.length > 0 && <div className="tk-partial" role="status"><span className="tk-spin" />Earlier candles are still loading from Angel One (busy in market hours) · today&apos;s candles are from live ticks</div>}
           {q.data && !candles.length && <div className="tk-msg">No candles for this period.</div>}
         </div>
         {ind.rsi && <div className="tk-rsi" ref={rbox}><span className="tk-rsitag">RSI 14</span></div>}
