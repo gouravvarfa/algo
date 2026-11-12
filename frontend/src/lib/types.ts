@@ -92,6 +92,7 @@ export interface OverviewItem {
 export interface Overview {
   feed: { connected: boolean; last_tick_age_s: number | null; reconnects: number; subscribed: number; error: string | null }
   market_open: boolean
+  mcx_open?: boolean
   last_tick: string | null
   items: OverviewItem[]
   totals: Record<string, number | null>

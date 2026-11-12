@@ -14,13 +14,18 @@ import './topbottom.css'
 
 const SINCE = '2026-01-01T00:00:00+05:30'      // history starts on 1 Jan 2026
 
+/** Is the market of this instrument open: MCX for gold / silver futures (open until late evening), NSE for the rest. */
+function sessionOpen(ov: { market_open?: boolean; mcx_open?: boolean } | undefined, inst: { exch_seg?: string } | undefined): boolean {
+  return !!(inst?.exch_seg === 'MCX' ? ov?.mcx_open : ov?.market_open)
+}
+
 function useInstrumentId() {
   const ds = useDataSource()
   const qc = useQueryClient()
   const ov = useQuery({
     queryKey: ['tb', ds.key, 'overview'],
     queryFn: ds.overview,
-    refetchInterval: (q) => (q.state.data?.market_open ? 10_000 : 60_000),
+    refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : 60_000),
   })
   const [params] = useSearchParams()
   const futures = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)
@@ -52,7 +57,7 @@ export default function TopBottomPage() {
     queryKey: ['tb', ds.key, 'snap', found?.instrument.id],
     enabled: !!found,
     queryFn: () => ds.instrument(found!.instrument.id),
-    refetchInterval: (q) => (!q.state.data ? 3000 : ov.data?.market_open ? (q.state.data.feed?.live ? 2000 : 15_000) : 60_000),   // nothing on screen yet: ask again soon
+    refetchInterval: (q) => (!q.state.data ? 3000 : sessionOpen(ov.data, q.state.data.instrument) ? (q.state.data.feed?.live ? 2000 : 15_000) : 60_000),   // nothing on screen yet: ask again soon
     placeholderData: (prev) => prev,
   })
   const idx = useQuery({ queryKey: ['index', 'BANKNIFTY'], queryFn: () => get<IndexQuote>('/api/index/BANKNIFTY'), refetchInterval: 2000, retry: false })
@@ -165,7 +170,8 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
   const st = s.stats, inst = s.instrument
   // live prices pushed by the server (SSE): the futures contract being traded and its index; the engine's own numbers (entry, stop, signals) are unchanged
   const ix = INDEX_STREAM[inst.symbol]
-  const { ticks } = useLiveTicks([streamSpec(inst.exch_seg, inst.token), ix?.spec], !!ov.market_open)
+  const open = sessionOpen(ov, inst)        // MCX (gold, silver) stays live in the evening after NSE closes: before, its ticks stopped at 15:30
+  const { ticks } = useLiveTicks([streamSpec(inst.exch_seg, inst.token), ix?.spec], open)
   const futTick = inst.token ? ticks[inst.token] : undefined
   const liveLtp = fresh(futTick) ? futTick.ltp : undefined
   const ltp = liveLtp ?? s.ltp
@@ -179,7 +185,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
   const net = closed.reduce((a, t) => a + (t.pnl_amount ?? 0), 0)
   const rows = showAll ? s.trades : s.trades.slice(0, 8)
   const f = s.feed
-  const live = ov.market_open ? (liveLtp != null ? 'LIVE · pushed ticks' : f?.live ? `LIVE · ticks (${f.age_s != null ? f.age_s.toFixed(1) : '–'} s)` : 'LIVE · polling (tick feed down)') : 'Market closed · last close'
+  const live = open ? (liveLtp != null ? 'LIVE · pushed ticks' : f?.live ? `LIVE · ticks (${f.age_s != null ? f.age_s.toFixed(1) : '–'} s)` : 'LIVE · polling (tick feed down)') : 'Market closed · last close'
   const up = (idx?.change ?? 0) >= 0
   const lastRoll = s.rolls?.length ? s.rolls[s.rolls.length - 1] : null
 
@@ -195,7 +201,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
               <button className={view === 'paper' ? 'on' : ''} onClick={() => setPick('paper')}>Paper</button>
               <button className={view === 'real' ? 'on' : ''} onClick={() => setPick('real')} style={view === 'real' ? { background: 'var(--danger)', color: '#fff' } : undefined}>Real</button>
             </span>}
-            <span className={'livepill' + (ov.market_open ? ' on' : '')}><i />{live}</span>
+            <span className={'livepill' + (open ? ' on' : '')}><i />{live}</span>
           </div>
           <div className="hero-pos">
             {p ? <span className={`dirpill ${p.direction === 'BUY' ? 'buy' : 'sell'}`}>{p.direction === 'BUY' ? '▲' : '▼'} {p.direction}</span> : <span className="dirpill flat">FLAT</span>}

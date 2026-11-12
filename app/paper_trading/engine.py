@@ -1355,6 +1355,7 @@ class PaperEngine:
         return {
             "feed": self.feed.status(),
             "market_open": market_open(),
+            "mcx_open": market_open(session=SESSIONS["MCX"]),      # MCX trades until 23:30 / 23:55: its pages stay live after NSE closes
             "last_tick": _iso(self.last_tick),
             "items": items,
             "totals": {
