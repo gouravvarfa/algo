@@ -165,9 +165,12 @@ def run_intraday(
     lift_day: dt.date | None = None         # that next trading day
 
     day_entries: dict[dt.date, int] = {}
+    pct_stop_days: set[dt.date] = set()     # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
 
     def can_enter(ts) -> bool:
-        return day_entries.get(ts.date(), 0) < MAX_TRADES_PER_DAY
+        # decided with the user (12 Nov 2026): the day the 1% stop is hit, nothing more is entered (SILVERMIC 11 Nov: the 1% stop at 20:03 was
+        # followed by a SELL at 20:07 on the older Bottom). From the next day the latest Top / Bottom trigger as usual.
+        return day_entries.get(ts.date(), 0) < MAX_TRADES_PER_DAY and ts.date() not in pct_stop_days
 
     def new_trade(direction, level, fill, anchor, ts, day_i, gap_state=None, count=True) -> Trade:
         if count:
@@ -456,6 +459,7 @@ def run_intraday(
                                         ambiguous=open_t.entry_date == c.ts or stopouts > 0)
                             if open_t.entry_date.date() == day:
                                 stopped_day, stopped_side, lift_day = day, open_t.direction, None
+                            pct_stop_days.add(day)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
                             if buy:

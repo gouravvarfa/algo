@@ -78,15 +78,18 @@ def test_a_gap_exit_reverses_at_once_at_the_exit_price():
     assert (t2.direction, t2.entry_date, t2.entry_price) == ("SELL", T(9, 9, 30), t1.exit_price)     # same minute, same price: exit first, then the entry
 
 
-def test_after_a_one_percent_stop_the_old_points_stay_usable_and_two_trades_a_day_at_most():
-    from app.strategy.top_bottom import intraday as im
+def test_the_day_a_one_percent_stop_is_hit_nothing_more_is_entered():
+    # decided 12 Nov 2026 (SILVERMIC 11 Nov: the 1% stop at 20:03, then a SELL at 20:07 on the older Bottom): no entry for the rest of that day
     day = BUY_DAY[:2] + [Minute(T(6, 9, 17), 110.5, 110.6, 108.5, 109.0),     # BUY at 110, its 1% stop 108.9 hit
-                         Minute(T(6, 9, 18), 109.0, 111.0, 109.0, 110.8),     # Top 110 crossed again: 2nd trade of the day (no waiting)
-                         Minute(T(6, 9, 19), 110.8, 110.9, 108.0, 108.2),     # its 1% stop hit again
-                         Minute(T(6, 9, 20), 108.2, 111.5, 108.2, 111.2)]     # crossed again: a 3rd entry is NOT taken (2 a day)
+                         Minute(T(6, 9, 18), 109.0, 111.0, 109.0, 110.8),     # Top 110 crossed again: NOT entered (same day)
+                         Minute(T(6, 9, 19), 110.8, 110.9, 90.0, 90.5)]       # Bottom broken: NOT entered either
     res = run_intraday("BANKNIFTY", DATES[:6], CLOSES[:6], day, entry_day_stop_pct=0.01)
-    assert [t.exit_reason for t in res.trades] == ["ENTRY_DAY_STOP_EXIT", "ENTRY_DAY_STOP_EXIT"] and im.MAX_TRADES_PER_DAY == 2
+    assert [t.exit_reason for t in res.trades] == ["ENTRY_DAY_STOP_EXIT"]
 
+
+def test_at_most_two_trades_a_day():
+    from app.strategy.top_bottom import intraday as im
+    assert im.MAX_TRADES_PER_DAY == 2
 
 
 def test_a_late_opening_mcx_day_uses_its_own_first_15_minutes():
