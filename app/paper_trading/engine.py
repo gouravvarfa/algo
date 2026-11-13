@@ -74,6 +74,7 @@ CANDLE_BACKOFF_FIRST = 5               # after a 403 / rate-limit refusal, ask A
 CANDLE_BACKOFF_MAX = 60                # ... doubling on each further refusal up to this; the stored candles are used meanwhile
 LIVE_MINUTES_REFRESH_WITH_FEED = 120   # the WebSocket supplies the recent minutes, so REST is only needed for history
 DAILY_RAW_CACHE_WITH_FEED = 120
+FRESH_START_FROM = dt.datetime(2026, 11, 13, 10, 0)   # instruments added from here on start flat (no position taken over from their history); older ones keep theirs
 INDEX_WARM_GAP_S = 20.0               # the market bar's 5-minute index charts are loaded ahead of time, one index at most this often (see _warm_index_charts)
 INDEX_CLOSE_RETRY_S = 300.0           # a market-bar / sidebar index's closes are asked from Angel One at most this often (see _index_close_due)
 CANDLE_SHARE_SECONDS = 15              # identical candle requests made by different users within this time share one Angel One call
@@ -175,6 +176,16 @@ def _settled(expiry, last_ts, now: dt.datetime) -> bool:
 
 def _last_ts(df) -> object | None:
     return df.index[-1] if df is not None and len(df) else None
+
+
+def _fresh_from(inst) -> dt.datetime | None:
+    """The add time of an instrument added on/after FRESH_START_FROM (it starts flat then); None for older ones (decided 13 Nov 2026: GOLDTEN,
+    added 9 and 11 Nov, lost its running SELL when the rule was applied to every instrument)."""
+    try:
+        at = dt.datetime.fromisoformat(inst.added_at).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+    return at if at >= FRESH_START_FROM else None
 
 
 def _last_session_before(day: dt.date, exchange: str = "NSE") -> dt.date:
@@ -564,7 +575,7 @@ class PaperEngine:
                 "protective_sl": t.protective_sl if t.protective_sl_date == now.date() else None,
             }
             rows.append(row)
-            if is_open and row["live"]:
+            if is_open and (row["live"] or added_at < FRESH_START_FROM):
                 position = row
             elif is_open:
                 # decided with the user (13 Nov 2026): a position the history holds from BEFORE the instrument was added is not taken over
@@ -818,7 +829,7 @@ class PaperEngine:
             contracts=contracts, from_dt=from_dt, now=now, symbol=inst.symbol, get_daily=get_daily, get_minutes=get_minutes,
             daily_engine=daily_engine, reconstruct=lambda rows, fd: reconstruct_state(rows, fd, breakeven_pct_for(inst.symbol)),
             entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess,
-            flat_from=dt.datetime.fromisoformat(inst.added_at))
+            flat_from=_fresh_from(inst))
 
     @staticmethod
     def _single_minutes_from(inst) -> dt.date:
@@ -862,7 +873,7 @@ class PaperEngine:
             first_day = mins[0].ts.date()      # run_intraday never uses a day's own daily candle on that day, so no filtering is needed
             initial, _warn = reconstruct_state(rows, first_day, breakeven_pct_for(inst.symbol))
             res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol),
-                               breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess, flat_from=dt.datetime.fromisoformat(inst.added_at))
+                               breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess, flat_from=_fresh_from(inst))
             older = [t for t in daily_trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
             note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {struct_cap_for(inst.symbol) * 100:g}%+ away); earlier history uses daily closes"
             out = older + res.trades
