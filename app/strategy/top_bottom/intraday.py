@@ -67,6 +67,7 @@ BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
 ENTRY_DAY_STOP_EXIT = "ENTRY_DAY_STOP_EXIT"
 ENTRY_DAY_STOP_PCT = 0.01   # the live engine passes this: entry-day stop = entry price -/+ 1%
 CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
+NOT_TAKEN_OVER = "NOT_TAKEN_OVER"   # history's position at the moment the instrument was added: never shown as a live trade
 NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
 STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
 FIRST_15_START, FIRST_15_END = dt.time(9, 15), dt.time(9, 30)
@@ -119,6 +120,7 @@ def run_intraday(
     breakeven_pct: float | None = None,       # None = the index rule (2%); stocks pass 3%
     next_day_reentry_from: dt.date | None = NEXT_DAY_REENTRY_FROM,
     session: Session = NSE,                   # NSE 09:15-15:30; MCX gold / silver start at 09:00
+    flat_from: dt.datetime | None = None,     # the moment the instrument was added: a position held then is not taken over (see below)
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
@@ -165,6 +167,14 @@ def run_intraday(
     lift_day: dt.date | None = None         # that next trading day
 
     day_entries: dict[dt.date, int] = {}
+    if flat_from is not None and minutes and (flat_from.tzinfo is None) != (minutes[0].ts.tzinfo is None):
+        tz = minutes[0].ts.tzinfo                     # the add time is IST wall time; candles may carry +05:30
+        flat_from = flat_from.replace(tzinfo=tz) if tz is not None else flat_from.replace(tzinfo=None)
+    if flat_from is not None and (not minutes or flat_from <= min(m.ts for m in minutes)):
+        flat_from = None                    # added before these minutes begin: the position running then is the strategy's own
+    flat_done = False
+    fresh_top: float | None = None          # after the add: the Top / Bottom price was already beyond at that moment, so it is not a fresh crossing
+    fresh_bot: float | None = None
     pct_stop_days: set[dt.date] = set()     # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
 
     def can_enter(ts) -> bool:
@@ -370,6 +380,16 @@ def run_intraday(
                 t.stop_history.append((c.ts, be))
 
         for c in day_min:
+            if flat_from is not None and not flat_done and c.ts >= flat_from:
+                # decided with the user (13 Nov 2026): an instrument added today starts FLAT; the position its history holds at that moment is
+                # not taken over, and the first entry is a fresh crossing of the latest Top (BUY) / Bottom (SELL) after the add
+                flat_done = True
+                if open_t is not None:
+                    close_trade(open_t, c.ts, c.open, None, NOT_TAKEN_OVER)
+                    open_t = None
+                block_after = None
+                fresh_top = top if top is not None and c.open > top else None
+                fresh_bot = bot if bot is not None and c.open < bot else None
             clock = c.ts.time()
             used_high = used_low = False  # a candle's high/low can each be "used" once on its assumed path
             # ------- gap decision pending: nothing fires before 09:30 ---------
@@ -494,11 +514,11 @@ def run_intraday(
                 lifted = next_day_reentry_from is not None and day >= next_day_reentry_from and lift_day == day
                 again_buy, again_sell = lifted and stopped_side == "BUY", lifted and stopped_side == "SELL"
                 if mode == "entry" and not gap_resolved:
-                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and mode_side != "BUY" and c.high > top and not used_high
-                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and mode_side != "SELL" and c.low < bot and not used_low
+                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and mode_side != "BUY" and c.high > top and not used_high and fresh_top != top
+                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and mode_side != "SELL" and c.low < bot and not used_low and fresh_bot != bot
                 else:
-                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and c.high > top and not used_high
-                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and c.low < bot and not used_low
+                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and c.high > top and not used_high and fresh_top != top
+                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and c.low < bot and not used_low and fresh_bot != bot
                 if not (cand_buy or cand_sell) or not can_enter(c.ts):
                     break
                 if too_close:   # a genuine crossing happened, but the opposing points are too close: no new entry
@@ -517,6 +537,10 @@ def run_intraday(
                 else:
                     used_low = True
                 open_t = t
+            if fresh_top is not None and (top != fresh_top or c.close < fresh_top):
+                fresh_top = None
+            if fresh_bot is not None and (bot != fresh_bot or c.close > fresh_bot):
+                fresh_bot = None
             # Information only (no decision changes): a fake-out leaves price back through the level we entered at.
             if open_t is not None and not open_t.carried_in and open_t.round_trip_date is None and open_t.entry_date < c.ts:
                 back = (c.close < open_t.entry_price) if open_t.direction == "BUY" else (c.close > open_t.entry_price)

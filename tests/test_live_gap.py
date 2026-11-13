@@ -105,3 +105,12 @@ def test_a_late_opening_mcx_day_uses_its_own_first_15_minutes():
     broke = run_intraday("GOLDM", DATES, CLOSES, mcx_buy + first + brk, session=MCX)
     assert [(t.direction, t.exit_reason) for t in broke.trades] == [("BUY", "GAP_EXIT_15M"), ("SELL", "END_OF_BACKTEST")]
     assert broke.trades[1].entry_date == T(9, 17, 15) and broke.trades[1].entry_price == broke.trades[0].exit_price
+
+
+def test_an_instrument_added_today_starts_flat_and_waits_for_a_fresh_crossing():
+    # decided 13 Nov 2026 (ZYDUSLIFE / SUNPHARMA added at 10:37 showed BUYs of earlier days): the position held at the add is not taken over
+    added = T(6, 9, 30)
+    held = BUY_DAY[:2] + [Minute(T(6, 9, 30), 110.5, 110.8, 110.2, 110.6),   # still above the Top at the add: NOT a new entry
+                          Minute(T(6, 9, 31), 110.6, 110.9, 110.3, 110.7)]
+    res = run_intraday("BANKNIFTY", DATES[:6], CLOSES[:6], held, entry_day_stop_pct=0.01, flat_from=added)
+    assert [t.exit_reason for t in res.trades] == ["NOT_TAKEN_OVER"]

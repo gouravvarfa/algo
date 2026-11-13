@@ -547,7 +547,7 @@ class PaperEngine:
                 "live": t.entry_date >= added_at,
                 "contract": t.contract or inst.trading_symbol,
                 "rolled_in": t.rolled_in,
-                "status": "OPEN" if is_open else ("WIN" if pts > 0 else "LOSS" if pts < 0 else "BREAKEVEN"),
+                "status": "OPEN" if is_open else "BEFORE_ADDED" if t.exit_reason == "NOT_TAKEN_OVER" else ("WIN" if pts > 0 else "LOSS" if pts < 0 else "BREAKEVEN"),
                 "entry_date": _iso(t.entry_date),
                 "entry_price": round(t.entry_price, 2),
                 "trigger_close": round(closes[sig.signal_index], 2) if sig else None,
@@ -817,7 +817,8 @@ class PaperEngine:
         return await chain_eval.evaluate(
             contracts=contracts, from_dt=from_dt, now=now, symbol=inst.symbol, get_daily=get_daily, get_minutes=get_minutes,
             daily_engine=daily_engine, reconstruct=lambda rows, fd: reconstruct_state(rows, fd, breakeven_pct_for(inst.symbol)),
-            entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess)
+            entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol), breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess,
+            flat_from=dt.datetime.fromisoformat(inst.added_at))
 
     @staticmethod
     def _single_minutes_from(inst) -> dt.date:
@@ -861,7 +862,7 @@ class PaperEngine:
             first_day = mins[0].ts.date()      # run_intraday never uses a day's own daily candle on that day, so no filtering is needed
             initial, _warn = reconstruct_state(rows, first_day, breakeven_pct_for(inst.symbol))
             res = run_intraday(inst.symbol, [r[0] for r in rows], [r[4] for r in rows], mins, initial, entry_day_stop_pct=ENTRY_DAY_STOP_PCT, struct_cap_distance=struct_cap_for(inst.symbol),
-                               breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess)
+                               breakeven_pct=breakeven_pct_for(inst.symbol), session=inst.sess, flat_from=dt.datetime.fromisoformat(inst.added_at))
             older = [t for t in daily_trades if t.exit_reason != "END_OF_BACKTEST" and t.exit_date is not None and t.exit_date.date() < first_day]
             note = f"Intraday rules live since {first_day} (real 1-minute candles: stop touch exits and reverses, breakeven and gap rules intraday, {ENTRY_DAY_STOP_PCT * 100:g}% stop on the entry day, and while the structural stop is {struct_cap_for(inst.symbol) * 100:g}%+ away); earlier history uses daily closes"
             out = older + res.trades
