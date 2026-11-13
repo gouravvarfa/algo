@@ -91,7 +91,7 @@ function NavItem({ item }: { item: Item }) {
 
 function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) {
   const { pathname } = useLocation()
-  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 60_000, retry: false })
+  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
   const open = ov.data?.market_open
   const br = useQuery({ queryKey: ['broker'], queryFn: () => get<{ effective_mode: string }>('/api/me/broker'), refetchInterval: 60_000, retry: false })
   const real = br.data?.effective_mode === 'real'

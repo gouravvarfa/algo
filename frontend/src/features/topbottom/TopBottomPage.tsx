@@ -25,7 +25,8 @@ function useInstrumentId() {
   const ov = useQuery({
     queryKey: ['tb', ds.key, 'overview'],
     queryFn: ds.overview,
-    refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : 60_000),
+    // closed: asked every 15 s (it was 60 s), so the page turns live within seconds of the open (MCX 09:00, NSE 09:15), not up to a minute late
+    refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : 15_000),
   })
   const [params] = useSearchParams()
   const futures = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)
@@ -57,7 +58,7 @@ export default function TopBottomPage() {
     queryKey: ['tb', ds.key, 'snap', found?.instrument.id],
     enabled: !!found,
     queryFn: () => ds.instrument(found!.instrument.id),
-    refetchInterval: (q) => (!q.state.data ? 3000 : sessionOpen(ov.data, q.state.data.instrument) ? (q.state.data.feed?.live ? 2000 : 15_000) : 60_000),   // nothing on screen yet: ask again soon
+    refetchInterval: (q) => (!q.state.data ? 3000 : sessionOpen(ov.data, q.state.data.instrument) ? (q.state.data.feed?.live ? 2000 : 15_000) : 15_000),   // nothing on screen yet: ask again soon
     placeholderData: (prev) => prev,
   })
   const idx = useQuery({ queryKey: ['index', 'BANKNIFTY'], queryFn: () => get<IndexQuote>('/api/index/BANKNIFTY'), refetchInterval: 2000, retry: false })

@@ -49,7 +49,7 @@ function titleFor(kind: ConsoleKind, pathname: string): string {
 export function ConsoleShell({ kind }: { kind: ConsoleKind }) {
   const { me, can, logout } = useSession()
   const { pathname } = useLocation()
-  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 60_000, retry: false })
+  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
   const sys = useQuery({ queryKey: ['console', 'summary'], queryFn: () => get<{ overall: string; problems?: { key: string; title: string; status: string; reason: string }[] }>('/api/admin/system-summary'), refetchInterval: 15_000, retry: false, enabled: can('users.read') })
   const open = ov.data?.market_open
   const [nav, setNav] = useState(false)
