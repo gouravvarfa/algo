@@ -1293,6 +1293,8 @@ class PaperEngine:
             if (now - hit[0]).total_seconds() >= ttl:
                 self._refresh_later(("ic", key, tf), lambda: self._load_index_chart(key, tf))
         df = _naive(df)
+        if interval == "ONE_DAY":
+            df = self._with_today_from_5m(key, tok, df, now)
         if tf in INDEX_CHART_RESAMPLE and df is not None and len(df):
             df = _resample(df, INDEX_CHART_RESAMPLE[tf])
         size = INDEX_CHART_BUCKET.get(interval)
@@ -1308,6 +1310,24 @@ class PaperEngine:
         rows = _candles_with_tick(df, live)                     # only the bar of the current period follows the tick (never an older one)
         vols = [float(v) if v == v else 0.0 for v in df["volume"]] if "volume" in df.columns else []      # an index has no traded volume (Angel One gives 0)
         return {"candles": [{**r, "volume": vols[i] if i < len(vols) else 0.0} for i, r in enumerate(rows)], "partial": partial}
+
+    def _with_today_from_5m(self, key: str, tok: str, df: pd.DataFrame | None, now: dt.datetime) -> pd.DataFrame | None:
+        """Today's daily candle built from today's 5-minute candles (kept at hand for every index, plus the live ticks) when the daily answer has
+        none yet: Angel One refuses about half of the candle requests in market hours, and the day / week / month charts showed no candle for
+        today (NIFTY, 13 Nov 2026)."""
+        if df is None or not len(df) or df.index[-1].date() >= now.date():
+            return df
+        hit = self.__dict__.get("_index_charts", {}).get((key, "5m"))
+        m5 = _naive(hit[1]) if hit else _naive(candle_store.get(tok, "FIVE_MINUTE", dt.datetime.combine(now.date(), dt.time(0, 0))))
+        m5 = _with_tick_buckets(m5, _tick_buckets(self.feed.builder.minutes(tok), 5, now))
+        if m5 is None or not len(m5):
+            return df
+        day = m5[m5.index.date == now.date()]
+        if not len(day):
+            return df
+        bar = pd.DataFrame({"open": [float(day["open"].iloc[0])], "high": [float(day["high"].max())], "low": [float(day["low"].min())],
+                            "close": [float(day["close"].iloc[-1])], "volume": [0.0]}, index=pd.DatetimeIndex([dt.datetime.combine(now.date(), dt.time(0, 0))]))
+        return pd.concat([df, bar[[c for c in df.columns if c in bar.columns]]])
 
     async def _load_index_chart(self, key: str, tf: str):
         ex, tok, _label = TICKER_INDICES[key]

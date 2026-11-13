@@ -283,3 +283,16 @@ def test_weekly_and_monthly_index_charts_are_built_from_daily_candles():
     assert len(week) == 6 and day(week[0]) == dt.date(2026, 9, 28) and all(day(c).weekday() == 0 for c in week)   # weeks from Monday
     assert [day(c) for c in month] == [dt.date(2026, 9, 1), dt.date(2026, 10, 1), dt.date(2026, 11, 1)]
     assert week[0]["open"] == 100.0 and week[0]["high"] == 109.0 and week[0]["low"] == 95.0 and week[0]["close"] == 105.0
+
+
+def test_todays_daily_candle_comes_from_todays_5_minute_candles_when_the_daily_answer_has_none(monkeypatch):
+    e = _eng()
+    now = dt.datetime.combine(em.now_ist().date(), dt.time(13, 20))
+    monkeypatch.setattr(em, "now_ist", lambda: now)
+    days = pd.DatetimeIndex([dt.datetime.combine(now.date() - dt.timedelta(days=d), dt.time(0, 0)) for d in (3, 2, 1)]).tz_localize(IST)
+    daily = pd.DataFrame({"open": 100.0, "high": 110.0, "low": 90.0, "close": 105.0, "volume": 0.0}, index=days)
+    m5i = pd.date_range(dt.datetime.combine(now.date(), dt.time(9, 15)), periods=4, freq="5min")
+    m5 = pd.DataFrame({"open": [200.0, 205, 203, 210], "high": [206.0, 208, 211, 212], "low": [199.0, 201, 202, 207], "close": [205.0, 203, 210, 208], "volume": 0.0}, index=m5i)
+    e._index_charts = {("NIFTY", "1D"): (now, daily), ("NIFTY", "5m"): (now, m5)}
+    out = asyncio.run(e.index_chart("NIFTY", "1D"))["candles"]
+    assert len(out) == 4 and (out[-1]["open"], out[-1]["high"], out[-1]["low"], out[-1]["close"]) == (200.0, 212.0, 199.0, 208.0)
