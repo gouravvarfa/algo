@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createChart, type ISeriesApi, type LogicalRange, type UTCTimestamp } from 'lightweight-charts'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { get } from '../../lib/api'
 import { fresh, type Tick, useLiveTicks } from '../../lib/stream'
 import { bollinger, rsi } from './indicators'
@@ -324,7 +325,8 @@ export function IndexChart({ item, onClose }: { item: TickerItem; onClose: () =>
   const shown: Hover | null = hover ?? (li >= 0 ? { c: lb ?? candles[li], rsi: rs[li], bb: bands[li] } : null)
   const pos = day && item.price != null && day.high > day.low ? Math.min(100, Math.max(0, ((item.price - day.low) / (day.high - day.low)) * 100)) : null
   const toggle = (k: keyof Ind) => setInd((x) => ({ ...x, [k]: !x[k] }))
-  return (
+  // drawn on the page itself (a portal): opened from the sidebar it was squeezed into the sidebar, whose styles make it the frame of 'fixed'
+  return createPortal(
     <div className="tk-modal" role="dialog" aria-modal="true" aria-label={`${item.label} chart`} onClick={onClose}>
       <div className="tk-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="tk-head">
@@ -376,6 +378,7 @@ export function IndexChart({ item, onClose }: { item: TickerItem; onClose: () =>
           {ind.vol && !hasVol && candles.length > 0 && <> · <b>Volume:</b> an index has no traded volume (the exchange does not publish one)</>}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
