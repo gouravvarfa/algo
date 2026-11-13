@@ -564,11 +564,15 @@ class PaperEngine:
                 "protective_sl": t.protective_sl if t.protective_sl_date == now.date() else None,
             }
             rows.append(row)
-            if is_open:
+            if is_open and row["live"]:
                 position = row
+            elif is_open:
+                # decided with the user (13 Nov 2026): a position the history holds from BEFORE the instrument was added is not taken over
+                # (ZYDUSLIFE, added 10:38, showed a BUY of 12 Nov 09:15). The strategy starts flat and takes its first fresh entry.
+                row["status"], row["exit_reason"] = "BEFORE_ADDED", "NOT_TAKEN_OVER"
 
         # After a 2%-breakeven exit the strategy stays flat and waits for a NEW System Point (no reversal).
-        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") in ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT")
+        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") in ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT", "NOT_TAKEN_OVER")
         live_closed = [r for r in rows if r["live"] and r["status"] != "OPEN"]
         wins = [r for r in live_closed if r["pnl_amount"] > 0]
         stats = {
@@ -577,8 +581,8 @@ class PaperEngine:
             "live_win_rate": round(len(wins) / len(live_closed) * 100.0, 1) if live_closed else None,
             "live_realized": round(sum(r["pnl_amount"] for r in live_closed), 2),
             "unrealized": position["pnl_amount"] if position else 0.0,
-            "replay_trades": len([r for r in rows if not r["live"] and r["status"] != "OPEN"]),
-            "replay_realized": round(sum(r["pnl_amount"] for r in rows if not r["live"] and r["status"] != "OPEN"), 2),
+            "replay_trades": len([r for r in rows if not r["live"] and r["status"] not in ("OPEN", "BEFORE_ADDED")]),
+            "replay_realized": round(sum(r["pnl_amount"] for r in rows if not r["live"] and r["status"] not in ("OPEN", "BEFORE_ADDED")), 2),
         }
 
         # Gap-protocol entries/exits carry an intraday time; on a daily chart they belong to that day's bar.
