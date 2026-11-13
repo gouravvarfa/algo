@@ -66,7 +66,9 @@ p { margin: 0; }
 .navlink.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
 .navlink.active::before { content: ""; position: absolute; left: -12px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
 .idxcards { margin-top: auto; display: grid; gap: 8px; padding-top: 14px; }
-.idxcard { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; background: var(--bg-hover); }
+.idxcard { border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; background: var(--bg-hover); width: 100%; text-align: left; font: inherit;
+  color: inherit; cursor: pointer; transition: border-color .15s; }
+.idxcard:hover, .idxcard:focus-visible { border-color: var(--accent); outline: none; }
 .idxcard b { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); }
 .idxcard .p { font-size: 16px; font-weight: 500; }
 .themeseg { margin-top: 10px; display: flex; background: var(--bg-hover); border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px; gap: 2px; }

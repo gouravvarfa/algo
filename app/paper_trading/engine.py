@@ -106,7 +106,9 @@ TICKER_INDICES: dict[str, tuple[str, str, str]] = {
     "NIFTY ENERGY": ("NSE", "99926020", "NIFTY ENERGY"), "NIFTY REALTY": ("NSE", "99926018", "NIFTY REALTY"), "NIFTY MEDIA": ("NSE", "99926031", "NIFTY MEDIA"),
     "NIFTY PSU BANK": ("NSE", "99926025", "PSU BANK"), "NIFTY INFRA": ("NSE", "99926019", "NIFTY INFRA"),
 }
-INDEX_CHART_TF = {"1D": ("ONE_DAY", 400, 900), "15m": ("FIFTEEN_MINUTE", 20, 120), "5m": ("FIVE_MINUTE", 5, 60)}   # interval, days, cache seconds
+INDEX_CHART_TF = {"1D": ("ONE_DAY", 400, 900), "15m": ("FIFTEEN_MINUTE", 20, 120), "5m": ("FIVE_MINUTE", 5, 60),
+                  "1W": ("ONE_DAY", 1900, 1800), "1M": ("ONE_DAY", 1900, 1800)}   # weekly / monthly: built from ~5 years of daily candles (Angel One has no such interval)
+INDEX_CHART_RESAMPLE = {"1W": "W-MON", "1M": "MS"}   # interval, days, cache seconds
 SWEEP_MIN_SLEEP = 0.25                  # between two sweeps of the engine while ticks flow (seconds)
 FAULT_RETRY_SECONDS = 5.0                # an instrument whose evaluation is failing is looked at again after this long, not on every sweep
 SWEEP_DUTY = 2.0                        # ... and at least this many times the CPU the sweep used, so the engine never takes more than about a third of a core
@@ -235,6 +237,16 @@ def _candles_with_tick(raw: pd.DataFrame, tick_ltp: float | None) -> list[dict]:
 
 
 INDEX_CHART_BUCKET = {"FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}
+
+
+def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Weekly (weeks from Monday) or monthly candles from daily ones, each labelled by its first day."""
+    kw = {"label": "left", "closed": "left"} if rule.startswith("W") else {}
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last"}
+    if "volume" in df.columns:
+        agg["volume"] = "sum"
+    out = df.resample(rule, **kw).agg(agg).dropna(subset=["open", "close"])
+    return out
 
 
 def _naive(df: pd.DataFrame | None) -> pd.DataFrame | None:
@@ -1281,6 +1293,8 @@ class PaperEngine:
             if (now - hit[0]).total_seconds() >= ttl:
                 self._refresh_later(("ic", key, tf), lambda: self._load_index_chart(key, tf))
         df = _naive(df)
+        if tf in INDEX_CHART_RESAMPLE and df is not None and len(df):
+            df = _resample(df, INDEX_CHART_RESAMPLE[tf])
         size = INDEX_CHART_BUCKET.get(interval)
         if size:
             df = _with_tick_buckets(df, _tick_buckets(self.feed.builder.minutes(tok), size, now))

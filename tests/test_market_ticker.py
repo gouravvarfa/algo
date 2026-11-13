@@ -265,3 +265,21 @@ def test_the_5_minute_index_charts_are_loaded_ahead_one_at_a_time_and_kept_ones_
     fresh.ticker()
     assert not [k for k in fresh.refreshes if k[0] == "ic"] and len(fresh._index_charts) == len(em.TICKER_INDICES)   # no call: all at hand at once
 
+
+
+def test_weekly_and_monthly_index_charts_are_built_from_daily_candles():
+    e = _eng()
+    idx = pd.date_range("2026-09-28", "2026-11-06", freq="B", tz=IST)
+    df = pd.DataFrame({"open": [100.0 + x for x in range(len(idx))], "high": [105.0 + x for x in range(len(idx))], "low": [95.0 + x for x in range(len(idx))],
+                       "close": [101.0 + x for x in range(len(idx))], "volume": 0.0}, index=idx)
+
+    async def candles(*a, **k):
+        assert a[2] == "ONE_DAY"
+        return df
+    e._candles = candles
+    week = asyncio.run(e.index_chart("NIFTY IT", "1W"))["candles"]
+    month = asyncio.run(e.index_chart("NIFTY IT", "1M"))["candles"]
+    day = lambda c: dt.datetime.fromtimestamp(c["time"], dt.timezone.utc).date()
+    assert len(week) == 6 and day(week[0]) == dt.date(2026, 9, 28) and all(day(c).weekday() == 0 for c in week)   # weeks from Monday
+    assert [day(c) for c in month] == [dt.date(2026, 9, 1), dt.date(2026, 10, 1), dt.date(2026, 11, 1)]
+    assert week[0]["open"] == 100.0 and week[0]["high"] == 109.0 and week[0]["low"] == 95.0 and week[0]["close"] == 105.0

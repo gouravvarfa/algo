@@ -11,7 +11,7 @@ import { Icon, type IconName } from './Icon'
 import { Hamburger, NavBackdrop } from './MobileNav'
 import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
-import { MarketTicker } from '../features/market/MarketTicker'
+import { IndexChart, MarketTicker, type TickerItem } from '../features/market/MarketTicker'
 
 interface Item { to: string; label: string; icon: IconName }
 
@@ -46,12 +46,20 @@ function IndexCard({ name, label }: { name: 'NIFTY' | 'BANKNIFTY'; label: string
   const price = fresh(t) ? t.ltp : d?.price
   const change = price != null && ref ? price - ref : null
   const pct = change != null && ref ? (change / ref) * 100 : d?.pct
+  // a click / tap opens the same live chart as the market bar
+  const [open, setOpen] = useState(false)
+  const item: TickerItem = { key: name, label: name === 'NIFTY' ? 'NIFTY 50' : 'BANKNIFTY', exchange: 'NSE', token, price: price ?? null, prev_close: ref ?? null,
+    ref_today: d?.ref_today ?? null, change: change ?? null, pct: pct ?? null, live: fresh(t), session: d?.session ?? null, today: fresh(t) || d?.today }
   return (
-    <div className="idxcard" title={d ? `${d.live ? 'Live tick' : 'Last REST candle'} · previous close ${num(d.prev_close)}` : ''}>
-      <b>{label}</b>
-      <span className="p num">{price != null ? num(price) : '–'}</span>{' '}
-      {pct != null && <span className={`num ${sign(change ?? d?.change)}`} style={{ fontSize: 12 }}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</span>}
-    </div>
+    <>
+      <button type="button" className="idxcard" onClick={() => setOpen(true)} aria-label={`${label}: open chart`}
+        title={d ? `${d.live ? 'Live tick' : 'Last REST candle'} · previous close ${num(d.prev_close)} · tap for the chart` : 'Tap for the chart'}>
+        <b>{label}</b>
+        <span className="p num">{price != null ? num(price) : '–'}</span>{' '}
+        {pct != null && <span className={`num ${sign(change ?? d?.change)}`} style={{ fontSize: 12 }}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</span>}
+      </button>
+      {open && <IndexChart item={item} onClose={() => { setOpen(false); (document.activeElement as HTMLElement | null)?.blur?.() }} />}
+    </>
   )
 }
 

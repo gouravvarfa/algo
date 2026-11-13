@@ -24,3 +24,10 @@ describe('live index candles', () => {
     expect(liveBar(candles, null, { ltp: 99, ts: ist(9, 16) }, '5m')).toBeNull()                    // older than the server's last candle
   })
 })
+
+describe('weekly / monthly live candles', () => {
+  it('a tick falls into its week (from Monday) or month', () => {
+    expect(bucketTime(ist(11, 0), '1W')).toBe(Date.UTC(2026, 10, 9) / 1000)      // Wed 11 Nov 2026 -> Mon 9 Nov
+    expect(bucketTime(ist(11, 0), '1M')).toBe(Date.UTC(2026, 10, 1) / 1000)
+  })
+})

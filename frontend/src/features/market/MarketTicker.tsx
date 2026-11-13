@@ -157,7 +157,8 @@ export function MarketTicker() {
   )
 }
 
-const TFS = [['5m', '5 min'], ['15m', '15 min'], ['1D', '1 day']] as const
+const TFS = [['5m', '5 min'], ['15m', '15 min'], ['1D', '1 day'], ['1W', '1 week'], ['1M', '1 month']] as const
+const DAILY = (tf: string) => tf === '1D' || tf === '1W' || tf === '1M'      // candles of a day or longer
 const chartOf = (key: string, tf: string) => get<ChartData>(`/api/market/chart/${encodeURIComponent(key)}?tf=${tf}`)
 
 /** The candle a tick belongs to, as the server writes candle times (IST wall clock encoded as UTC seconds): the day (1D) or the 5 / 15-minute slot
@@ -166,6 +167,8 @@ export function bucketTime(tickMs: number, tf: string): number | null {
   const d = new Date(tickMs + IST_MS)
   const y = d.getUTCFullYear(), mo = d.getUTCMonth(), day = d.getUTCDate()
   if (tf === '1D') return Date.UTC(y, mo, day) / 1000
+  if (tf === '1M') return Date.UTC(y, mo, 1) / 1000
+  if (tf === '1W') { const wd = (new Date(Date.UTC(y, mo, day)).getUTCDay() + 6) % 7; return Date.UTC(y, mo, day - wd) / 1000 }   // the week's Monday
   const size = tf === '15m' ? 15 : 5
   const mins = d.getUTCHours() * 60 + d.getUTCMinutes() - (9 * 60 + 15)
   if (mins < 0) return null
@@ -187,12 +190,12 @@ export function liveBar(candles: Candle[], built: Candle | null, tick: { ltp: nu
 type Ind = { bb: boolean; vol: boolean; rsi: boolean }
 interface Hover { c: Candle; rsi: number | null; bb: { mid: number; upper: number; lower: number } | null }
 
-function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }) {
+export function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }) {
   const [tf, setTf] = useState<string>('5m')
   const [ind, setInd] = useState<Ind>({ bb: true, vol: true, rsi: true })
   // not available yet (Angel One busy, nothing kept on the server): asked again every 5 s instead of waiting for the usual 30 s / 5 min refresh
   const q = useQuery({ queryKey: ['market-chart', item.key, tf], queryFn: () => chartOf(item.key, tf), staleTime: 25_000, placeholderData: keepPreviousData,
-    refetchInterval: (query) => (query.state.status === 'error' || !query.state.data?.candles.length || query.state.data?.partial ? 5000 : tf === '1D' ? 300_000 : 30_000), retry: 1 })
+    refetchInterval: (query) => (query.state.status === 'error' || !query.state.data?.candles.length || query.state.data?.partial ? 5000 : DAILY(tf) ? 300_000 : 30_000), retry: 1 })
   const box = useRef<HTMLDivElement>(null)
   const rbox = useRef<HTMLDivElement>(null)
   const [hover, setHover] = useState<Hover | null>(null)
@@ -211,7 +214,7 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
   // the last session from the intraday candles: open, high, low (the range bar)
   const day = useMemo(() => {
     if (!candles.length) return null
-    if (tf === '1D') { const k = candles[candles.length - 1]; return { open: k.open, high: k.high, low: k.low } }
+    if (DAILY(tf)) { const k = candles[candles.length - 1]; return { open: k.open, high: k.high, low: k.low } }
     const lastDay = new Date(candles[candles.length - 1].time * 1000).toISOString().slice(0, 10)
     const today = candles.filter((k) => new Date(k.time * 1000).toISOString().slice(0, 10) === lastDay)
     return { open: today[0].open, high: Math.max(...today.map((k) => k.high)), low: Math.min(...today.map((k) => k.low)) }
@@ -239,14 +242,14 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
     const c = createChart(el, {
       ...base,
       rightPriceScale: { borderColor: line, minimumWidth: 78, scaleMargins: { top: 0.06, bottom: lowerPanes + 0.03 } },
-      timeScale: { borderColor: line, timeVisible: tf !== '1D', secondsVisible: false, rightOffset: 4, visible: !ind.rsi },
+      timeScale: { borderColor: line, timeVisible: !DAILY(tf), secondsVisible: false, rightOffset: 4, visible: !ind.rsi },
     })
     const t = (k: Candle) => k.time as UTCTimestamp
     const s = c.addCandlestickSeries({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false })
     const bbs: Partial<Record<'upper' | 'lower' | 'mid', ISeriesApi<'Line'>>> = {}
     let rsiLine: ISeriesApi<'Line'> | null = null
     s.setData(candles.map((k) => ({ time: t(k), open: k.open, high: k.high, low: k.low, close: k.close })))
-    if (item.prev_close != null && tf !== '1D') s.createPriceLine({ price: item.prev_close, color: muted, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Prev close' })
+    if (item.prev_close != null && !DAILY(tf)) s.createPriceLine({ price: item.prev_close, color: muted, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'Prev close' })
     if (ind.bb) {
       const band = (pick: 'upper' | 'lower' | 'mid', color: string, style: 0 | 2) => {
         const ls = c.addLineSeries({ color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
@@ -267,7 +270,7 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
       rc = createChart(rbox.current, {
         ...base,
         rightPriceScale: { borderColor: line, minimumWidth: 78, scaleMargins: { top: 0.1, bottom: 0.1 } },
-        timeScale: { borderColor: line, timeVisible: tf !== '1D', secondsVisible: false, rightOffset: 4 },
+        timeScale: { borderColor: line, timeVisible: !DAILY(tf), secondsVisible: false, rightOffset: 4 },
         handleScroll: false, handleScale: false,
       })
       const r = rc.addLineSeries({ color: purple, lineWidth: 1, priceLineVisible: false, lastValueVisible: true,
@@ -369,7 +372,7 @@ function IndexChart({ item, onClose }: { item: TickerItem; onClose: () => void }
         </div>
         {ind.rsi && <div className="tk-rsi" ref={rbox}><span className="tk-rsitag">RSI 14</span></div>}
         <div className="tk-foot">
-          Data: Angel One · {tf === '1D' ? 'daily candles' : `${tf} candles, refreshed every 30 s`} · display only, never traded · charts: TradingView Lightweight Charts
+          Data: Angel One · {DAILY(tf) ? `${tf === '1D' ? 'daily' : tf === '1W' ? 'weekly' : 'monthly'} candles` : `${tf} candles, refreshed every 30 s`} · display only, never traded · charts: TradingView Lightweight Charts
           {ind.vol && !hasVol && candles.length > 0 && <> · <b>Volume:</b> an index has no traded volume (the exchange does not publish one)</>}
         </div>
       </div>
