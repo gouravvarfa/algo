@@ -38,3 +38,51 @@ def test_repair_fetches_again_only_the_contracts_whose_last_download_failed(tmp_
     res = asyncio.run(intraday.repair_errors(None, info, 5, db=db, pause=0))
     assert res["tried"] == 2 and res["fixed"] == 1 and len(res["still_failing"]) == 1
     assert "tok22850" not in asked and "tok22900" not in asked and asked.count("tok22800") == 1 and asked.count("tok22950") == 3     # 3 tries, then reported
+
+
+def test_a_symbol_refused_once_is_tried_again_and_saved(tmp_path, monkeypatch):
+    """BANKNIFTY on 13 Nov: one HTTP 403 right after the close lost the whole day's download."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.options import collector
+    from app.providers.angelone_client import AngelOneApiError
+    monkeypatch.setattr(collector, "STATUS", tmp_path / "status.json")
+    monkeypatch.setattr(collector, "RETRY_WAIT_S", 0)
+    monkeypatch.setattr(collector.master, "load_underlying", lambda sym: SimpleNamespace(name=sym))
+    calls = {"BANKNIFTY": 0, "NIFTY": 0}
+
+    async def ingest(session, info, *a, **k):
+        calls[info.name] += 1
+        if info.name == "BANKNIFTY" and calls["BANKNIFTY"] == 1:
+            raise AngelOneApiError("Angel One returned a non-JSON response (HTTP 403).", "http")
+        return {"contracts": 2, "contracts_with_data": 2, "rows": 10, "rejected": 0, "errors": []}
+
+    async def repair(*a, **k):
+        return {"still_failing": [], "fixed": 0}
+    monkeypatch.setattr(collector.intraday, "ingest", ingest)
+    monkeypatch.setattr(collector.intraday, "repair_errors", repair)
+
+    async def get_session():
+        return None
+    st = asyncio.run(collector.run_once(SimpleNamespace(get_session=get_session)))
+    assert st["BANKNIFTY"]["ok"] and st["NIFTY"]["ok"] and calls == {"BANKNIFTY": 2, "NIFTY": 1}
+
+
+def test_a_symbol_that_keeps_failing_is_reported_after_three_tries(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app.options import collector
+    monkeypatch.setattr(collector, "STATUS", tmp_path / "status.json")
+    monkeypatch.setattr(collector, "RETRY_WAIT_S", 0)
+    monkeypatch.setattr(collector.master, "load_underlying", lambda sym: SimpleNamespace(name=sym))
+    n = []
+
+    async def ingest(*a, **k):
+        n.append(1)
+        raise RuntimeError("HTTP 403")
+    monkeypatch.setattr(collector.intraday, "ingest", ingest)
+
+    async def get_session():
+        return None
+    st = asyncio.run(collector.run_once(SimpleNamespace(get_session=get_session), symbols=("BANKNIFTY",)))
+    assert len(n) == 3 and st["BANKNIFTY"]["ok"] is False and "403" in st["BANKNIFTY"]["error"]
