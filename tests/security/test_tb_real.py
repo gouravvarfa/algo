@@ -322,6 +322,36 @@ async def test_switching_the_instrument_off_cancels_a_waiting_entry_but_keeps_an
 
 
 @async_test
+async def test_the_accounts_own_switch_to_paper_pauses_and_back_on_real_the_open_position_is_managed_again(env):
+    """The owner, 15 Nov 2026: going to paper and back must not lose the real arm. While on paper nothing is sent; back on REAL the next round manages it."""
+    sid = await open_long(env)
+    store.set_mode(env.db, env.uid, "paper", "tbtrader")
+    await env.rt.tick(secs(10))
+    assert env.state()["released"] is True and env.fb.orders[sid]["status"] == "trigger pending"      # the stop stays at Angel One
+    assert store.instrument_switches(env.db, env.uid)[IID] is True and store.instrument_real(env.db, env.uid, IID) is False
+    env.sync({"direction": "BUY", "entry_price": 50000.0, "active_stop": 50002.5}, secs(20))
+    await env.rt.tick(secs(20))
+    assert not [c for c in env.fb.calls if c[0] == "modify"]                                          # on paper: nothing is sent
+    store.set_mode(env.db, env.uid, "real", "tbtrader")
+    await env.rt.tick(secs(25))                                                                       # 15 s later, not after the 60 s idle poll
+    a = env.state()
+    assert a["released"] is False and any("on again" in e["text"] for e in a["events"])
+    mods = [c for c in env.fb.calls if c[0] == "modify"]
+    assert len(mods) == 1 and mods[0][2]["triggerprice"] == "50002.45"
+
+
+@async_test
+async def test_a_new_system_point_while_the_account_is_on_paper_sends_nothing_and_the_next_one_on_real_does(env):
+    store.set_mode(env.db, env.uid, "paper", "tbtrader")
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY"))
+    assert env.fb.n == 0
+    store.set_mode(env.db, env.uid, "real", "tbtrader")
+    await go(env, env.ev("ENTRY", "BUY", now=secs(60)), now=secs(60))
+    assert env.fb.n == 1 and env.fb.last("entry")[0] is not None
+
+
+@async_test
 async def test_a_request_with_no_clear_answer_halts_the_instrument_until_a_person_clears_it(env):
     env.sync(None)
     env.fb.place_error = angel_orders.Unknown("No answer from Angel One.")

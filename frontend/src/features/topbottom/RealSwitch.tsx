@@ -15,7 +15,8 @@ interface TbState {
 interface Data { account_mode: string; real_allowed: boolean; max_lots: number; blockers: string[]; instruments: Item[] }
 
 /** The person's own Real/Paper switch for ONE Top-Bottom instrument. Shown only to accounts an admin allowed for real orders, never in an admin's "view as" screen.
- * Off by default; it can be turned on only while the whole account is in REAL mode, and it turns itself off whenever the account leaves REAL. */
+ * Off by default; it can be turned on only while the whole account is in REAL mode. Switching the account back to paper keeps it armed but paused (nothing is
+ * sent); back on REAL it carries on. An admin's withdrawal or the kill switch turns it off. */
 export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; symbol: string }) {
   const ds = useDataSource()
   const qc = useQueryClient()
@@ -57,13 +58,15 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   const st = tb.data?.instruments.find((x) => x.instrument_id === instrumentId)
   const accountReal = d.account_mode === 'real'
   const on = it.real_on && accountReal
+  const paused = it.real_on && !accountReal          // armed, but the account is on paper: nothing is sent until it is REAL again
   return (
-    <div className={'realpanel ' + (on ? 'on' : 'off')}>
+    <div className={'realpanel ' + (on ? 'on' : paused ? 'paused' : 'off')}>
       <div className="rp-main">
         <span className="rp-dot" aria-hidden />
         <div className="rp-text">
-          <b>{on ? 'REAL trading is ON' : 'Real trading is off'} · {symbol}</b>
+          <b>{on ? 'REAL trading is ON' : paused ? 'REAL armed · paused' : 'Real trading is off'} · {symbol}</b>
           <span>{on ? <>Every new System Point goes to Angel One · <b>{it.real_lots} lot{it.real_lots > 1 ? 's' : ''}</b> (qty {it.real_lots * it.lot_size}) · limit orders, automatic stop-loss</>
+            : paused ? <>Your account is on paper, so nothing is sent now. This instrument stays armed ({it.real_lots} lot{it.real_lots > 1 ? 's' : ''}): <Link to="/settings">switch the account back to REAL</Link> and it carries on at the next new System Point.</>
             : !accountReal ? <>Your account is on paper. <Link to="/settings">Switch to REAL in Settings</Link> first.</>
             : 'Paper keeps running either way. Turning real on sends nothing now: the first order goes at the next new System Point.'}</span>
         </div>
@@ -77,12 +80,12 @@ Real orders go OFF for this instrument, the stop is cancelled and the open real 
               {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
             </button>
           )}
-          <button className={'rp-btn ' + (on ? 'pause' : 'go')} disabled={set.isPending || (!on && !accountReal)}
-            title={!accountReal ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
+          <button className={'rp-btn ' + (on || paused ? 'pause' : 'go')} disabled={set.isPending || (!on && !paused && !accountReal)}
+            title={!accountReal && !paused ? d.blockers.join(' ') || 'Switch your account to REAL in Settings first.' : ''}
             onClick={() => {
-              if (on) set.mutate(false)
+              if (on || paused) set.mutate(false)
               else { setPickLots(it.real_lots || 1); setTicket(true); void mg.refetch() }
-            }}>{set.isPending ? '…' : on ? 'Switch to paper' : 'Turn REAL on'}</button>
+            }}>{set.isPending ? '…' : on || paused ? 'Switch to paper' : 'Turn REAL on'}</button>
         </div>
       </div>
       {on && marginLine && <div className="rp-foot">{marginLine}</div>}

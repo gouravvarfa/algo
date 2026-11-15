@@ -1,5 +1,5 @@
-"""Top-Bottom: the person's own real-order switch for each instrument. It can only be on while the account is in effective real mode, and it never survives the account
-leaving real mode (paper, admin withdrawal, kill switch). No order is sent here; the order step asks store.instrument_real() first. Made-up data."""
+"""Top-Bottom: the person's own real-order switch for each instrument. It can only be turned on while the account is in effective real mode. The person's own
+switch back to paper keeps it (paused: nothing is sent) and REAL resumes it; an admin withdrawal and the kill switch clear it. No order is sent here; the order step asks store.instrument_real() first. Made-up data."""
 from types import SimpleNamespace
 
 import pytest
@@ -85,15 +85,26 @@ def test_nobody_can_switch_another_persons_instrument(db, new_client, _reset):
     assert "TCS" not in c_user.get("/api/me/broker/instruments").text
 
 
-def test_going_back_to_paper_clears_every_switch_and_real_later_does_not_rearm_them(db, new_client, _reset):
+def test_going_back_to_paper_keeps_the_arms_paused_and_real_resumes_them(db, new_client, _reset):
     user, _, _, c_user = setup(db, new_client, _reset)
     switch(c_user, "i-bank", True)
     switch(c_user, "i-reliance", True)
     assert api(c_user, "PUT", "/api/me/broker/mode", json={"mode": "paper"}).status_code == 200
-    assert not any(i["real_on"] for i in c_user.get("/api/me/broker/instruments").json()["instruments"])
+    got = c_user.get("/api/me/broker/instruments").json()
+    assert got["account_mode"] == "paper" and all(i["real_on"] for i in got["instruments"]) and not any(i["real_effective"] for i in got["instruments"])
+    assert store.instrument_real(db, user.id, "i-bank") is False                                      # paused: the order step sends nothing
     assert api(c_user, "PUT", "/api/me/broker/mode", json={"mode": "real", "password": PASSWORD}).status_code == 200
-    assert not any(i["real_on"] for i in c_user.get("/api/me/broker/instruments").json()["instruments"])
-    assert store.instrument_real(db, user.id, "i-bank") is False
+    got = c_user.get("/api/me/broker/instruments").json()
+    assert all(i["real_effective"] for i in got["instruments"]) and store.instrument_real(db, user.id, "i-bank") is True
+
+
+def test_an_armed_instrument_can_be_switched_off_while_the_account_is_on_paper(db, new_client, _reset):
+    user, _, _, c_user = setup(db, new_client, _reset)
+    switch(c_user, "i-bank", True)
+    api(c_user, "PUT", "/api/me/broker/mode", json={"mode": "paper"})
+    assert switch(c_user, "i-bank", False).status_code == 200
+    assert switch(c_user, "i-bank", True).status_code == 403                                          # but not on again until the account is REAL
+    assert not store.instrument_switches(db, user.id)["i-bank"]
 
 
 def test_the_kill_switch_and_an_admin_withdrawal_clear_the_switches(db, new_client, _reset):

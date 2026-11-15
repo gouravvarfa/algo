@@ -138,8 +138,9 @@ def set_mode(c, user_id: str, mode: str, actor: str) -> None:
         if b:
             raise BrokerError(403, "REAL_BLOCKED", " ".join(b))
     c.execute("UPDATE user_broker SET mode=?, mode_changed_at=?, mode_changed_by=? WHERE user_id=?", (mode, time.time(), actor, user_id))
-    if mode == "paper":
-        c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE user_id=? AND real_on=1", (time.time(), actor, user_id))   # coming back later never re-arms them
+    # the person's own switch back to paper keeps every instrument's real arm (the owner, 15 Nov 2026): while the account is on paper nothing is sent
+    # (instrument_real() asks for effective real mode), and back on REAL the armed instruments carry on. An admin's withdrawal and the kill switch
+    # still clear every arm, so an emergency stop never turns itself back on.
     c.commit()
 
 

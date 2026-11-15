@@ -110,7 +110,7 @@ export function BrokerCard() {
           <div className="card-head"><h2>Paper or Real</h2></div>
           {s.effective_mode === 'real' ? (
             <>
-              <p className="sub"><b>REAL is on.</b> Your Angel One account is armed within the limits above. Switch back to paper any time, no password needed.</p>
+              <p className="sub"><b>REAL is on.</b> Your Angel One account is armed within the limits above. Switch back to paper any time, no password needed: nothing is sent while on paper, and the instruments you armed stay armed and carry on when you come back to REAL.</p>
               <button className="btn" disabled={mode.isPending} onClick={() => mode.mutate({ mode: 'paper' })}>Back to PAPER</button>
             </>
           ) : (

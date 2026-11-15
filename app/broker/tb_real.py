@@ -15,6 +15,7 @@ What it does, for each person and instrument whose real switch is ON (and the ac
   * Anything it cannot be sure of HALTS that instrument (a request that timed out, a broker position that does not match what we hold, exits refused again and again): no further
     order is sent until the person clears the halt after looking at Angel One. Nothing is retried blind.
   * Switching the instrument off, or the account leaving real mode, cancels an entry that has not filled. An open position keeps its resting stop order and is then the person's to manage.
+    The person's own switch of the account back to paper keeps the instrument armed: back on REAL it carries on, and a position still open is managed again.
 Every order is stored (real_tb_orders) and audited. The state survives a restart. Angel One allows about one order-book / positions read a second, so each round reads
 them once per person for all of that person's instruments.
 """
@@ -422,7 +423,9 @@ class RealTB:
         if not busy:
             return                                                        # nothing open, nothing waiting: no call to Angel One at all
         session = (a["pending_entry"] or {}).get("contract", {}).get("session") or (self.snaps.get(iid) or {}).get("instrument", {}).get("session", "NSE")
-        quiet = a.get("released") or (not a["pending_entry"] and not a.get("exit_since") and not self._cancelling(a) and not self._market_open(session, now))
+        real_ok = bool(row and row["real_on"]) and store.instrument_real(c, uid, iid)
+        # a released position is looked at once a minute only while real stays off: the moment real is on again it is managed every round
+        quiet = (a.get("released") and not real_ok) or (not a["pending_entry"] and not a.get("exit_since") and not self._cancelling(a) and not self._market_open(session, now))
         if quiet and a.get("polled_at") and _age(a["polled_at"], now) < IDLE_POLL_S:
             return
         a["polled_at"] = _s(now)
@@ -435,7 +438,6 @@ class RealTB:
             return
         self._fail_since.pop(uid, None)
         await self._update_orders(c, a, book, now)
-        real_ok = bool(row and row["real_on"]) and store.instrument_real(c, uid, iid)
         if a.get("manual_exit") and not a["position"]:
             a.pop("manual_exit", None)
         if a.get("manual_exit") and not a["halted"]:                       # the person pressed Exit now: drop any entry, then close with a LIMIT order
@@ -463,6 +465,9 @@ class RealTB:
                     self._ev(a, now, f"real orders are off: the open position ({a['position']['contract']}) stays at Angel One with its resting stop order; manage it there")
                 self._save(c, a)
                 return
+        if a.get("released") and a["position"]:
+            a["released"] = False                                           # real is on again (account back on REAL, or the switch on again) with a position still open
+            self._ev(a, now, f"real orders are on again: this app manages the open position ({a['position']['contract']}) and its stop again")
         if a["halted"]:
             self._save(c, a)
             return

@@ -19,7 +19,7 @@ function sessionOpen(ov: { market_open?: boolean; mcx_open?: boolean } | undefin
   return !!(inst?.exch_seg === 'MCX' ? ov?.mcx_open : ov?.market_open)
 }
 
-function useInstrumentId() {
+function useInstrumentId(only?: string[]) {
   const ds = useDataSource()
   const qc = useQueryClient()
   const ov = useQuery({
@@ -29,24 +29,27 @@ function useInstrumentId() {
     refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : 15_000),
   })
   const [params] = useSearchParams()
-  const futures = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)
-  const want = (params.get('s') ?? 'BANKNIFTY').toUpperCase()
+  const all1d = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)
+  const futures = only ? all1d.filter((i) => only.includes(i.instrument.id)) : all1d       // the Real Trades page: only instruments with real money on them
+  const want = (params.get('s') ?? (only ? futures[0]?.instrument.symbol ?? '' : 'BANKNIFTY')).toUpperCase()
   const bank = futures.find((i) => i.instrument.symbol === 'BANKNIFTY')
   // the symbol picked in the tabs; the person's own BankNifty is always created on first visit, other symbols exist only if an admin assigned them
-  const found = futures.find((i) => i.instrument.symbol === want) ?? bank ?? futures[0]
+  const found = futures.find((i) => i.instrument.symbol === want) ?? (only ? futures[0] : bank ?? futures[0])
   const add = useMutation({
     mutationFn: () => post('/api/instruments', { symbol: 'BANKNIFTY', instrument_type: 'FUTURE', timeframe: '1D', size: 1, lookback_days: Math.ceil((Date.now() - new Date(SINCE).getTime()) / 864e5) }),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['tb', ds.key, 'overview'] }) },
   })
   // a person's own page adds the BankNifty futures strategy the first time it is opened; an admin looking at someone else never creates anything
-  const needsAdd = ov.isSuccess && !bank && !ds.readOnly && futures.length === 0
+  const needsAdd = !only && ov.isSuccess && !bank && !ds.readOnly && futures.length === 0
   return { ov, found, add, needsAdd, futures }
 }
 
-export default function TopBottomPage() {
+/** `realOnly`: the Real Trades page. The same dashboard, but only the instruments in `only` (real money on them) and only real fills; `top` / `bottom` are
+ * shown above the tabs and below the dashboard (the all-instruments totals and the list of every real trade). */
+export default function TopBottomPage({ realOnly = false, only, top, bottom }: { realOnly?: boolean; only?: string[]; top?: ReactNode; bottom?: ReactNode } = {}) {
   const ds = useDataSource()
   const qc = useQueryClient()
-  const { ov, found, add, needsAdd, futures } = useInstrumentId()
+  const { ov, found, add, needsAdd, futures } = useInstrumentId(realOnly ? only ?? [] : undefined)
   const [, setParams] = useSearchParams()
   const [kind, setKind] = useState<'line' | 'candle'>(() => { try { return localStorage.getItem('dash.ctype') === 'candle' ? 'candle' : 'line' } catch { return 'line' } })
   const [fit, setFit] = useState(0)
@@ -69,12 +72,14 @@ export default function TopBottomPage() {
   const setKindSaved = (k: 'line' | 'candle') => { setKind(k); try { localStorage.setItem('dash.ctype', k) } catch { /* ignore */ } }
 
   if (ov.isError) return <div className="page"><div className="alert">Could not load: {(ov.error as Error).message}</div></div>
+  if (realOnly && ov.isSuccess && !found) return <div className="page">{top}{bottom}</div>
   if (ds.readOnly && ov.isSuccess && !found) return <div className="page"><div className="card"><h2>No strategy yet</h2><p className="sub" style={{ marginTop: 6 }}>This user has not opened Top Bottom yet, so no strategy is running for them.</p></div></div>
   if (!snap) return <div className="page"><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" style={{ height: 420 }} />{(add.isError || snapQ.isError) && <div className="alert">Could not load the strategy: {((add.error ?? snapQ.error) as Error)?.message}. Retrying.</div>}</div>
 
   const tabs = futures.length > 1 ? <div className="symtabs" role="tablist">{futures.map((f) => <button key={f.instrument.id} role="tab" aria-selected={f.instrument.id === found?.instrument.id} className={f.instrument.id === found?.instrument.id ? 'on' : ''} onClick={() => setParams({ s: f.instrument.symbol })}>{f.instrument.symbol}</button>)}</div> : null
   return <Content tabs={tabs} snap={snap} ov={ov.data!} idx={idx.data} journal={jq.data} kind={kind} setKind={setKindSaved} fit={fit} onFit={() => setFit((f) => f + 1)}
-    showAll={showAll} onToggleAll={() => setShowAll((s) => !s)} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} readOnly={ds.readOnly} updated={snapQ.dataUpdatedAt} />
+    showAll={showAll} onToggleAll={() => setShowAll((s) => !s)} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} readOnly={ds.readOnly} updated={snapQ.dataUpdatedAt}
+    realOnly={realOnly} top={top} bottom={bottom} />
 }
 
 /** Where the price sits between the stop and the entry: how much room is left before the stop is hit. */
@@ -83,7 +88,8 @@ const r2 = (x: number) => Math.round(x * 100) / 100
 /** The open position valued at a live price pushed by the stream, with the server's own multiplier (pnlUnits: points x quantity, or lots x point value for
  * MCX gold / silver, which are quoted per 10 g / per kg). The entry, stop and direction are the engine's. */
 interface RealTrade { direction: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null; entry_at: number; exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string }
-interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null } | null }
+interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null; events?: { at: string; text: string }[] } | null }
+const NO_REAL: RealData = { trades: [], real_on: false, since: null, state: null }
 const iso = (t: number) => new Date(t * 1000).toISOString()
 
 /** The same page, but with the person's REAL trades: only fills Angel One confirmed. Candles and System Points stay the strategy's. */
@@ -133,6 +139,7 @@ interface CP {
   tabs?: ReactNode
   snap: Snapshot; ov: Overview; idx?: IndexQuote; journal?: JournalEvent[]; kind: 'line' | 'candle'; setKind: (k: 'line' | 'candle') => void; fit: number; onFit: () => void
   showAll: boolean; onToggleAll: () => void; onRefresh: () => void; refreshing: boolean; readOnly: boolean; updated: number
+  realOnly?: boolean; top?: ReactNode; bottom?: ReactNode
 }
 
 /** Switch the Top-Bottom strategy off or on for this account. Off = nothing new is evaluated (no signals, entries or exits); an admin's switch-off can only be undone by an admin. */
@@ -162,12 +169,13 @@ function StrategyOffBanner() {
   return <div className="banner warn" role="status"><span><b>Strategy is OFF.</b> {q.data.locked ? 'An admin switched it off; only an admin can switch it back on. ' : ''}Nothing new is evaluated: no signals, entries or exits. An open position is not closed.</span></div>
 }
 
-function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated }: CP) {
+function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated, realOnly = false, top, bottom }: CP) {
   const rq = useQuery({ queryKey: ['broker-tb-trades', s0.instrument.id], queryFn: () => get<RealData>(`/api/me/broker/tb/${s0.instrument.id}/trades`), enabled: !readOnly, refetchInterval: 10_000, retry: false })
   const [pick, setPick] = useState<'paper' | 'real' | null>(null)
   const hasReal = !!rq.data && (rq.data.real_on || rq.data.trades.length > 0 || !!rq.data.state?.position)
-  const view = hasReal ? (pick ?? (rq.data!.real_on || rq.data!.state?.position ? 'real' : 'paper')) : 'paper'
-  const s = useMemo(() => (view === 'real' && rq.data ? realSnap(s0, rq.data) : s0), [view, rq.data, s0])
+  // the Real Trades page is always the real view (never a paper number, even before the real data has loaded)
+  const view = realOnly ? 'real' : hasReal ? (pick ?? (rq.data!.real_on || rq.data!.state?.position ? 'real' : 'paper')) : 'paper'
+  const s = useMemo(() => (view === 'real' ? realSnap(s0, rq.data ?? NO_REAL) : s0), [view, rq.data, s0])
   const st = s.stats, inst = s.instrument
   // live prices pushed by the server (SSE): the futures contract being traded and its index; the engine's own numbers (entry, stop, signals) are unchanged
   const ix = INDEX_STREAM[inst.symbol]
@@ -192,13 +200,15 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
 
   return (
     <div className="page tbpage">
+      {top}
       {tabs}
       <StrategyOffBanner />
       <section className={`tbhero ${p ? (p.pnl_amount >= 0 ? 'up' : 'down') : ''}`}>
         <div className="hero-main">
           <div className="hero-top">
             <span className="eyebrow">Top-Bottom strategy · {inst.symbol} futures · daily</span>
-            {hasReal && <span className="seg" title="Paper: the strategy's own trades. Real: only your Angel One fills since you turned real on.">
+            {view === 'real' && <span className="chip bad" title="Only orders Angel One filled for you">REAL money</span>}
+            {hasReal && !realOnly && <span className="seg" title="Paper: the strategy's own trades. Real: only your Angel One fills since you turned real on.">
               <button className={view === 'paper' ? 'on' : ''} onClick={() => setPick('paper')}>Paper</button>
               <button className={view === 'real' ? 'on' : ''} onClick={() => setPick('real')} style={view === 'real' ? { background: 'var(--danger)', color: '#fff' } : undefined}>Real</button>
             </span>}
@@ -277,8 +287,8 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
               <dt>Net P&amp;L ({unitsLabel(inst)})</dt><dd className={sign(net)}>{money(net)}</dd>
               <dt>Live realized</dt><dd className={sign(st.live_realized)}>{money(st.live_realized)}</dd>
               <dt>Live trades / win</dt><dd>{st.live_trades} / {st.live_win_rate == null ? '–' : `${st.live_win_rate}%`}</dd>
-              <dt>History trades</dt><dd>{st.replay_trades}</dd>
-              <dt>History realized</dt><dd className={sign(st.replay_realized)}>{money(st.replay_realized)}</dd>
+              {view === 'paper' && <><dt>History trades</dt><dd>{st.replay_trades}</dd>
+              <dt>History realized</dt><dd className={sign(st.replay_realized)}>{money(st.replay_realized)}</dd></>}
             </dl>
           </div>
         </div>
@@ -290,12 +300,35 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
         <p className="note">{view === 'real' ? 'REAL trades: only orders Angel One filled for you, since you turned real on. P&L is before brokerage and taxes.' : 'Greyed rows are history from before this instrument was added: not counted in live P&L.'}</p>
       </div>
 
-      <div className="card">
-        <div className="card-head"><h2>Live event log</h2></div>
-        <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>Every ENTRY, EXIT, stop-to-breakeven and gap-protocol event of the live trades, written the moment the engine first sees it. Rows marked <b>backfill</b> were already in history when the log started.</p>
-        <div className="scroll" style={{ maxHeight: 360, overflowY: 'auto' }}><JournalTable events={journal?.filter((e) => !e.symbol || e.symbol === inst.symbol)} /></div>
-      </div>
+      {view === 'real' ? (
+        <div className="card">
+          <div className="card-head"><h2>Real order log</h2><span className="chip bad">REAL</span></div>
+          <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>Every step of your real orders for {inst.symbol}: sent, filled, stop moved, cancelled, skipped and why. Paper events are not shown here.</p>
+          <div className="scroll" style={{ maxHeight: 360, overflowY: 'auto' }}><RealEventLog events={rq.data?.state?.events} /></div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="card-head"><h2>Live event log</h2></div>
+          <p className="note" style={{ marginTop: 0, marginBottom: 8 }}>Every ENTRY, EXIT, stop-to-breakeven and gap-protocol event of the live trades, written the moment the engine first sees it. Rows marked <b>backfill</b> were already in history when the log started.</p>
+          <div className="scroll" style={{ maxHeight: 360, overflowY: 'auto' }}><JournalTable events={journal?.filter((e) => !e.symbol || e.symbol === inst.symbol)} /></div>
+        </div>
+      )}
+      {bottom}
     </div>
+  )
+}
+
+/** The real-order executor's own log for this instrument (newest first): only real-money steps, never a paper event. */
+export function RealEventLog({ events }: { events?: { at: string; text: string }[] }) {
+  const rows = [...(events ?? [])].reverse()
+  return (
+    <table>
+      <thead><tr><th className="l">Time</th><th className="l">What happened</th></tr></thead>
+      <tbody>
+        {rows.map((e, i) => <tr key={`${e.at}-${i}`}><td className="l mono">{e.at}</td><td className="l">{e.text}</td></tr>)}
+        {!rows.length && <tr><td colSpan={2} className="empty">No real order yet. The first one goes out at the next new System Point after you turned REAL on.</td></tr>}
+      </tbody>
+    </table>
   )
 }
 

@@ -4,6 +4,7 @@
   border: 1px solid color-mix(in srgb, var(--rp) 30%, var(--border));
   background: color-mix(in srgb, var(--rp) 6%, var(--bg-surface));
 }
+.realpanel.paused { --rp: var(--warning); }
 .realpanel.on { --rp: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 10%, transparent); }
 .rp-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .rp-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--rp); }
