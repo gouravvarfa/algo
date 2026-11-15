@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError, get, post } from '../../lib/api'
+import { useSession } from '../../lib/session'
 import './auth.css'
 
 interface SetupInfo { name: string; username: string; qr_svg: string; secret: string }
 
-/** The one-time link an admin sends: scan the QR code, choose a password, confirm the first code, then save the backup codes (shown once). */
+/** The one-time link an admin sends: scan the QR code, choose a password, confirm the first code, then save the backup codes (shown once).
+ * Finishing it signs the person in (the server sets the session), so no second code is needed: the one on screen has just been used. */
 export function SetupPage() {
   const { token = '' } = useParams()
   const [info, setInfo] = useState<SetupInfo | null>(null)
@@ -17,6 +19,7 @@ export function SetupPage() {
   const [busy, setBusy] = useState(false)
   const [codes, setCodes] = useState<string[] | null>(null)
   const [copied, setCopied] = useState(false)
+  const { refresh } = useSession()
 
   useEffect(() => {
     get<SetupInfo>(`/api/auth/setup/${encodeURIComponent(token)}`).then(setInfo).catch((e: unknown) => setBad(e instanceof ApiError ? e.message : 'Ask your admin for a new link.'))
@@ -31,6 +34,7 @@ export function SetupPage() {
       const r = await post<{ backup_codes: string[] }>(`/api/auth/setup/${encodeURIComponent(token)}`, { password: pw, totp: code.trim() })
       setPw(''); setPw2('')
       setCodes(r.backup_codes)
+      void refresh().catch(() => undefined)        // the server signed this browser in
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Setup failed.')
     } finally {
@@ -47,7 +51,8 @@ export function SetupPage() {
             <div className="alert warn"><b>Save these backup codes now.</b> They are shown only once. Each works one time if you lose your phone. Keep them somewhere safe.</div>
             <div className="codes">{codes.map((c) => <span key={c}>{c}</span>)}</div>
             <button className="btn" onClick={() => void navigator.clipboard.writeText(codes.join('\n')).then(() => setCopied(true))}>{copied ? 'Copied' : 'Copy codes'}</button>
-            <Link className="btn primary big" to="/login">Continue to sign in</Link>
+            <Link className="btn primary big" to="/">Open the app</Link>
+            <p className="sub">You are signed in on this device. On another device, sign in with your username, the new password and the NEXT code your app shows (each code works only once).</p>
           </div>
         ) : bad ? (
           <div className="stack"><h1>This link does not work</h1><p className="sub">{bad}</p><Link to="/login">Go to sign in</Link></div>
@@ -57,7 +62,7 @@ export function SetupPage() {
           <form className="stack" onSubmit={submit} autoComplete="off">
             <h1>Welcome, {info.name}</h1>
             <p className="sub">Username: <b>{info.username}</b>. Three quick steps:</p>
-            <ol className="steps"><li>Scan this QR code with Google or Microsoft Authenticator.</li><li>Choose a password (at least 12 characters).</li><li>Type the 6-digit code your app shows now.</li></ol>
+            <ol className="steps"><li>Scan this QR code with Google or Microsoft Authenticator. If the app already has an older entry for {info.username}, delete it: only this new one works now.</li><li>Choose a password (at least 12 characters).</li><li>Type the 6-digit code your app shows now.</li></ol>
             <div className="qr" dangerouslySetInnerHTML={{ __html: info.qr_svg }} />
             <p className="sub">Cannot scan? Enter this key in the app instead: <span className="mono secret">{info.secret}</span></p>
             <label className="field">Password<input type="password" autoComplete="new-password" minLength={12} required value={pw} onChange={(e) => setPw(e.target.value)} /></label>

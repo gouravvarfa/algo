@@ -167,9 +167,10 @@ def login(body: LoginBody, request: Request, c=Depends(db)):
     now, ip = time.time(), client_ip(request)
     ks = ratelimit.keys(body.username, ip)
     who = _typed(body.username)
-    if ratelimit.is_locked(c, ks, now):
+    left = ratelimit.seconds_locked(c, ks, now)
+    if left:
         audit.append(c, "login.locked", detail={"username": who, "ip": ip})
-        return err(423, "LOCKED", "Too many attempts. Try again in 15 minutes.")
+        return err(423, "LOCKED", ratelimit.locked_message(left), retry_after_s=left)
     try:
         user = users.authenticate(c, body.username, body.password, body.totp, now)
     except users.InvalidCredentials as exc:
@@ -210,8 +211,9 @@ class PasswordBody(BaseModel):
 def change_password(body: PasswordBody, request: Request, u=Depends(require("session.self")), c=Depends(db)):
     now, ip = time.time(), client_ip(request)
     ks = ratelimit.keys(u["username"], ip)               # a stolen session must not be able to guess the password at leisure
-    if ratelimit.is_locked(c, ks, now):
-        return err(423, "LOCKED", "Too many attempts. Try again in 15 minutes.")
+    left = ratelimit.seconds_locked(c, ks, now)
+    if left:
+        return err(423, "LOCKED", ratelimit.locked_message(left), retry_after_s=left)
     try:
         users.change_password(c, u["id"], body.current_password, body.new_password)
     except users.InvalidCredentials:
@@ -244,10 +246,19 @@ def setup_info(token: str, c=Depends(db)):
 
 
 @router.post("/api/auth/setup/{token}")
-def setup_complete(token: str, body: SetupBody, c=Depends(db)):
+def setup_complete(token: str, body: SetupBody, request: Request, c=Depends(db)):
+    """Finishing the setup link is a full sign-in (the one-time link, the new password and a fresh authenticator code), so the person is signed
+    in at once. Sending them to the login page made them type a second code, and the one still on screen had just been used: refused, and
+    counted towards the lock."""
     user, codes = users.complete_setup(c, token, body.password, body.totp)
     audit.append(c, "user.setup_complete", actor_id=user["id"], actor_role=user["role"], target_type="user", target_id=user["id"])
-    return {"ok": True, "username": user["username"], "backup_codes": codes}
+    ip = client_ip(request)
+    ratelimit.clear(c, ratelimit.keys(user["username"], ip)[0])           # mistakes made before the setup was finished no longer count
+    s = sessions.create(c, user["id"], request.headers.get("user-agent"), ip)
+    audit.append(c, "login.success", actor_id=user["id"], actor_role=user["role"], detail={"ip": ip, "device": sessions.device_label(request.headers.get("user-agent")), "via": "setup"})
+    resp = JSONResponse({"ok": True, "username": user["username"], "backup_codes": codes, "signed_in": True})
+    _set_cookies(resp, request, s["token"], s["csrf"])
+    return resp
 
 
 # ---- admin: user management --------------------------------------------------------------------------------------------------------
@@ -307,6 +318,7 @@ def admin_force_logout(user_id: str, actor=Depends(require("users.manage")), c=D
 @router.post("/api/admin/users/{user_id}/reset-totp")
 def admin_reset_totp(user_id: str, request: Request, actor=Depends(require("users.manage")), c=Depends(db)):
     user, token = users.reset_totp(c, actor, user_id)
+    ratelimit.clear(c, ratelimit.keys(user["username"], "")[0])           # the admin vouches for the person: earlier failed logins no longer lock them out
     audit.append(c, "user.reset_totp", actor_id=actor["id"], actor_role=actor["role"], target_type="user", target_id=user_id)
     return {"user": _public_user(user), **_link(request, token)}
 

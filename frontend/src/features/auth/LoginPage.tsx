@@ -43,7 +43,7 @@ export function LoginPage() {
       if (e instanceof ApiError && e.status === 409) {
         setRefusal({ message: e.message, device: String(e.body.device ?? ''), last_active: String(e.body.last_active ?? ''), canTakeOver: !!e.body.can_take_over })
       } else if (e instanceof ApiError && e.status === 401) {
-        setError('Invalid username, password or code.')
+        setError('Invalid username, password or code. If your admin has just reset your account, open the new setup link first. Each code works only once: if it was just used, wait for the next one.')
         setF((x) => ({ ...x, totp: '' }))
       } else {
         setError(e instanceof Error ? e.message : 'Sign-in failed. Try again.')

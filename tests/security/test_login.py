@@ -98,11 +98,29 @@ def test_four_failures_do_not_lock_and_a_success_clears_the_username_counter(db,
     assert db.execute("SELECT COUNT(*) FROM login_failures WHERE key=?", (ratelimit.keys("rahul", "x")[0],)).fetchone()[0] == 0
 
 
-def test_an_ip_with_five_failures_is_locked_whatever_username_it_tries(db, client):
+def test_an_ip_with_twenty_failures_is_locked_whatever_username_it_tries(db, client):
     acct = make_user(db)
-    for i in range(5):
+    for i in range(20):
         client.post("/api/auth/login", json={"username": f"guess{i}", "password": "whatever password", "totp": "000000"})
     assert login(client, acct).status_code == 423
+
+
+def test_one_persons_five_mistakes_do_not_lock_the_rest_of_the_family_on_the_same_internet(db, new_client):
+    """The owner, 15 Nov 2026: Yogesh's 5 failed logins (his account was waiting for its new setup) locked Gaurav out too: one home, one public IP."""
+    yogesh, gaurav = make_user(db, "yogesh"), make_user(db, "gaurav")
+    for _ in range(5):
+        login(new_client(), yogesh, password="wrong password here")
+    assert login(new_client(), yogesh).status_code == 423                         # the username is locked
+    assert login(new_client(), gaurav).status_code == 200                         # the same address is not
+
+
+def test_the_lock_message_says_how_long_is_left(db, client):
+    acct = make_user(db)
+    ks = ratelimit.keys(acct.username, "testclient")
+    for _ in range(5):
+        ratelimit.record_failure(db, ks, time.time() - 600)                        # 10 of the 15 minutes have passed
+    r = login(client, acct)
+    assert r.status_code == 423 and "5 minutes" in r.json()["message"] and 290 <= r.json()["retry_after_s"] <= 300
 
 
 def test_login_events_are_audited_without_secrets(db, client):

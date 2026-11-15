@@ -19,7 +19,7 @@ def failing(client, name, ip=None):
 # ---- X-Real-IP / X-Forwarded-Proto are believed only from a trusted proxy ----
 def test_a_stranger_cannot_dodge_the_ip_lock_by_sending_an_x_real_ip_header(db, client):
     acct = make_user(db)
-    for i in range(5):
+    for i in range(ratelimit.MAX_FAILURES_IP):
         failing(client, f"guess{i}", ip=f"10.0.0.{i}")                      # a different claimed address every time
     assert login(client, acct).status_code == 423                           # still one real address: locked
 
