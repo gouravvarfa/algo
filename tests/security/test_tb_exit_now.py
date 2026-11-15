@@ -35,10 +35,16 @@ def test_exit_now_with_nothing_open_says_so(e2e):
 @async_test
 async def test_a_symbol_the_admin_did_not_allow_is_never_traded(e2e):
     from app.broker import store as st
-    st.grant(e2e.db, e2e.uid, True, 1, None, ["NIFTY"], "admin")
+    st.grant(e2e.db, e2e.uid, True, 1, None, ["NIFTY"], "admin")             # narrowing the approval switches the BANKNIFTY arm off
+    assert st.instrument_switches(e2e.db, e2e.uid).get(IID) is not True
     st.set_mode(e2e.db, e2e.uid, "real", "e2etrader")
-    st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me")
-    e2e.db.execute("UPDATE user_instrument_real SET changed_at=changed_at-120")
+    with pytest.raises(st.BrokerError) as refused:                               # and it cannot be armed again
+        st.instrument_set(e2e.db, e2e.uid, IID, "BANKNIFTY", True, "me")
+    assert refused.value.code == "NOT_APPROVED"
+    # the order step checks the approval once more: an arm that got there some other way still sends nothing
+    e2e.db.execute("INSERT INTO user_instrument_real (user_id, instrument_id, symbol, real_on, changed_at, changed_by) VALUES (?,?,?,1,?,?) "
+                   "ON CONFLICT(user_id, instrument_id) DO UPDATE SET real_on=1, changed_at=excluded.changed_at", (e2e.uid, IID, "BANKNIFTY", 0, "test"))
+    e2e.db.execute("UPDATE user_instrument_real SET changed_at=strftime('%s','now')-120 WHERE user_id=? AND instrument_id=?", (e2e.uid, IID))
     e2e.db.commit()
     e2e.sync(None)
     e2e.rt.handle([e2e.ev("ENTRY", "BUY")], {}, MON)

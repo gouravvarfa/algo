@@ -7,7 +7,7 @@ import { ApiError, get, post, put } from '../../lib/api'
 import { useDataSource } from '../../lib/datasource'
 import { useToast } from '../../lib/toast'
 
-interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean; real_lots: number; lot_size: number; paper_lots: number }
+interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean; real_lots: number; lot_size: number; paper_lots: number; approved?: boolean }
 interface TbState {
   instrument_id: string; position: { side: string; qty: number; contract: string; entry_price: number | null } | null; pending_entry: boolean; halted: string | null; stop_target: number | null
   released: boolean; exiting?: boolean; missed: { at: string; reason: string }[]; events: { at: string; text: string }[]; orders: { id: string; role: string; side: string; qty: number; type: string; price: number | null; trigger: number | null; state: string }[]
@@ -57,6 +57,23 @@ export function RealSwitch({ instrumentId, symbol }: { instrumentId: string; sym
   )
   const st = tb.data?.instruments.find((x) => x.instrument_id === instrumentId)
   const accountReal = d.account_mode === 'real'
+  if (it.approved === false && !it.real_on) return (
+    <div className="realpanel off">
+      <div className="rp-main">
+        <span className="rp-dot" aria-hidden />
+        <div className="rp-text"><b>Real trading · {symbol} · not approved</b><span>Real orders for {symbol} are not approved for your account yet. Ask your admin to approve {symbol} in <b>Admin → Broker &amp; Real</b>. Paper keeps running.</span></div>
+        <div className="rp-actions">
+          {(st?.position || st?.pending_entry) && (
+            <button className="rp-btn exit" disabled={exit.isPending || st?.exiting} onClick={() => { if (window.confirm(`EXIT NOW for ${symbol}? The open real position is closed at Angel One with a LIMIT order at the live price.`)) exit.mutate() }}>
+              {st?.exiting ? 'Exiting…' : exit.isPending ? 'Sending…' : 'Exit now'}
+            </button>
+          )}
+          <button className="rp-btn" disabled title="An admin approves real orders per symbol: Admin → Broker & Real">Ask admin to approve</button>
+        </div>
+      </div>
+      {st && <TbStatus st={st} onClear={() => { if (window.confirm('Have you looked at your Angel One orders and positions? Clearing the halt lets the app send orders again.')) clear.mutate() }} clearing={clear.isPending} />}
+    </div>
+  )
   const on = it.real_on && accountReal
   const paused = it.real_on && !accountReal          // armed, but the account is on paper: nothing is sent until it is REAL again
   return (

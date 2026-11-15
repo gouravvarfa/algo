@@ -163,6 +163,12 @@ def grant(c, user_id: str, allowed: bool, max_lots: int, max_daily_loss: float |
                1 if allowed else 0, actor, user_id))
     if not allowed:
         c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE user_id=? AND real_on=1", (time.time(), actor, user_id))
+    else:
+        keep = syms if syms is not None else list(SYMBOLS)
+        for sw in c.execute("SELECT instrument_id, symbol FROM user_instrument_real WHERE user_id=? AND real_on=1", (user_id,)).fetchall():
+            if not symbol_allowed(sw["symbol"], keep):              # no longer approved: its arm goes off (an open position keeps its resting stop)
+                c.execute("UPDATE user_instrument_real SET real_on=0, changed_at=?, changed_by=? WHERE user_id=? AND instrument_id=?",
+                          (time.time(), actor, user_id, sw["instrument_id"]))
     c.commit()
 
 
@@ -184,6 +190,8 @@ def instrument_set(c, user_id: str, instrument_id: str, symbol: str, on: bool, a
         r = row(c, user_id)
         if effective_mode(r) != "real":
             raise BrokerError(403, "REAL_BLOCKED", "Real orders cannot be switched on for an instrument: " + (" ".join(blockers(r)) or "your account is on paper. Switch the account to REAL in Settings first."))
+        if not symbol_allowed(symbol, limits(r)["allowed_symbols"]):
+            raise BrokerError(403, "NOT_APPROVED", f"Real orders for {symbol} are not approved for your account. Ask your admin to approve {symbol} (Admin, Broker & Real).")
         if lots is not None and not (1 <= int(lots) <= MAX_REAL_LOTS):
             raise BrokerError(400, "LOTS", f"Lots must be between 1 and {MAX_REAL_LOTS}.")
     c.execute("INSERT INTO user_instrument_real (user_id, instrument_id, symbol, real_on, changed_at, changed_by) VALUES (?,?,?,?,?,?) "

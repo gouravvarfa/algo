@@ -49,7 +49,7 @@ def setup(db, new_client, stub, real=True):
     db.commit()
     if real:
         api(c_owner, "POST", "/api/admin/broker/master", json={"enabled": True})
-        assert api(c_admin, "PUT", f"/api/admin/users/{user.id}/broker/real", json={"allowed": True, "max_lots": 1}).status_code == 200
+        assert api(c_admin, "PUT", f"/api/admin/users/{user.id}/broker/real", json={"allowed": True, "max_lots": 1, "allowed_symbols": ["NIFTY", "BANKNIFTY", "STOCKS"]}).status_code == 200
         assert api(c_user, "PUT", "/api/me/broker/mode", json={"mode": "real", "password": PASSWORD}).status_code == 200
     return user, c_owner, c_admin, c_user
 
@@ -133,3 +133,32 @@ def test_switching_is_audited(db, new_client, _reset):
     switch(c_user, "i-bank", True)
     acts = [e["action"] for e in c_admin.get("/api/admin/audit?limit=30").json()["entries"]]
     assert "broker.instrument" in acts
+
+
+def test_an_instrument_the_admin_did_not_approve_says_so_and_cannot_be_armed(db, new_client, _reset):
+    """The owner, 15 Nov 2026: Yogesh is approved for MCX only, yet BANKNIFTY offered "Turn REAL on" (every entry would then have been skipped)."""
+    user, _, c_admin, c_user = setup(db, new_client, _reset)
+    _reset.add(user.id, "i-gold", "GOLDTEN")
+    assert api(c_admin, "PUT", f"/api/admin/users/{user.id}/broker/real", json={"allowed": True, "max_lots": 1, "allowed_symbols": ["MCX"]}).status_code == 200
+    listed = {i["symbol"]: i["approved"] for i in c_user.get("/api/me/broker/instruments").json()["instruments"]}
+    assert listed == {"BANKNIFTY": False, "RELIANCE": False, "GOLDTEN": True}
+    r = switch(c_user, "i-bank", True)
+    assert r.status_code == 403 and r.json()["error"] == "NOT_APPROVED" and "Ask your admin" in r.json()["message"]
+    assert switch(c_user, "i-reliance", True).status_code == 403
+    assert switch(c_user, "i-gold", True).status_code == 200
+
+
+def test_narrowing_the_approval_switches_off_only_the_arms_outside_it(db, new_client, _reset):
+    user, _, c_admin, c_user = setup(db, new_client, _reset)
+    switch(c_user, "i-bank", True)
+    switch(c_user, "i-reliance", True)
+    assert api(c_admin, "PUT", f"/api/admin/users/{user.id}/broker/real", json={"allowed": True, "max_lots": 1, "allowed_symbols": ["STOCKS"]}).status_code == 200
+    on = {i["symbol"]: i["real_on"] for i in c_user.get("/api/me/broker/instruments").json()["instruments"]}
+    assert on == {"BANKNIFTY": False, "RELIANCE": True}
+    assert store.instrument_real(db, user.id, "i-reliance") is True and store.instrument_real(db, user.id, "i-bank") is False
+
+
+def test_widening_the_approval_never_arms_anything_by_itself(db, new_client, _reset):
+    user, _, c_admin, c_user = setup(db, new_client, _reset)
+    api(c_admin, "PUT", f"/api/admin/users/{user.id}/broker/real", json={"allowed": True, "max_lots": 1, "allowed_symbols": ["NIFTY", "BANKNIFTY", "MCX", "STOCKS"]})
+    assert not any(i["real_on"] for i in c_user.get("/api/me/broker/instruments").json()["instruments"])

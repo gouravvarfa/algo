@@ -73,6 +73,19 @@ describe('RealSwitch while the account is on paper', () => {
     expect(await screen.findByText(/Real trading is off/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Turn REAL on' })).toBeDisabled()
   })
+  it('a symbol the admin has not approved says so instead of offering "Turn REAL on"', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((u) => {
+      const url = String(u)
+      const body = url.includes('/api/me/broker/instruments')
+        ? { account_mode: 'real', real_allowed: true, max_lots: 5, blockers: [], instruments: [{ instrument_id: 'g', symbol: 'BANKNIFTY', real_on: false, real_effective: false, real_lots: 1, lot_size: 30, paper_lots: 1, approved: false }] }
+        : url.includes('/margin') ? { connected: false } : { instruments: [] }
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    })
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><RealSwitch instrumentId="g" symbol="BANKNIFTY" /></MemoryRouter></QueryClientProvider>)
+    expect(await screen.findByText(/not approved for your account yet/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ask admin to approve' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Turn REAL on' })).toBeNull()
+  })
   it('on REAL it is ON', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((u) => answer('real', true)(String(u)))
     mount()

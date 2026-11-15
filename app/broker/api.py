@@ -230,7 +230,9 @@ def my_instruments(request: Request, c=Depends(db)):
     sw = store.instrument_switches(c, uid)
     r = store.row(c, uid)
     mode = store.effective_mode(r)
+    approved = store.limits(r)["allowed_symbols"] if r is not None else []
     items = [{"instrument_id": i.id, "symbol": i.symbol, "trading_symbol": i.trading_symbol, "real_on": sw.get(i.id, False), "real_effective": sw.get(i.id, False) and mode == "real",
+              "approved": store.symbol_allowed(i.symbol, approved),
               "real_lots": store.instrument_lots(c, uid, i.id), "lot_size": _active(i)["lot_size"], "contract": _active(i)["trading_symbol"], "paper_lots": getattr(i, "lots", None) or 1}
              for i in appmain.engine.instruments.values() if i.owner == owner]
     return {"account_mode": mode, "real_allowed": bool(r and r["real_allowed"]), "max_lots": store.MAX_REAL_LOTS, "blockers": store.blockers(r), "instruments": items}
