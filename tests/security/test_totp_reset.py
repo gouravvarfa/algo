@@ -102,3 +102,15 @@ def test_a_second_reset_makes_the_first_link_and_its_qr_useless(db, new_client):
     assert s1 != s2
     r = new_client().post(f"/api/auth/setup/{t2}", json={"password": NEW_PW, "totp": pyotp.TOTP(s1).now()})
     assert r.status_code == 400                                                                # a code from the first QR is refused
+
+
+def test_an_admin_who_finishes_someone_elses_setup_in_his_own_browser_stays_signed_in(db, new_client):
+    """The owner, 15 Nov 2026: Gaurav finished Yogesh's setup in another tab of his own browser; Gaurav's admin session was replaced by Yogesh's,
+    and the admin page then answered "You do not have permission"."""
+    c_admin = signed_in_admin(db, new_client)
+    acct = make_user(db, "yogesh")
+    token = reset(c_admin, acct)
+    _, _, r = finish(c_admin, token)                                                           # the same browser, the same cookies
+    assert r.status_code == 200 and r.json()["signed_in"] is False and len(r.json()["backup_codes"]) == 10
+    assert c_admin.get("/api/auth/me").json()["user"]["username"] == "owner"                   # still the admin
+    assert api(c_admin, "POST", f"/api/admin/users/{acct.id}/reset-totp").status_code == 200   # and the admin can act again

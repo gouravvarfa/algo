@@ -254,6 +254,11 @@ def setup_complete(token: str, body: SetupBody, request: Request, c=Depends(db))
     audit.append(c, "user.setup_complete", actor_id=user["id"], actor_role=user["role"], target_type="user", target_id=user["id"])
     ip = client_ip(request)
     ratelimit.clear(c, ratelimit.keys(user["username"], ip)[0])           # mistakes made before the setup was finished no longer count
+    here = sessions.lookup(c, request.cookies.get(sessions.COOKIE))
+    if here is not None and here["user_id"] != user["id"]:
+        # someone else is signed in in this browser (the owner, 15 Nov 2026: an admin finished Yogesh's setup in another tab and lost his own
+        # admin session to Yogesh's): they stay signed in, and the person signs in on their own device
+        return {"ok": True, "username": user["username"], "backup_codes": codes, "signed_in": False}
     s = sessions.create(c, user["id"], request.headers.get("user-agent"), ip)
     audit.append(c, "login.success", actor_id=user["id"], actor_role=user["role"], detail={"ip": ip, "device": sessions.device_label(request.headers.get("user-agent")), "via": "setup"})
     resp = JSONResponse({"ok": True, "username": user["username"], "backup_codes": codes, "signed_in": True})

@@ -20,6 +20,7 @@ export function SetupPage() {
   const [codes, setCodes] = useState<string[] | null>(null)
   const [copied, setCopied] = useState(false)
   const { refresh } = useSession()
+  const [signedIn, setSignedIn] = useState(true)
 
   useEffect(() => {
     get<SetupInfo>(`/api/auth/setup/${encodeURIComponent(token)}`).then(setInfo).catch((e: unknown) => setBad(e instanceof ApiError ? e.message : 'Ask your admin for a new link.'))
@@ -31,10 +32,11 @@ export function SetupPage() {
     if (pw !== pw2) { setErr('The two passwords are not the same.'); return }
     setBusy(true)
     try {
-      const r = await post<{ backup_codes: string[] }>(`/api/auth/setup/${encodeURIComponent(token)}`, { password: pw, totp: code.trim() })
+      const r = await post<{ backup_codes: string[]; signed_in?: boolean }>(`/api/auth/setup/${encodeURIComponent(token)}`, { password: pw, totp: code.trim() })
       setPw(''); setPw2('')
       setCodes(r.backup_codes)
-      void refresh().catch(() => undefined)        // the server signed this browser in
+      setSignedIn(r.signed_in !== false)
+      if (r.signed_in !== false) void refresh().catch(() => undefined)        // the server signed this browser in
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Setup failed.')
     } finally {
@@ -51,8 +53,17 @@ export function SetupPage() {
             <div className="alert warn"><b>Save these backup codes now.</b> They are shown only once. Each works one time if you lose your phone. Keep them somewhere safe.</div>
             <div className="codes">{codes.map((c) => <span key={c}>{c}</span>)}</div>
             <button className="btn" onClick={() => void navigator.clipboard.writeText(codes.join('\n')).then(() => setCopied(true))}>{copied ? 'Copied' : 'Copy codes'}</button>
-            <Link className="btn primary big" to="/">Open the app</Link>
-            <p className="sub">You are signed in on this device. On another device, sign in with your username, the new password and the NEXT code your app shows (each code works only once).</p>
+            {signedIn ? (
+              <>
+                <Link className="btn primary big" to="/">Open the app</Link>
+                <p className="sub">You are signed in on this device. On another device, sign in with your username, the new password and the NEXT code your app shows (each code works only once).</p>
+              </>
+            ) : (
+              <>
+                <div className="alert ok"><b>Setup is done.</b> This browser is signed in as another account, which stays signed in. Sign in with this new account on your own device: username, the new password and the NEXT code your app shows (each code works only once).</div>
+                <Link className="btn primary big" to="/">Back to the app</Link>
+              </>
+            )}
           </div>
         ) : bad ? (
           <div className="stack"><h1>This link does not work</h1><p className="sub">{bad}</p><Link to="/login">Go to sign in</Link></div>

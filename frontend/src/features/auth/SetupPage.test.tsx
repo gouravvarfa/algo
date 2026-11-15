@@ -34,4 +34,18 @@ describe('SetupPage after an authenticator reset', () => {
     expect(screen.queryByRole('link', { name: /continue to sign in/i })).toBeNull()
     expect(session.refresh).toHaveBeenCalled()
   })
+
+  it('finished in a browser where an admin is signed in: the admin stays, and the page says so', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_u, init) => Promise.resolve(init?.method === 'POST'
+      ? json(200, { ok: true, username: 'yogesh', backup_codes: ['AAAA-BBBB'], signed_in: false })
+      : json(200, { name: 'Yogesh', username: 'yogesh', qr_svg: '<svg/>', secret: 'ABCD EFGH' })))
+    mount()
+    await screen.findByText(/Welcome, Yogesh/)
+    type(/^password/i, 'a brand new long password')
+    type(/repeat password/i, 'a brand new long password')
+    type(/6-digit code/i, '123456')
+    fireEvent.click(screen.getByRole('button', { name: /finish setup/i }))
+    expect(await screen.findByText(/signed in as another account, which stays signed in/i)).toBeInTheDocument()
+    expect(session.refresh).not.toHaveBeenCalled()
+  })
 })
