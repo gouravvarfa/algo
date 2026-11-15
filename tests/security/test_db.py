@@ -40,15 +40,12 @@ def test_failed_migration_keeps_the_old_version_and_leaves_no_half_applied_table
     assert db.execute("SELECT 1 FROM sqlite_master WHERE name='half_done'").fetchone() is None
 
 
-def test_only_one_active_session_per_user_and_a_new_one_after_the_old_ended(db):
+def test_one_user_may_hold_several_active_sessions(db):
     add_user(db)
     add_session(db, "s1")
-    with pytest.raises(sqlite3.IntegrityError):
-        add_session(db, "s2")
-    db.execute("UPDATE sessions SET ended_at=?, end_reason='logout' WHERE id='s1'", (NOW,))
-    db.commit()
-    add_session(db, "s2")
+    add_session(db, "s2")                             # a second device (the owner, 15 Nov 2026: no limit on devices)
     add_session(db, "s3", ended_at=NOW)               # any number of ended sessions can sit in the history
+    assert db.execute("SELECT 1 FROM sqlite_master WHERE name='one_active_session_per_user'").fetchone() is None
 
 
 def test_different_users_may_each_be_logged_in(db):

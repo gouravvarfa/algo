@@ -230,7 +230,6 @@ def dev_system_info(_=Depends(require("system.read")), c=Depends(db)):
                                                           ("audit_rows", "SELECT COUNT(*) FROM audit_log"), ("incidents", "SELECT COUNT(*) FROM incidents"))}
     checks = [
         {"name": "Encryption key", "ok": bool(os.environ.get("APP_ENC_KEY")), "note": "APP_ENC_KEY protects the authenticator secrets. Without it a key file next to the database is used: set it on a server."},
-        {"name": "Takeover from the login page", "ok": os.environ.get("APP_ALLOW_TAKEOVER", "1").strip().lower() in ("0", "false", "no", "off"), "note": "off is the stricter setting (APP_ALLOW_TAKEOVER=0)"},
         {"name": "Angel One credentials file", "ok": Path("angelone_credentials.json").exists() or bool(os.environ.get("ANGELONE_API_KEY")), "note": "needed for live data"},
     ]
     import fastapi

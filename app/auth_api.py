@@ -150,16 +150,11 @@ def require(permission: str):
 
 
 # ---- login / logout / me / heartbeat -----------------------------------------------------------------------------------------------
-def takeover_allowed() -> bool:
-    """Signing the other device out from the login page can be switched off on a deployment: APP_ALLOW_TAKEOVER=0."""
-    return os.environ.get("APP_ALLOW_TAKEOVER", "1").strip().lower() not in ("0", "false", "no", "off")
-
-
 class LoginBody(BaseModel):
     username: str = Field(max_length=100)
     password: str = Field(max_length=500)
     totp: str = Field(max_length=40)           # the 6-digit code, or a one-time backup code
-    replace_existing: bool = False             # "sign the other device out and sign in here": still needs the right password AND code
+    replace_existing: bool = False             # sent by older pages; ignored (a login no longer signs any other device out)
 
 
 @router.get("/api/auth/mode")
@@ -176,22 +171,12 @@ def login(body: LoginBody, request: Request, c=Depends(db)):
         audit.append(c, "login.locked", detail={"username": who, "ip": ip})
         return err(423, "LOCKED", "Too many attempts. Try again in 15 minutes.")
     try:
-        user, undo = users.authenticate_with_undo(c, body.username, body.password, body.totp, now)
+        user = users.authenticate(c, body.username, body.password, body.totp, now)
     except users.InvalidCredentials as exc:
         ratelimit.record_failure(c, ks, now)
         audit.append(c, "login.failed", detail={"username": who, "reason": exc.reason, "ip": ip})
         return err(401, "INVALID_CREDENTIALS", "Invalid credentials")        # never says which part was wrong
-    try:
-        s = sessions.create(c, user["id"], request.headers.get("user-agent"), ip, now, replace=body.replace_existing and takeover_allowed())
-    except sessions.AlreadyLoggedIn as exc:
-        undo()                       # the credentials were right: give the code back so it can be used once the other device has signed out
-        audit.append(c, "login.refused", actor_id=user["id"], actor_role=user["role"], detail={"device": exc.device, "ip": ip})
-        return err(409, "ALREADY_LOGGED_IN", "This account is already logged in on another device. Log out there first.",
-                   device=exc.device, since=sessions.iso_ist(exc.since), last_active=sessions.iso_ist(exc.last_active),
-                   can_take_over=takeover_allowed())
-    if s["taken_over"]:
-        audit.append(c, "login.takeover", actor_id=user["id"], actor_role=user["role"],
-                     detail={"signed_out_device": s["taken_over"]["device"], "new_device": sessions.device_label(request.headers.get("user-agent")), "ip": ip})
+    s = sessions.create(c, user["id"], request.headers.get("user-agent"), ip, now)      # other devices stay signed in
     ratelimit.clear(c, ks[0])
     audit.append(c, "login.success", actor_id=user["id"], actor_role=user["role"], detail={"ip": ip, "device": sessions.device_label(request.headers.get("user-agent"))})
     resp = JSONResponse({"ok": True, "user": _public_user(user)})

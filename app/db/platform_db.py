@@ -290,7 +290,12 @@ CREATE TABLE market_calendar (        -- exchange holidays and special sessions 
 );
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10), (11, _V11), (12, _V12)]
+_V13 = """
+DROP INDEX IF EXISTS one_active_session_per_user;   -- the owner, 15 Nov 2026: any number of devices may be signed in to one account at the same time
+CREATE INDEX IF NOT EXISTS idx_sessions_user_active ON sessions(user_id) WHERE ended_at IS NULL;
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, _V1), (2, _V2), (3, _V3), (4, _V4), (5, _V5), (6, _V6), (7, _V7), (8, _V8), (9, _V9), (10, _V10), (11, _V11), (12, _V12), (13, _V13)]
 LATEST_VERSION = MIGRATIONS[-1][0]
 
 

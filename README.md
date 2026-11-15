@@ -6,7 +6,7 @@ A research and **paper trading** app. It never sends an order to a broker.
 * **Options Simulator**: any past day of NIFTY / BANKNIFTY options (end of day or 1-minute), a LIVE mode from WebSocket ticks, positions, payoff, margin, what-if.
 * **Strategy Builder / Backtesting / History**: rule-based option strategies tested on NSE Bhavcopy data.
 * **Option Chain**: live chain from Angel One and the stored end-of-day data.
-* **Accounts** (optional): password + authenticator code, one device per account, admin panel (add / remove users, read-only "view as"), developer panel (system health, fault isolation).
+* **Accounts** (optional): password + authenticator code, sign in on any number of devices, admin panel (add / remove users, read-only "view as"), developer panel (system health, fault isolation).
 
 ## Run it
 

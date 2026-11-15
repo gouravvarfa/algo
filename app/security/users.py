@@ -221,12 +221,16 @@ def _not_last_admin(c: sqlite3.Connection, t: sqlite3.Row) -> None:
 def list_users(c: sqlite3.Connection, now: float | None = None) -> list[dict]:
     now = time.time() if now is None else now
     out = []
-    for r in c.execute("SELECT u.id, u.username, u.name, u.email, u.role, u.status, u.created_at, s.device_label, s.started_at, s.last_seen_at "
-                       "FROM users u LEFT JOIN sessions s ON s.user_id = u.id AND s.ended_at IS NULL "
-                       "WHERE u.status != 'DELETED' ORDER BY u.created_at"):
+    live_since = now - sessions.HEARTBEAT_DEAD
+    # one row per user however many devices are signed in: the most recently seen session, plus how many devices are open now
+    for r in c.execute("SELECT u.id, u.username, u.name, u.email, u.role, u.status, u.created_at, s.device_label, s.last_seen_at, s.devices "
+                       "FROM users u LEFT JOIN (SELECT user_id, device_label, MAX(last_seen_at) AS last_seen_at, SUM(last_seen_at > ?) AS devices "
+                       "                        FROM sessions WHERE ended_at IS NULL GROUP BY user_id) s ON s.user_id = u.id "
+                       "WHERE u.status != 'DELETED' ORDER BY u.created_at", (live_since,)):
         online = r["last_seen_at"] is not None and now - r["last_seen_at"] < sessions.HEARTBEAT_DEAD
+        extra = (r["devices"] or 0) - 1
         out.append({"id": r["id"], "username": r["username"], "name": r["name"], "email": r["email"], "role": r["role"], "status": r["status"],
-                    "online": online, "device": r["device_label"] if online else None,
+                    "online": online, "device": (r["device_label"] + (f" +{extra} more" if extra > 0 else "")) if online else None, "devices_online": r["devices"] or 0,
                     "last_active": sessions.iso_ist(r["last_seen_at"]) if r["last_seen_at"] else None})
     return out
 

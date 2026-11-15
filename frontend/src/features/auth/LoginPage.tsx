@@ -65,7 +65,7 @@ export function LoginPage() {
           <ul>
             <li><b>Paper trading</b><span>Practice without risk</span></li>
             <li><b>Research</b><span>Data-driven insights</span></li>
-            <li><b>One device</b><span>Each account signs in on one device</span></li>
+            <li><b>Any device</b><span>Phone, iPad and laptop together</span></li>
           </ul>
         </section>
         <section className="auth-panel">

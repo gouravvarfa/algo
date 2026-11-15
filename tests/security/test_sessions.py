@@ -1,4 +1,4 @@
-"""One account, one device; heartbeat, idle and absolute timeouts; atomic session creation (PDF 3.3 and 3.4)."""
+"""One account on any number of devices; heartbeat, idle and absolute timeouts; atomic session creation (PDF 3.3 and 3.4)."""
 import datetime as dt
 import time
 import threading
@@ -22,48 +22,66 @@ def end_reason(db, user_id):
     return [r[0] for r in db.execute("SELECT end_reason FROM sessions WHERE user_id=? ORDER BY started_at", (user_id,))]
 
 
-# ---- acceptance test 1 ----
-def test_second_device_is_refused_while_the_first_is_live(db, new_client):
+# ---- any number of devices (the owner, 15 Nov 2026) ----
+def test_a_second_device_signs_in_and_both_stay_signed_in(db, new_client):
     acct = make_user(db)
-    laptop1, laptop2 = new_client(CHROME_WINDOWS), new_client(FIREFOX_LINUX)
-    assert login(laptop1, acct).status_code == 200
-    r = login(laptop2, acct, code=acct.next_backup())
-    body = r.json()
-    assert r.status_code == 409 and body["error"] == "ALREADY_LOGGED_IN"
-    assert "Log out there first" in body["message"]
-    assert body["device"] == "Chrome · Windows"                                   # the OTHER device, as the PDF's message shows
-    assert body["since"].endswith("+05:30") and body["last_active"].endswith("+05:30")
-    assert "testclient" not in r.text and "Linux" not in r.text                    # no IP, and nothing about the device that is asking
-    assert "algo_sid" not in laptop2.cookies
-    assert laptop1.get("/api/auth/me").status_code == 200                          # the first device is untouched
+    laptop, phone = new_client(CHROME_WINDOWS), new_client(FIREFOX_LINUX)
+    assert login(laptop, acct).status_code == 200
+    assert login(phone, acct, code=acct.next_backup()).status_code == 200
+    assert laptop.get("/api/auth/me").status_code == 200 and phone.get("/api/auth/me").status_code == 200
+    assert end_reason(db, acct.id) == [None, None]
 
 
-def test_after_logging_out_on_the_first_device_the_second_can_log_in(db, new_client):
+def test_five_devices_at_once(db, new_client):
     acct = make_user(db)
-    laptop1, laptop2 = new_client(), new_client()
-    login(laptop1, acct)
-    assert api(laptop1, "POST", "/api/auth/logout").status_code == 200
-    assert login(laptop2, acct, code=acct.next_backup()).status_code == 200
-    assert laptop1.get("/api/auth/me").status_code == 401
+    devices = [new_client() for _ in range(5)]
+    for d in devices:
+        assert login(d, acct, code=acct.next_backup()).status_code == 200
+    assert all(d.get("/api/auth/me").status_code == 200 for d in devices)
+
+
+def test_logging_out_on_one_device_leaves_the_others_signed_in(db, new_client):
+    acct = make_user(db)
+    laptop, phone = new_client(), new_client()
+    login(laptop, acct)
+    login(phone, acct, code=acct.next_backup())
+    assert api(laptop, "POST", "/api/auth/logout").status_code == 200
+    assert laptop.get("/api/auth/me").status_code == 401 and phone.get("/api/auth/me").status_code == 200
     assert end_reason(db, acct.id) == ["logout", None]
 
 
-# ---- acceptance test 2 ----
-def test_a_session_whose_page_stopped_pinging_for_two_minutes_is_replaced(db, new_client):
+def test_the_old_replace_flag_signs_nobody_out(db, new_client):
     acct = make_user(db)
-    laptop1, laptop2 = new_client(), new_client()
-    login(laptop1, acct)
-    age(db, acct.id, last_seen_at=sessions.HEARTBEAT_DEAD + 5)                    # laptop 1 closed without logging out
-    assert login(laptop2, acct, code=acct.next_backup()).status_code == 200
-    assert laptop1.get("/api/auth/me").status_code == 401
-    assert end_reason(db, acct.id) == ["replaced", None]
+    laptop, phone = new_client(), new_client()
+    login(laptop, acct)
+    r = phone.post("/api/auth/login", json={"username": acct.username, "password": acct.password, "totp": acct.next_backup(), "replace_existing": True})
+    assert r.status_code == 200 and laptop.get("/api/auth/me").status_code == 200
 
 
-def test_just_under_two_minutes_still_counts_as_live(db, new_client):
+def test_an_admin_force_logout_ends_every_device(db, new_client):
+    acct = make_user(db)
+    laptop, phone = new_client(), new_client()
+    login(laptop, acct)
+    login(phone, acct, code=acct.next_backup())
+    assert sessions.end_all(db, acct.id, "forced") == 2
+    assert laptop.get("/api/auth/me").status_code == 401 and phone.get("/api/auth/me").status_code == 401
+
+
+def test_a_device_left_signed_in_past_4pm_is_closed_at_the_next_login(db, new_client):
     acct = make_user(db)
     login(new_client(), acct)
-    age(db, acct.id, last_seen_at=sessions.HEARTBEAT_DEAD - 15)
-    assert login(new_client(), acct, code=acct.next_backup()).status_code == 409
+    age(db, acct.id, started_at=2 * 24 * 3600)                                     # signed in two days ago and never came back
+    assert login(new_client(), acct, code=acct.next_backup()).status_code == 200
+    assert end_reason(db, acct.id) == ["expired", None]
+
+
+def test_the_admin_list_shows_a_person_once_however_many_devices(db, new_client):
+    from app.security import users
+    acct = make_user(db)
+    login(new_client(CHROME_WINDOWS), acct)
+    login(new_client(FIREFOX_LINUX), acct, code=acct.next_backup())
+    rows = [r for r in users.list_users(db) if r["id"] == acct.id]
+    assert len(rows) == 1 and rows[0]["online"] and rows[0]["devices_online"] == 2 and rows[0]["device"].endswith("+1 more")
 
 
 # ---- one daily sign-out time (4 pm IST), no idle timeout ----
@@ -126,7 +144,7 @@ def test_heartbeat_on_an_ended_session_answers_401_so_the_page_can_send_the_user
 
 
 # ---- atomic check ----
-def test_ten_simultaneous_logins_create_exactly_one_session(db):
+def test_ten_simultaneous_logins_all_succeed(db):
     acct = make_user(db)
     barrier, results = threading.Barrier(10), []
 
@@ -134,17 +152,15 @@ def test_ten_simultaneous_logins_create_exactly_one_session(db):
         c = platform_db.connect()
         try:
             barrier.wait()
-            results.append(sessions.create(c, acct.id, CHROME_WINDOWS, "1.1.1.1") and "ok")
-        except sessions.AlreadyLoggedIn:
-            results.append("refused")
+            results.append(bool(sessions.create(c, acct.id, CHROME_WINDOWS, "1.1.1.1")))
         finally:
             c.close()
 
     threads = [threading.Thread(target=attempt) for _ in range(10)]
     [t.start() for t in threads]
     [t.join() for t in threads]
-    assert sorted(results) == ["ok"] + ["refused"] * 9
-    assert db.execute("SELECT COUNT(*) FROM sessions WHERE user_id=? AND ended_at IS NULL", (acct.id,)).fetchone()[0] == 1
+    assert results == [True] * 10
+    assert db.execute("SELECT COUNT(*) FROM sessions WHERE user_id=? AND ended_at IS NULL", (acct.id,)).fetchone()[0] == 10
 
 
 # ---- device label ----

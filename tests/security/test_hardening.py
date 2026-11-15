@@ -72,26 +72,19 @@ def test_using_the_key_file_logs_a_warning_once_and_the_environment_key_does_not
 
 
 # ---- a refused second device must not burn the code ----
-def test_a_totp_code_is_given_back_when_the_login_was_refused_for_another_device(db, new_client):
+def test_with_many_devices_allowed_a_code_still_logs_in_only_once(db, new_client):
+    """Several devices may be signed in, but a TOTP code seen over someone's shoulder cannot be replayed on another device."""
     acct = make_user(db)
-    laptop1, laptop2 = new_client(), new_client()
-    assert login(laptop1, acct, code=acct.next_backup()).status_code == 200
     code = totp_now(acct.secret)
-    assert login(laptop2, acct, code=code).status_code == 409
-    api(laptop1, "POST", "/api/auth/logout")
-    assert login(laptop2, acct, code=code).status_code == 200               # the same code still works: it was not spent by the refusal
-    assert login(new_client(), acct, code=code).status_code == 401           # ...but once it has logged someone in it is spent
+    assert login(new_client(), acct, code=code).status_code == 200
+    assert login(new_client(), acct, code=code).status_code == 401
+    assert login(new_client(), acct, code=acct.next_backup()).status_code == 200        # a fresh code signs the second device in
 
 
-def test_a_backup_code_is_given_back_too(db, new_client):
+def test_a_backup_code_works_on_one_device_only(db, new_client):
     acct = make_user(db)
-    laptop1, laptop2 = new_client(), new_client()
-    assert login(laptop1, acct).status_code == 200
     spare = acct.next_backup()
-    assert login(laptop2, acct, code=spare).status_code == 409
-    api(laptop1, "POST", "/api/auth/logout")
-    assert login(laptop2, acct, code=spare).status_code == 200
-    api(laptop2, "POST", "/api/auth/logout")
+    assert login(new_client(), acct, code=spare).status_code == 200
     assert login(new_client(), acct, code=spare).status_code == 401
 
 
