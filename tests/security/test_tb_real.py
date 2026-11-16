@@ -352,6 +352,23 @@ async def test_a_new_system_point_while_the_account_is_on_paper_sends_nothing_an
 
 
 @async_test
+async def test_real_orders_go_out_while_the_person_is_signed_out_of_the_app(env):
+    """The owner, 16 Nov 2026: live orders must never depend on the person being signed in (the 4 pm sign-out, a closed laptop or phone)."""
+    from app.security import sessions
+    sessions.create(env.db, env.uid, "Safari", "1.1.1.1")
+    sessions.end_all(env.db, env.uid, "expired")                                  # signed out everywhere, as after the daily 4 pm sign-out
+    assert env.db.execute("SELECT COUNT(*) FROM sessions WHERE user_id=? AND ended_at IS NULL", (env.uid,)).fetchone()[0] == 0
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY"))
+    oid, _ = env.fb.last("entry")
+    assert env.fb.n == 1 and oid is not None                                      # the entry went to Angel One
+    env.fb.fill(oid, 50002.5)
+    env.sync(PAPER_BUY, MON)
+    await env.rt.tick(secs(5))
+    assert env.fb.last("stop")[0] is not None and env.state()["position"]["side"] == "BUY"   # and its stop-loss too
+
+
+@async_test
 async def test_a_request_with_no_clear_answer_halts_the_instrument_until_a_person_clears_it(env):
     env.sync(None)
     env.fb.place_error = angel_orders.Unknown("No answer from Angel One.")
