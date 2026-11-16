@@ -47,6 +47,8 @@ GAP_WAIT_MAX_S = 1500.0            # a gap open: wait for the strategy's 15-minu
 REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
+JOIN_STOP_PCT = 0.01               # a real account that JOINS the strategy's side is a fresh trade: entry +/- 1% (the strategy's entry-day stop), owner 16 Nov 2026
+JOIN_BE_PCT_DEFAULT = 2.0          # its breakeven: the instrument's own rule (2% index / MCX, 3% stocks) from the snapshot
 TICK_S = 5.0
 KEEP_EVENTS = 80
 ACTIVE = ("placed", "open")                  # live at Angel One: managed (waited for, modified, cancelled)
@@ -78,7 +80,25 @@ def _age(s: str | None, now: dt.datetime) -> float:
     return (now - _p(s)).total_seconds() if s else 0.0
 
 
-def join_trigger(direction: str, prev_close, day_open, system_point, minutes: list, session, now: dt.datetime):
+def _recross(direction: str, level: float, minutes: list, after: dt.datetime, how: str):
+    """The first minute after `after` that trades beyond `level` again, once price has been back on the near side (a FRESH cross, not the same move)."""
+    start = after.replace(second=0, microsecond=0)
+    back = False
+    for ts, o, h, l, _c in minutes:
+        if ts <= start:
+            continue
+        if direction == "SELL":
+            back = back or h >= level
+            if back and l < level:
+                return min(level, o) if o >= level else level, ts, how
+        else:
+            back = back or l <= level
+            if back and h > level:
+                return max(level, o) if o <= level else level, ts, how
+    return None
+
+
+def join_trigger(direction: str, prev_close, day_open, system_point, minutes: list, session, now: dt.datetime, after: dt.datetime | None = None):
     """A FRESH entry trigger today on `direction`, for a real account that is flat while the strategy already holds that side (it was switched on
     mid-trade). The owner, 16 Nov 2026: GOLDTEN gapped down past its Bottom while Yogesh's strategy held a SELL from 10 Nov, and the 15-minute
     low break must still open his real SELL. `minutes`: today's 1-minute candles as (ts, open, high, low, close), IST, sorted.
@@ -100,6 +120,8 @@ def join_trigger(direction: str, prev_close, day_open, system_point, minutes: li
         if len(first) < 12 or first[0][0].time() != session.first_start or first[-1][0].time() != last_minute:
             return None                                                    # the first candle is not fully known (after a restart): wait, never guess its LOW / HIGH
         hi, lo = max(m[2] for m in first), min(m[3] for m in first)
+        if after is not None:
+            return _recross(direction, lo if direction == "SELL" else hi, today, after, "15-minute gap rule: first candle " + ("LOW" if direction == "SELL" else "HIGH") + " crossed again")
         for ts, o, h, l, _c in today:
             if ts.time() < session.second_start:
                 continue
@@ -109,6 +131,8 @@ def join_trigger(direction: str, prev_close, day_open, system_point, minutes: li
                 return max(hi, o), ts, "15-minute gap rule: first candle HIGH broken"
         return None
     sp = float(system_point)
+    if after is not None:
+        return _recross(direction, sp, today, after, ("Bottom" if direction == "SELL" else "Top") + " crossed again")
     if (direction == "SELL" and float(day_open) < sp) or (direction == "BUY" and float(day_open) > sp):
         return None                                                        # already beyond at the open without a gap past it: not a fresh crossing
     for ts, o, h, l, _c in today:
@@ -212,6 +236,7 @@ class RealTB:
             pass
         self.snaps[inst_id] = {"owner": owner, "symbol": symbol, "instrument": snap.get("instrument") or {}, "ltp": snap.get("ltp"), "snap_ltp_at": _s(now),
                                "top": snap.get("latest_top"), "bottom": snap.get("latest_bottom"), "prev_close": prev_close, "day_open": day_open,
+                               "be_pct": (snap.get("rules") or {}).get("breakeven_pct"),
                                "paper": {"direction": pp["direction"], "entry_price": pp["entry_price"], "active_stop": pp["active_stop"],
                                          "gap_state": pp.get("gap_state"), "protective_sl": pp.get("protective_sl")} if pp else None}
 
@@ -401,8 +426,13 @@ class RealTB:
         snap = self.snaps.get(iid) or {}
         paper = snap.get("paper")
         today = now.date().isoformat()
-        if not paper or a["halted"] or a.get("join_day") == today:
+        if not paper or a["halted"]:
             return
+        after = None
+        if a.get("join_day") == today:
+            after = self._join_retry_after(a, today)          # the day's join was closed by the stop-rejection safety exit: ONE more try, on a fresh re-cross
+            if after is None:
+                return
         inst = snap.get("instrument") or {}
         sess_name = inst.get("session", "NSE")
         if not self._market_open(sess_name, now) or not store.instrument_real(c, a["user_id"], iid):
@@ -410,10 +440,17 @@ class RealTB:
         from app.strategy.top_bottom.gap_protocol import NSE, SESSIONS
         d = paper["direction"]
         hit = join_trigger(d, snap.get("prev_close"), snap.get("day_open"), snap.get("bottom") if d == "SELL" else snap.get("top"),
-                           self._today_minutes(inst.get("token"), now), SESSIONS.get(sess_name, NSE), now)
+                           self._today_minutes(inst.get("token"), now), SESSIONS.get(sess_name, NSE), now, after)
         if hit is None:
             return
         level, ts, how = hit
+        if after is not None and (now - ts).total_seconds() > STALE_SIGNAL_S:
+            a["join_retry_after"] = _s(ts)                    # a re-cross noticed too late: not chased, the next one may still be taken today
+            self._ev(a, now, f"{d} re-cross at {level} ({ts:%H:%M}) noticed late: not chased")
+            self._save(c, a)
+            return
+        if after is not None:
+            a["join_retry_day"] = today
         a["join_day"] = today
         armed = dt.datetime.fromtimestamp(row["changed_at"], IST).replace(tzinfo=None, second=0, microsecond=0)
         if ts < armed:
@@ -429,7 +466,48 @@ class RealTB:
         e = {"event": "ENTRY", "direction": d, "entry_price": level, "active_stop": paper.get("active_stop"), "contract": inst.get("trading_symbol"),
              "symbol": a["symbol"], "instrument_id": iid, "owner": a["user_id"], "entry_date": ts.strftime("%Y-%m-%d %H:%M"), "join": True}
         await self._on_entry(c, a, e, {"instrument": inst}, now)
+        if a["pending_entry"]:
+            a["pending_entry"]["join"] = True                 # its stop is a fresh trade's (entry +/- 1%), set from the fill price
         self._save(c, a)
+
+    def _join_retry_after(self, a: dict, today: str) -> dt.datetime | None:
+        """When today's join ended through the stop-rejection safety exit (Angel One refused the stop, not the strategy): the moment it closed, so a
+        fresh re-cross after it may open the real position ONCE more today (owner, 16 Nov 2026). None otherwise."""
+        if a.get("join_retry_day") == today:
+            return None
+        if str(a.get("join_retry_after") or "").startswith(today):
+            return _p(a["join_retry_after"])
+        joined, rejected, closed = None, False, None                      # a join closed before this rule existed: read it from the event log
+        for e in a.get("events", []):
+            t, at = e.get("text", ""), str(e.get("at", ""))
+            if not at.startswith(today):
+                continue
+            if "puts it in" in t:
+                joined, rejected, closed = at, False, None
+            elif joined and "the stop order was rejected" in t:
+                rejected = True
+            elif joined and rejected and t.startswith("POSITION CLOSED"):
+                closed = at
+        return _p(closed) if closed else None
+
+    def _join_stop(self, a: dict, p: dict, paper: dict | None) -> float:
+        """The stop of a JOINED position: a fresh trade's, entry +/- 1% (never wider), moved to the entry at the instrument's breakeven profit, and
+        the strategy's own stop whenever that is tighter. It only ever tightens."""
+        j = p["join"]
+        side, entry = p["side"], float(p["entry_price"])
+        stop = float(j["stop"])
+        snap = self.snaps.get(a["instrument_id"]) or {}
+        ltp = snap.get("ltp")
+        be = float(snap.get("be_pct") or JOIN_BE_PCT_DEFAULT) / 100.0
+        if not j.get("be") and ltp is not None and ((float(ltp) >= entry * (1 + be)) if side == "BUY" else (float(ltp) <= entry * (1 - be))):
+            j["be"] = True
+            stop = max(stop, entry) if side == "BUY" else min(stop, entry)
+        if paper and paper.get("direction") == side:
+            ps = paper.get("protective_sl") if paper.get("protective_sl") is not None else paper.get("active_stop")
+            if ps is not None:
+                stop = max(stop, float(ps)) if side == "BUY" else min(stop, float(ps))
+        j["stop"] = dryrun.rnd(stop, p["tick"])
+        return j["stop"]
 
     async def _on_entry(self, c, a: dict, e: dict, snap: dict, now: dt.datetime) -> None:
         contract, unresolved = dryrun.event_contract(e, snap)
@@ -644,6 +722,8 @@ class RealTB:
                 self._mark(c, o, a, st, b.get("text") or st)
                 self._ev(a, now, f"{o['role']} order {st}" + (" (confirmed by Angel One's order book)" if was_cancelling else f" by Angel One: {b.get('text') or ''}"), order=o["id"])
                 if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling:
+                    if a["position"].get("join"):
+                        a["join_safety_exit"] = True
                     a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
                     self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
                 if o["role"] == "entry" and st == "rejected" and a["pending_entry"] and not was_cancelling:
@@ -686,6 +766,13 @@ class RealTB:
                              "entry_price": avg, "entry_at": _s(now), "strategy_price": pe.get("strategy_price"), "symbol": a["symbol"], "tick_assumed": dryrun._tick(ct)[1] if ct else True}
             if pe.get("strategy_stop") is not None:
                 a["stop_target"] = dryrun.rnd(float(pe["strategy_stop"]), o["tick"])
+            if pe.get("join"):
+                js = float(avg) * (1 + JOIN_STOP_PCT) if o["side"] == "SELL" else float(avg) * (1 - JOIN_STOP_PCT)
+                if pe.get("strategy_stop") is not None:              # the strategy's stop if that is tighter
+                    js = min(js, float(pe["strategy_stop"])) if o["side"] == "SELL" else max(js, float(pe["strategy_stop"]))
+                a["position"]["join"] = {"stop": dryrun.rnd(js, o["tick"]), "be": False}
+                a["stop_target"] = a["position"]["join"]["stop"]
+                self._ev(a, now, f"joined position: its own stop {a['stop_target']} (entry {avg} +/- {JOIN_STOP_PCT * 100:g}%), breakeven at the instrument's rule")
             a["pending_entry"] = None
             a["exit_since"] = None
             a["released"] = False
@@ -699,7 +786,11 @@ class RealTB:
         else:
             p = a["position"]
             if p:
-                pnl = ((avg or 0) - (p["entry_price"] or 0)) * p["qty"] * (1 if p["side"] == "BUY" else -1)
+                pv = ((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("point_value")
+                units = p["qty"] / p["lot_size"] * float(pv) if pv and p.get("lot_size") else p["qty"]   # GOLDTEN: 10 g = 1 lot = Rs 1 a point (it said 10x)
+                pnl = ((avg or 0) - (p["entry_price"] or 0)) * units * (1 if p["side"] == "BUY" else -1)
+                if a.pop("join_safety_exit", False):
+                    a["join_retry_after"] = _s(now)
                 self._ev(a, now, f"POSITION CLOSED by the {o['role']} order at {avg}; real P&L before charges {pnl:,.2f}", order=o["id"])
                 a["expect_flat"] = {"contract": p["contract"], "at": _s(now)}         # _reconcile checks that Angel One shows it closed too
             elif not a["halted"]:
@@ -928,7 +1019,12 @@ class RealTB:
         session = (snap.get("instrument") or {}).get("session", "NSE")
         market = self._market_open(session, now)
         dryrun.note_trading_day(p, _p(p["entry_at"]).date() if p.get("entry_at") else now.date(), now, market)
-        if paper and paper["direction"] == p["side"]:
+        if p.get("join") and paper and paper["direction"] == p["side"]:
+            target = self._join_stop(a, p, paper)
+            if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
+                a["stop_target"] = target
+                self._ev(a, now, f"stop target is now {target} (joined position: 1% / breakeven / the strategy's tighter stop)")
+        elif paper and paper["direction"] == p["side"]:
             prot = paper.get("protective_sl")       # today's gap protection: the first 15-minute candle's low (BUY) / high (SELL) is the strategy's stop today
             raw = prot if prot is not None else paper.get("active_stop")
             if raw is not None:
@@ -1000,6 +1096,8 @@ class RealTB:
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
             o = await self._place(c, broker, a, now, "stop", payload, "stop-loss for the open position", ct)
             if o is not None and o["state"] == "rejected":
+                if p.get("join"):
+                    a["join_safety_exit"] = True
                 a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
                 self._ev(a, now, "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected")
         elif stops and a["stop_target"] is not None and not stops[0].get("triggered_at"):

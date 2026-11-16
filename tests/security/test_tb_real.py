@@ -836,3 +836,75 @@ async def test_no_join_when_the_strategy_is_flat_or_the_real_switch_is_off(env, 
     env.rt.sync(IID, env.uid, SYM, snap, now)
     await env.rt.tick(now)
     assert not [c for c in env.fb.calls if c[0] == "place"]
+
+
+async def _joined_and_filled(env, monkeypatch, fill=49760.0):
+    snap = _join_env(env, monkeypatch)
+    now = dt.datetime(2026, 11, 9, 9, 31, 20)
+    env.rt.sync(IID, env.uid, SYM, snap, now)
+    await env.rt.tick(now)
+    oid, _ = env.fb.last("entry")
+    env.fb.fill(oid, fill)
+    await env.rt.tick(now + dt.timedelta(seconds=2))
+    return snap, now
+
+
+@async_test
+async def test_a_joined_position_gets_a_fresh_trades_1_percent_stop_not_the_old_far_one(env, monkeypatch):
+    """16 Nov: the join took the strategy's old stop (4.6% away, beyond MCX's circuit limit), Angel One refused it and the position was closed."""
+    await _joined_and_filled(env, monkeypatch, 49760.0)
+    a = env.state()
+    assert a["position"]["side"] == "SELL" and a["position"]["join"]["stop"] == 50257.6 and a["stop_target"] == 50257.6     # 49,760 + 1%
+    sid, stop = env.fb.last("stop")
+    assert sid is not None and float(stop["p"]["triggerprice"]) > 50257.6 and float(stop["p"]["triggerprice"]) < 50258       # one tick beyond
+
+
+@async_test
+async def test_a_joined_position_moves_to_breakeven_at_2_percent_and_takes_a_tighter_strategy_stop(env, monkeypatch):
+    snap, now = await _joined_and_filled(env, monkeypatch, 49760.0)
+    env.rt.sync(IID, env.uid, SYM, dict(snap, ltp=48700.0), now + dt.timedelta(seconds=10))        # 2.1% in profit
+    await env.rt.tick(now + dt.timedelta(seconds=10))
+    assert env.state()["stop_target"] == 49760.0                                                   # breakeven
+    tight = dict(snap, ltp=48700.0, position={"direction": "SELL", "entry_price": 51000.0, "active_stop": 49500.0})
+    env.rt.sync(IID, env.uid, SYM, tight, now + dt.timedelta(seconds=20))
+    await env.rt.tick(now + dt.timedelta(seconds=20))
+    assert env.state()["stop_target"] == 49500.0                                                   # the strategy's own stop, now tighter
+    loose = dict(snap, ltp=49000.0, position={"direction": "SELL", "entry_price": 51000.0, "active_stop": 51000.0})
+    env.rt.sync(IID, env.uid, SYM, loose, now + dt.timedelta(seconds=30))
+    await env.rt.tick(now + dt.timedelta(seconds=30))
+    assert env.state()["stop_target"] == 49500.0                                                   # never loosens
+
+
+@async_test
+async def test_after_a_refused_stop_closes_the_join_one_fresh_re_cross_may_join_again_that_day_and_no_more(env, monkeypatch):
+    snap, now = await _joined_and_filled(env, monkeypatch, 49760.0)
+    sid, _ = env.fb.last("stop")
+    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "Your order price exceeds the circuit limit"
+    await env.rt.tick(now + dt.timedelta(seconds=10))                                              # refused: the safety exit goes out
+    xid, _ = env.fb.last("entry")                                                                  # the exit is a plain LIMIT order
+    env.fb.fill(xid, 49790.0)
+    await env.rt.tick(now + dt.timedelta(seconds=14))
+    a = env.state()
+    assert a["position"] is None and str(a.get("join_retry_after", "")).startswith("2026-11-09")
+    day = dt.date(2026, 11, 9)
+    later = _gap_down_minutes() + [(dt.datetime.combine(day, dt.time(9, 40)), 49790.0, 49830.0, 49795.0, 49820.0),     # back above the LOW
+                                   (dt.datetime.combine(day, dt.time(9, 41)), 49810.0, 49815.0, 49760.0, 49770.0)]     # and below it again
+    env.rt.tick_minutes = lambda tok: later
+    t2 = dt.datetime(2026, 11, 9, 9, 41, 20)
+    env.rt.sync(IID, env.uid, SYM, snap, t2)
+    n_before = len([c for c in env.fb.calls if c[0] == "place"])
+    await env.rt.tick(t2)
+    assert len([c for c in env.fb.calls if c[0] == "place"]) == n_before + 1 and env.state()["pending_entry"]["side"] == "SELL"
+    assert any("crossed again" in e["text"] for e in env.state()["events"])
+    assert env.state().get("join_retry_day") == "2026-11-09"                                       # the one extra try is used
+    assert env.rt._join_retry_after(env.state(), "2026-11-09") is None                             # no third
+
+
+def test_a_join_closed_by_a_refused_stop_before_this_rule_is_read_from_the_event_log():
+    rt = tb_real.RealTB(broker_for=None)
+    a = {"events": [{"at": "2026-11-16 09:51:57", "text": "the strategy already holds SELL and this real account is flat: fresh SELL trigger (...) puts it in"},
+                    {"at": "2026-11-16 09:52:11", "text": "the stop order was rejected: the position is exited now with a LIMIT order, not left unprotected"},
+                    {"at": "2026-11-16 09:52:16", "text": "POSITION CLOSED by the exit order at 136115.0; real P&L before charges -520.00"}]}
+    assert rt._join_retry_after(a, "2026-11-16") == dt.datetime(2026, 11, 16, 9, 52, 16)
+    assert rt._join_retry_after(dict(a, join_retry_day="2026-11-16"), "2026-11-16") is None
+    assert rt._join_retry_after({"events": a["events"][:1]}, "2026-11-16") is None                 # closed some other way: no extra try
