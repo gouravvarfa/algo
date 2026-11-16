@@ -1146,8 +1146,20 @@ class PaperEngine:
                     pass
                 self.feed.updated.clear()
                 await asyncio.sleep(self.pause_after_sweep())
+            elif open_now:
+                await asyncio.sleep(20)
             else:
-                await asyncio.sleep(20 if open_now else 300)
+                await self._wait_for_open()
+
+    async def _wait_for_open(self, longest: float = 300.0, step: float = 5.0) -> None:
+        """Market closed: wait up to `longest` seconds, but look every `step` seconds and go at once when a market opens. A plain 300 s sleep
+        begun at 08:57:30 woke at 09:02:30, so MCX (09:00) and NSE (09:15) went live minutes late."""
+        waited = 0.0
+        while waited < longest:
+            await asyncio.sleep(step)
+            waited += step
+            if self._any_market_open():
+                return
 
     def start(self) -> None:
         for inst in self.instruments.values():

@@ -296,3 +296,24 @@ def test_todays_daily_candle_comes_from_todays_5_minute_candles_when_the_daily_a
     e._index_charts = {("NIFTY", "1D"): (now, daily), ("NIFTY", "5m"): (now, m5)}
     out = asyncio.run(e.index_chart("NIFTY", "1D"))["candles"]
     assert len(out) == 4 and (out[-1]["open"], out[-1]["high"], out[-1]["low"], out[-1]["close"]) == (200.0, 212.0, 199.0, 208.0)
+
+
+def test_a_closed_market_is_looked_at_every_few_seconds_so_the_open_is_not_missed(monkeypatch):
+    """The engine slept 300 s while the market was closed: begun at 08:57:30 it woke at 09:02:30, minutes after MCX opened."""
+    import asyncio
+    from app.paper_trading import engine as em
+    calls = {"n": 0}
+    slept = []
+
+    class E:
+        _wait_for_open = em.PaperEngine._wait_for_open
+
+        def _any_market_open(self):
+            calls["n"] += 1
+            return calls["n"] >= 3                      # opens on the third look
+
+    async def fake_sleep(s):
+        slept.append(s)
+    monkeypatch.setattr(em.asyncio, "sleep", fake_sleep)
+    asyncio.run(E()._wait_for_open())
+    assert sum(slept) == 15 and max(slept) == 5        # went within 5 s of the open, not after 300 s
