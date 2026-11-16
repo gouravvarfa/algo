@@ -5,7 +5,7 @@ pydantic-settings>=2.6
 pandas
 numpy
 httpx
-pyotp
+pyotp==2.10.0          # 2.11+ refuses secrets under 112 bits; pinned to what the server runs (CI broke on 16 Nov)
 argon2-cffi
 cryptography
 segno
