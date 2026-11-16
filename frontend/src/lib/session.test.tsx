@@ -55,6 +55,27 @@ describe('SessionProvider', () => {
     await waitFor(() => expect(screen.getByTestId('why')).toHaveTextContent('replaced'))
   })
 
+  it('a signed-out page asks who is signed in a few times, not in an endless loop (18 a second from a tab left open after 4 pm, 15 Nov)', async () => {
+    const calls = fakeServer({ mode: 'platform', signedIn: false })
+    let announced = 0
+    const count = () => { announced += 1 }
+    window.addEventListener('auth:required', count)
+    mount()
+    await waitFor(() => expect(screen.getByTestId('who')).toHaveTextContent('nobody'))
+    act(() => { window.dispatchEvent(new CustomEvent('auth:required', { detail: { body: { reason: 'expired' } } })) })   // a data request found the session gone
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    window.removeEventListener('auth:required', count)
+    expect(calls.filter((c) => c === 'GET /api/auth/me').length).toBeLessThanOrEqual(3)
+    expect(announced).toBe(1)                                                                  // only the one above: the check itself never re-announces
+    expect(screen.getByTestId('why')).toHaveTextContent('idle')                                // the server's own reason, from the re-check
+  })
+
+  it('keeps the reason from the who-am-I answer itself after a reload', async () => {
+    fakeServer({ mode: 'platform', signedIn: false })
+    mount()
+    await waitFor(() => expect(screen.getByTestId('why')).toHaveTextContent('idle'))
+  })
+
   it('does no account calls at all when the server runs without accounts', async () => {
     const calls = fakeServer({ mode: 'open', signedIn: false })
     mount()

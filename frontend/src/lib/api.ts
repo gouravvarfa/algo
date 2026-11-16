@@ -40,7 +40,9 @@ export async function api<T = unknown>(url: string, opts: Opts = {}): Promise<T>
   if (!res.ok) {
     const detail = typeof body.detail === 'string' ? body.detail : undefined
     const err = new ApiError(res.status, String(body.error ?? res.status), String(body.message ?? detail ?? `HTTP ${res.status}`), body)
-    if (res.status === 401) window.dispatchEvent(new CustomEvent('auth:required', { detail: err }))
+    // "signed out" is announced by every request except the who-am-I check itself: that check is what the announcement re-runs, so its own 401
+    // re-announcing made an endless loop (about 18 requests a second from any tab left open after the 4 pm sign-out, 15 Nov 2026)
+    if (res.status === 401 && !url.startsWith('/api/auth/me')) window.dispatchEvent(new CustomEvent('auth:required', { detail: err }))
     throw err
   }
   return body as T

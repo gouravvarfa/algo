@@ -26,6 +26,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
   const modeQ = useQuery({ queryKey: ['auth', 'mode'], queryFn: () => get<{ mode: AuthMode }>('/api/auth/mode'), staleTime: 60_000, retry: 1 })
   const mode = modeQ.data?.mode ?? null
+  const [endReason, setEndReason] = useState<string | null>(null)
   const meQ = useQuery({
     queryKey: ['auth', 'me'],
     enabled: mode === 'platform',
@@ -33,7 +34,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       try {
         return await get<Me>('/api/auth/me')
       } catch (e) {
-        if (e instanceof ApiError && e.status === 401) return null
+        if (e instanceof ApiError && e.status === 401) {
+          const why = e.body?.reason                   // this check no longer raises auth:required (that looped), so it keeps the reason itself
+          if (typeof why === 'string') setEndReason(why)
+          return null
+        }
         throw e
       }
     },
@@ -42,7 +47,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   })
   const me = meQ.data ?? null
 
-  const [endReason, setEndReason] = useState<string | null>(null)
   const touched = useRef(false)
   useEffect(() => {
     const mark = () => { touched.current = true }
