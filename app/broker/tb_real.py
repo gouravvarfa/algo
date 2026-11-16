@@ -78,6 +78,47 @@ def _age(s: str | None, now: dt.datetime) -> float:
     return (now - _p(s)).total_seconds() if s else 0.0
 
 
+def join_trigger(direction: str, prev_close, day_open, system_point, minutes: list, session, now: dt.datetime):
+    """A FRESH entry trigger today on `direction`, for a real account that is flat while the strategy already holds that side (it was switched on
+    mid-trade). The owner, 16 Nov 2026: GOLDTEN gapped down past its Bottom while Yogesh's strategy held a SELL from 10 Nov, and the 15-minute
+    low break must still open his real SELL. `minutes`: today's 1-minute candles as (ts, open, high, low, close), IST, sorted.
+      gap past the System Point: the session's first 15-minute candle must be complete; SELL at the first later minute trading below its LOW
+        (BUY above its HIGH), at that level or the minute's open if it opened beyond it: the strategy's own gap entry rule;
+      no gap: the first minute today trading beyond the System Point, the day having opened on the near side.
+    Returns (level, minute, how) or None."""
+    from app.strategy.top_bottom import gap_protocol as gp
+    if direction not in ("BUY", "SELL") or prev_close is None or day_open is None or system_point is None:
+        return None
+    today = [m for m in minutes if m[0].date() == now.date() and m[0].time() >= session.first_start and m[0] <= now]
+    if not today:
+        return None
+    if gp.is_gap_past_system_point(direction, float(prev_close), float(day_open), float(system_point)):
+        if now.time() < session.second_start:
+            return None                                                    # the first 15-minute candle is not complete yet
+        first = [m for m in today if m[0].time() < session.second_start]
+        last_minute = (dt.datetime.combine(now.date(), session.second_start) - dt.timedelta(minutes=1)).time()
+        if len(first) < 12 or first[0][0].time() != session.first_start or first[-1][0].time() != last_minute:
+            return None                                                    # the first candle is not fully known (after a restart): wait, never guess its LOW / HIGH
+        hi, lo = max(m[2] for m in first), min(m[3] for m in first)
+        for ts, o, h, l, _c in today:
+            if ts.time() < session.second_start:
+                continue
+            if direction == "SELL" and l < lo:
+                return min(lo, o), ts, "15-minute gap rule: first candle LOW broken"
+            if direction == "BUY" and h > hi:
+                return max(hi, o), ts, "15-minute gap rule: first candle HIGH broken"
+        return None
+    sp = float(system_point)
+    if (direction == "SELL" and float(day_open) < sp) or (direction == "BUY" and float(day_open) > sp):
+        return None                                                        # already beyond at the open without a gap past it: not a fresh crossing
+    for ts, o, h, l, _c in today:
+        if direction == "SELL" and l < sp:
+            return min(sp, o), ts, "Bottom crossed"
+        if direction == "BUY" and h > sp:
+            return max(sp, o), ts, "Top crossed"
+    return None
+
+
 class AngelBroker:
     """The calls the executor needs, against one person's Angel One session."""
 
@@ -162,7 +203,15 @@ class RealTB:
         if not snap.get("real_ready", True):
             return          # not a result a real account may act on (the daily-close fallback, an expired contract's result): the last good one stays
         pp = snap.get("position")
+        days = snap.get("candles") or []
+        prev_close = day_open = None
+        try:
+            if len(days) >= 2 and dt.datetime.fromtimestamp(days[-1]["time"], dt.timezone.utc).date() == now.date():
+                day_open, prev_close = float(days[-1]["open"]), float(days[-2]["close"])
+        except (KeyError, TypeError, ValueError):
+            pass
         self.snaps[inst_id] = {"owner": owner, "symbol": symbol, "instrument": snap.get("instrument") or {}, "ltp": snap.get("ltp"), "snap_ltp_at": _s(now),
+                               "top": snap.get("latest_top"), "bottom": snap.get("latest_bottom"), "prev_close": prev_close, "day_open": day_open,
                                "paper": {"direction": pp["direction"], "entry_price": pp["entry_price"], "active_stop": pp["active_stop"],
                                          "gap_state": pp.get("gap_state"), "protective_sl": pp.get("protective_sl")} if pp else None}
 
@@ -325,6 +374,63 @@ class RealTB:
             self._on_exit(c, a, e, now)
         self._save(c, a)
 
+    def _today_minutes(self, token, now: dt.datetime) -> list:
+        """Today's 1-minute candles of the contract: the stored REST minutes, filled with the minutes built from live ticks (REST wins)."""
+        if not token:
+            return []
+        out: dict = {}
+        try:
+            from app.live import candle_store
+            df = candle_store.get(str(token), "ONE_MINUTE", dt.datetime.combine(now.date(), dt.time(0, 0)))
+            for ts, r in df.iterrows():
+                out[ts.to_pydatetime().replace(tzinfo=None, second=0, microsecond=0)] = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+        except Exception:
+            log.exception("stored minutes unreadable for %s", token)
+        fn = getattr(self, "tick_minutes", None)
+        if fn is not None:
+            try:
+                for ts, o, h, l, cl in fn(str(token)):
+                    out.setdefault(ts.replace(tzinfo=None, second=0, microsecond=0), (float(o), float(h), float(l), float(cl)))
+            except Exception:
+                log.exception("tick minutes unreadable for %s", token)
+        return [(k, *v) for k, v in sorted(out.items()) if k.date() == now.date()]
+
+    async def _join_check(self, c, a: dict, iid: str, row, now: dt.datetime) -> None:
+        """The strategy already holds a side while this real account is flat (switched on mid-trade): a FRESH trigger on that side today puts the
+        real account in, with the strategy's own stop. At most once a day per instrument, and never chased (a trigger older than STALE_SIGNAL_S)."""
+        snap = self.snaps.get(iid) or {}
+        paper = snap.get("paper")
+        today = now.date().isoformat()
+        if not paper or a["halted"] or a.get("join_day") == today:
+            return
+        inst = snap.get("instrument") or {}
+        sess_name = inst.get("session", "NSE")
+        if not self._market_open(sess_name, now) or not store.instrument_real(c, a["user_id"], iid):
+            return
+        from app.strategy.top_bottom.gap_protocol import NSE, SESSIONS
+        d = paper["direction"]
+        hit = join_trigger(d, snap.get("prev_close"), snap.get("day_open"), snap.get("bottom") if d == "SELL" else snap.get("top"),
+                           self._today_minutes(inst.get("token"), now), SESSIONS.get(sess_name, NSE), now)
+        if hit is None:
+            return
+        level, ts, how = hit
+        a["join_day"] = today
+        armed = dt.datetime.fromtimestamp(row["changed_at"], IST).replace(tzinfo=None, second=0, microsecond=0)
+        if ts < armed:
+            self._ev(a, now, f"{d} trigger at {level} ({ts:%H:%M}, {how}) came before the real switch was turned on: not taken")
+            self._save(c, a)
+            return
+        age = (now - ts).total_seconds()
+        if age > STALE_SIGNAL_S:
+            self._ev(a, now, f"{d} trigger at {level} ({ts:%H:%M}, {how}) noticed {int(age // 60)} min late: not chased")
+            self._save(c, a)
+            return
+        self._ev(a, now, f"the strategy already holds {d} and this real account is flat: fresh {d} trigger ({how}) at {level} ({ts:%H:%M}) puts it in")
+        e = {"event": "ENTRY", "direction": d, "entry_price": level, "active_stop": paper.get("active_stop"), "contract": inst.get("trading_symbol"),
+             "symbol": a["symbol"], "instrument_id": iid, "owner": a["user_id"], "entry_date": ts.strftime("%Y-%m-%d %H:%M"), "join": True}
+        await self._on_entry(c, a, e, {"instrument": inst}, now)
+        self._save(c, a)
+
     async def _on_entry(self, c, a: dict, e: dict, snap: dict, now: dt.datetime) -> None:
         contract, unresolved = dryrun.event_contract(e, snap)
         if unresolved or not contract.get("token"):
@@ -420,6 +526,12 @@ class RealTB:
         row = c.execute("SELECT real_on, changed_at FROM user_instrument_real WHERE user_id=? AND instrument_id=?", (uid, iid)).fetchone()
         a = self._acct(c, uid, iid, sym, row["changed_at"] if row else 0)
         busy = bool(a["position"] or a["pending_entry"] or self._unsettled(a) or a.get("_cancel_entry") or a.get("expect_flat"))
+        if not busy and row is not None and row["real_on"]:
+            try:
+                await self._join_check(c, a, iid, row, now)
+            except Exception:
+                log.exception("join check failed for %s", sym)
+            busy = bool(a["pending_entry"])
         if not busy:
             return                                                        # nothing open, nothing waiting: no call to Angel One at all
         session = (a["pending_entry"] or {}).get("contract", {}).get("session") or (self.snaps.get(iid) or {}).get("instrument", {}).get("session", "NSE")

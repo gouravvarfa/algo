@@ -49,6 +49,7 @@ async def lifespan(_: FastAPI):
     engine.start()
     from app.broker import tb_real
     engine.real = tb_real.RealTB()        # real Top-Bottom orders for accounts that switched them on (nothing happens for anybody else)
+    engine.real.tick_minutes = engine.feed.builder.minutes   # today's minutes from live ticks, for the 15-minute rule of a flat real account
     engine.real.start()
     try:                                  # legs saved before the options journal existed go into it once (idempotent)
         from app.db import platform_db

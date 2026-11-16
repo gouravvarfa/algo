@@ -750,3 +750,89 @@ async def test_a_later_first_stop_of_the_day_that_is_not_beyond_goes_out_at_once
     env.sync(PAPER_BUY, t)
     await env.rt.tick(t)
     assert env.fb.last("stop")[1]["p"]["triggerprice"] == "49499.95"
+
+
+# ---------------------------------------------------------------- a flat real account joins the strategy's side at a FRESH trigger (16 Nov 2026)
+def _day_epoch(y, m, d):
+    return int(dt.datetime(y, m, d, tzinfo=dt.timezone.utc).timestamp())
+
+
+def _gap_down_minutes():
+    """9 Nov (NSE session): the first 15-minute candle 09:15-09:29 has its LOW at 49,800; 09:30 stays above; 09:31 breaks it."""
+    day = dt.date(2026, 11, 9)
+    out = []
+    for k in range(15):
+        t = dt.datetime.combine(day, dt.time(9, 15 + k))
+        out.append((t, 49880.0, 49900.0, 49800.0 if k == 7 else 49840.0, 49860.0))
+    out.append((dt.datetime.combine(day, dt.time(9, 30)), 49860.0, 49870.0, 49850.0, 49855.0))
+    out.append((dt.datetime.combine(day, dt.time(9, 31)), 49820.0, 49830.0, 49750.0, 49760.0))
+    return out
+
+
+def _join_env(env, monkeypatch, direction="SELL"):
+    from app.live import candle_store
+    monkeypatch.setattr(candle_store, "get", lambda *a, **k: __import__("pandas").DataFrame(columns=["open", "high", "low", "close", "volume"]))
+    env.db.execute("UPDATE user_instrument_real SET changed_at=?", (dt.datetime(2026, 11, 8, tzinfo=tb_real.IST).timestamp(),))   # armed the day before
+    env.db.commit()
+    env.rt.tick_minutes = lambda tok: _gap_down_minutes()
+    env.fb.ltp_value = 49760.0
+    snap = {"instrument": dict(INST), "ltp": 49760.0, "latest_top": 52000.0, "latest_bottom": 50000.0,
+            "position": {"direction": direction, "entry_price": 51000.0, "active_stop": 51000.0},
+            "candles": [{"time": _day_epoch(2026, 11, 6), "open": 50200, "high": 50300, "low": 50050, "close": 50100},
+                        {"time": _day_epoch(2026, 11, 9), "open": 49900, "high": 49900, "low": 49750, "close": 49760}]}
+    return snap
+
+
+def test_the_15_minute_gap_rule_trigger_for_a_flat_account():
+    from app.strategy.top_bottom.gap_protocol import NSE
+    mins = _gap_down_minutes()
+    hit = tb_real.join_trigger("SELL", 50100, 49900, 50000, mins, NSE, dt.datetime(2026, 11, 9, 9, 31, 20))
+    assert hit is not None and hit[0] == 49800.0 and hit[1].time() == dt.time(9, 31) and "15-minute" in hit[2]
+    assert tb_real.join_trigger("SELL", 50100, 49900, 50000, mins, NSE, dt.datetime(2026, 11, 9, 9, 25)) is None          # candle not complete
+    assert tb_real.join_trigger("SELL", 50100, 49900, 50000, mins[:16], NSE, dt.datetime(2026, 11, 9, 9, 30, 30)) is None  # low not broken yet
+    assert tb_real.join_trigger("SELL", 49950, 49900, 50000, mins, NSE, dt.datetime(2026, 11, 9, 9, 31, 20)) is None       # already below yesterday: not fresh
+    no_gap = tb_real.join_trigger("SELL", 50100, 50050, 50000, mins, NSE, dt.datetime(2026, 11, 9, 9, 31, 20))              # opened above: first minute below
+    assert no_gap is not None and no_gap[0] == 49880.0 and no_gap[1].time() == dt.time(9, 15) and no_gap[2] == "Bottom crossed"
+    assert tb_real.join_trigger("BUY", 50100, 49900, 50000, mins, NSE, dt.datetime(2026, 11, 9, 9, 31, 20)) is None        # a BUY point the other way: nothing
+    partial = mins[5:]                                                                                                     # 09:15-09:19 lost (a restart)
+    assert tb_real.join_trigger("SELL", 50100, 49900, 50000, partial, NSE, dt.datetime(2026, 11, 9, 9, 31, 20)) is None    # never guesses the LOW
+
+
+@async_test
+async def test_a_flat_real_account_takes_the_strategys_sell_when_the_15_minute_low_breaks_after_a_gap_down(env, monkeypatch):
+    snap = _join_env(env, monkeypatch)
+    now = dt.datetime(2026, 11, 9, 9, 31, 20)
+    env.rt.sync(IID, env.uid, SYM, snap, now)
+    await env.rt.tick(now)
+    places = [c for c in env.fb.calls if c[0] == "place"]
+    assert len(places) == 1 and places[0][1]["transactiontype"] == "SELL" and places[0][1]["ordertype"] == "LIMIT"
+    pe = env.state()["pending_entry"]
+    assert pe["side"] == "SELL" and pe["strategy_stop"] == 51000.0 and pe["strategy_price"] == 49800.0                       # the strategy's own stop
+    assert any("15-minute gap rule" in e["text"] for e in env.state()["events"])
+    await env.rt.tick(now + dt.timedelta(seconds=5))
+    joins = [e for e in env.state()["events"] if "fresh SELL trigger" in e["text"]]
+    assert len(joins) == 1                                     # the trigger is taken once (a second order here is the same entry's MARKET retry after 3 s)
+
+
+@async_test
+async def test_a_trigger_noticed_too_late_is_not_chased(env, monkeypatch):
+    snap = _join_env(env, monkeypatch)
+    now = dt.datetime(2026, 11, 9, 9, 50)                                                                                  # 19 minutes after 09:31
+    env.rt.sync(IID, env.uid, SYM, snap, now)
+    await env.rt.tick(now)
+    assert not [c for c in env.fb.calls if c[0] == "place"]
+    assert any("not chased" in e["text"] for e in env.state()["events"])
+
+
+@async_test
+async def test_no_join_when_the_strategy_is_flat_or_the_real_switch_is_off(env, monkeypatch):
+    snap = _join_env(env, monkeypatch)
+    now = dt.datetime(2026, 11, 9, 9, 31, 20)
+    flat = dict(snap, position=None)
+    env.rt.sync(IID, env.uid, SYM, flat, now)
+    await env.rt.tick(now)
+    assert not [c for c in env.fb.calls if c[0] == "place"]
+    store.instrument_set(env.db, env.uid, IID, SYM, False, "tbtrader")
+    env.rt.sync(IID, env.uid, SYM, snap, now)
+    await env.rt.tick(now)
+    assert not [c for c in env.fb.calls if c[0] == "place"]
