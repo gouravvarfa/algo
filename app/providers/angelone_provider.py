@@ -6,6 +6,7 @@ fresh TOTP-based login each time would waste Angel's rate limits and the
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 import time
@@ -64,6 +65,7 @@ def _format_angel_date(moment: dt.datetime) -> str:
 class AngelOneProvider:
     def __init__(self) -> None:
         self._session: AngelOneSession | None = None
+        self._login_lock = asyncio.Lock()        # one login at a time: the feed and the candle loader asked together at start-up, so two logins went out and Angel One refused one (403)
         self._last_ok = _clock()                # the last candle request that worked
         self._last_relogin = float("-inf")      # never (NOT 0.0: the clock starts at boot, so 0.0 would mean "just now" on a fresh machine)
         self.relogins = 0
@@ -75,11 +77,14 @@ class AngelOneProvider:
                 "Angel One credentials not configured — connect from the Expiry Level 1 page, "
                 "or set ANGELONE_API_KEY/CLIENT_CODE/PIN/TOTP_SECRET in .env."
             )
-        if self._session is None:
-            self._session = await login(
-                credentials.api_key, credentials.client_code, credentials.pin, credentials.totp_secret
-            )
-        return self._session
+        if self._session is not None:
+            return self._session
+        async with self._login_lock:
+            if self._session is None:                # another caller may have logged in while this one waited
+                self._session = await login(
+                    credentials.api_key, credentials.client_code, credentials.pin, credentials.totp_secret
+                )
+            return self._session
 
     def reset_session(self) -> None:
         """Forces the next request to re-authenticate — call after credentials change."""
@@ -106,7 +111,8 @@ class AngelOneProvider:
             if not (relogin_can_help(exc) or stalled):
                 raise
             log.warning("Angel One candle session looks dead (%s); logging in again once", str(exc)[:80])
-            self.reset_session()
+            if self._session is session:
+                self._session = None                 # only the session that failed: a fresh one another request just made is kept
             self._last_relogin, self.relogins = now, self.relogins + 1
             session = await self._ensure_session()
             rows = await get_candle_data(session, **request)

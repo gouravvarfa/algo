@@ -70,6 +70,40 @@ def test_a_dead_session_gets_exactly_one_fresh_login_and_retry(monkeypatch):
     assert len(logins) == 2 and p.relogins == 1
 
 
+def test_callers_asking_together_share_one_login(monkeypatch):
+    """At start-up the feed and the candle loader asked for the session together: two logins went out and Angel One refused one (403)."""
+    p, logins = _provider(monkeypatch, [])
+
+    async def both():
+        return await asyncio.gather(*(p.get_session() for _ in range(5)))
+    sessions = asyncio.run(both())
+    assert len(logins) == 1 and all(x is sessions[0] for x in sessions)
+
+
+def test_requests_that_find_the_same_dead_session_make_one_fresh_login(monkeypatch):
+    """At midnight Angel One ends the session: several candle requests see it dead together; one fresh login serves them all."""
+    p, logins = _provider(monkeypatch, [])
+
+    async def slow_login(*a):                                    # a real login takes a moment: the others ask meanwhile
+        await asyncio.sleep(0)
+        logins.append(1)
+        return SimpleNamespace(jwt_token=f"t{len(logins)}")
+
+    async def candles(session, **kw):
+        await asyncio.sleep(0)
+        if session.jwt_token == "t1":
+            raise DEAD                                           # the session that died at midnight
+        return [["t", 1, 1, 1, 1, 1]]
+    monkeypatch.setattr(ap, "login", slow_login)
+    monkeypatch.setattr(ap, "get_candle_data", candles)
+
+    async def three():
+        await p.get_session()                                    # t1, about to die
+        return await asyncio.gather(*(p._candle_rows(**REQ) for _ in range(3)))
+    assert asyncio.run(three()) == [[["t", 1, 1, 1, 1, 1]]] * 3
+    assert len(logins) == 2                                      # the first login and ONE fresh one (it was one per request)
+
+
 def test_a_long_stall_gets_one_fresh_login_at_most_every_ten_minutes(monkeypatch):
     p, logins = _provider(monkeypatch, [RATE_LIMIT, RATE_LIMIT, RATE_LIMIT])
     p._last_ok = time.monotonic() - ap.RELOGIN_STALL_S - 1     # nothing has worked for over five minutes
