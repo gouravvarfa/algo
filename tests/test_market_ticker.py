@@ -314,6 +314,5 @@ def test_a_closed_market_is_looked_at_every_few_seconds_so_the_open_is_not_misse
 
     async def fake_sleep(s):
         slept.append(s)
-    monkeypatch.setattr(em.asyncio, "sleep", fake_sleep)
-    asyncio.run(E()._wait_for_open())
+    asyncio.run(E()._wait_for_open(sleep=fake_sleep))
     assert sum(slept) == 15 and max(slept) == 5        # went within 5 s of the open, not after 300 s
