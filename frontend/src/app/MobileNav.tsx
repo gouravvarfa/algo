@@ -28,7 +28,7 @@ const TABS: { to: string; label: string; icon: IconName }[] = [
   { to: '/top-bottom', label: 'Strategy', icon: 'chart' },
   { to: '/real-trades', label: 'Real', icon: 'money' },
   { to: '/positions', label: 'Positions', icon: 'stack' },
-  { to: '/options', label: 'Chain', icon: 'chain' },
+  { to: '/simulator', label: 'Simulator', icon: 'sim' },
 ]
 
 /** Phones: the four pages used every day, one tap away at the bottom (thumb reach); "More" opens the full menu. Hidden on wide screens by CSS. */

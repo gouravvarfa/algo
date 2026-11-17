@@ -109,3 +109,8 @@
   .topbar .pill { padding: 0 8px; font-size: 11px; height: 28px; }
   .topbar .themetoggle, .topbar .themecorner { display: none; }
 }
+/* instrument chips on phones: every assigned instrument visible at once (they wrapped off-screen sideways and looked gone, 17 Nov 2026) */
+@media (max-width: 860px) {
+  .symtabs { display: flex; flex-wrap: wrap; gap: 6px; overflow: visible; max-width: 100%; }
+  .symtabs > button { flex: 0 0 auto; min-height: 36px; padding: 0 12px; }
+}
