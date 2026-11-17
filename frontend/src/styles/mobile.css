@@ -114,3 +114,25 @@
   .symtabs { display: flex; flex-wrap: wrap; gap: 6px; overflow: visible; max-width: 100%; }
   .symtabs > button { flex: 0 0 auto; min-height: 36px; padding: 0 12px; }
 }
+/* phone polish (17 Nov 2026): a calmer, denser page */
+@media (max-width: 560px) {
+  .topbar .marginpill { display: none; }                       /* the margin is on the Real Trades page; the REAL chip stays fully visible */
+  .page { padding: 10px 10px 24px; gap: 10px; }
+  .card, .tbhero { padding: 12px; border-radius: 14px; }
+  .stats { gap: 8px; }
+  .stat { padding: 10px 12px; }
+  .stat .k { font-size: 11.5px; }
+  .stat .v { font-size: 16px; }
+  .stat .s { font-size: 11px; }
+  .card-head { flex-wrap: wrap; row-gap: 8px; }
+  .card-head h2 { font-size: 14px; flex: 1 1 100%; }
+  .card-head .spacer { display: none; }
+  .seg button { padding: 5px 11px; font-size: 12px; }
+  .legend { font-size: 11px; line-height: 1.7; }
+  .chartcanvas { height: 300px; }
+  .note { font-size: 11.5px; }
+  .symtabs { padding: 4px; gap: 4px; }
+  .symtabs > button { min-height: 32px; padding: 0 10px; font-size: 12px; }
+  .tbhero .hero-pnl b { font-size: 26px; }
+  dl.kv2 { font-size: 12.5px; }
+}

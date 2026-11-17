@@ -119,7 +119,7 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
         <i />{mkt}
       </span>
       {connected && f?.connected && (
-        <Link to="/settings" className="pill" style={{ textDecoration: 'none', color: 'inherit' }} title={f.error ?? `Angel One margin available. Used: SPAN ${rs(f.span_margin)} · Exposure ${rs(f.exposure_margin)}. Updated every minute.`}>
+        <Link to="/settings" className="pill marginpill" style={{ textDecoration: 'none', color: 'inherit' }} title={f.error ?? `Angel One margin available. Used: SPAN ${rs(f.span_margin)} · Exposure ${rs(f.exposure_margin)}. Updated every minute.`}>
           <b>Angel One</b>&nbsp;{f.error ? 'not reachable' : `margin ${rs(f.available_cash)}`}
         </Link>
       )}
