@@ -48,7 +48,9 @@ GAP_WAIT_MAX_S = 1500.0            # a gap open: wait for the strategy's 15-minu
 REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
-CIRCUIT_STEPS = (0.025, 0.02)      # a stop refused for the exchange's daily price limit goes again this far from yesterday's close (MCX gold's limit is 3%)
+STOP_WITHIN_PCTS = (0.02, 0.01, 0.005)   # a stop farther than this from the live price is WATCHED and sent at its own trigger when the price comes this near
+                                         # (the exchange refuses an order beyond its daily price limit, MCX gold 3%); each refusal for that limit: the next, closer
+                                         # distance; after the last, the safety exit (owner, 17 Nov 2026: 2%)
 MIN_ROUND_GAP_S = 1.1              # a round woken early by a signal still keeps this gap (Angel One answers about one order-book read a second)
 JOIN_STOP_PCT = 0.01               # a real account that JOINS the strategy's side is a fresh trade: entry +/- 1% (the strategy's entry-day stop), owner 16 Nov 2026
 JOIN_BE_PCT_DEFAULT = 2.0          # its breakeven: the instrument's own rule (2% index / MCX, 3% stocks) from the snapshot
@@ -496,33 +498,60 @@ class RealTB:
                      detail={"instrument": a["symbol"], "halted_at": ev["at"], "why": "raised outside the session by the positions check"})
         return True
 
-    def _circuit_clamp(self, a: dict, p: dict, msg: str, now: dt.datetime) -> bool:
-        """A stop refused for the exchange's daily price limit (the MCX circuit): it goes again INSIDE the limit instead of closing the position
-        (owner, 17 Nov 2026: the GOLDTEN stop 4.6% away was refused and the trade was closed). Yesterday's close +/- 2.5%, then 2%; after that the
-        safety exit as before. True when a closer stop was set: the next round places it."""
+    def _live_price(self, a: dict, p: dict) -> float | None:
+        sn = self.snaps.get(a["instrument_id"]) or {}
+        if (sn.get("instrument") or {}).get("trading_symbol") == p.get("contract") and sn.get("ltp") is not None:
+            return float(sn["ltp"])
+        return None
+
+    def _watch_within(self, a: dict, now: dt.datetime) -> float:
+        w = a.get("stop_watch") or {}
+        return STOP_WITHIN_PCTS[min(w.get("step", 0), len(STOP_WITHIN_PCTS) - 1)] if w.get("day") == now.date().isoformat() else STOP_WITHIN_PCTS[0]
+
+    def _stop_watch(self, a: dict, p: dict, now: dt.datetime) -> bool:
+        """True = the stop order is not sent now. A stop farther from the live price than the allowed distance (2%, closer after a refusal) is WATCHED:
+        the exchange refuses an order beyond its daily price limit, so it goes out at the strategy's own trigger as soon as the price comes that near.
+        The stop itself stays the strategy's (the chart shows it). If the price reaches a watched stop first, the position is exited at once."""
+        ltp = self._live_price(a, p)
+        if ltp is None or not ltp:
+            return False                                              # no live price of this contract: sent as before, the exchange decides
+        today = now.date().isoformat()
+        w = a.get("stop_watch") if (a.get("stop_watch") or {}).get("day") == today else None
+        stop = float(a["stop_target"])
+        if (ltp >= stop) if p["side"] == "SELL" else (ltp <= stop):
+            if w:
+                a.pop("stop_watch", None)
+                a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
+                self._ev(a, now, f"the price {ltp} reached the watched stop {stop} before its order could go out: the position is exited now")
+                return True
+            return False                                              # not watched: the usual path (the open's gap rule ran before this)
+        within = self._watch_within(a, now)
+        dist = abs(stop - ltp) / ltp
+        if dist <= within:
+            if w and w.get("noted"):
+                w["noted"] = False
+                self._ev(a, now, f"the price {ltp} is within {within * 100:g}% of the stop {stop}: its order goes to Angel One now, at the strategy's trigger")
+            return False
+        if not w:
+            w = a["stop_watch"] = {"day": today, "step": 0, "noted": False}
+        if not w.get("noted"):
+            w["noted"] = True
+            self._ev(a, now, f"the stop {stop} is {dist * 100:.2f}% from the price {ltp}: watched, its order goes to Angel One at that trigger when the price comes within {within * 100:g}%")
+        return True
+
+    def _circuit_watch(self, a: dict, p: dict, msg: str, now: dt.datetime) -> bool:
+        """A stop refused for the exchange's daily price limit: no exit. It is watched and sent again, at the SAME trigger, when the price comes within
+        the next, closer distance (2% -> 1% -> 0.5%). After the last, the safety exit as before (owner, 17 Nov 2026)."""
         if "circuit" not in (msg or "").lower():
             return False
         today = now.date().isoformat()
-        cap = a.get("circuit_cap") or {}
-        step = cap.get("step", -1) + 1 if cap.get("day") == today else 0
-        if step >= len(CIRCUIT_STEPS):
+        w = a.get("stop_watch") if (a.get("stop_watch") or {}).get("day") == today else None
+        step = (w["step"] + 1) if w else 1
+        if step >= len(STOP_WITHIN_PCTS):
             return False
-        snap = self.snaps.get(a["instrument_id"]) or {}
-        base = snap.get("prev_close") or snap.get("ltp") or p.get("entry_price")
-        if not base:
-            return False
-        pct = CIRCUIT_STEPS[step]
-        tick = p.get("tick") or 1.0
-        level = dryrun.rnd(float(base) * (1 + pct), tick, "down") if p["side"] == "SELL" else dryrun.rnd(float(base) * (1 - pct), tick, "up")
-        cur = a.get("stop_target")
-        if cur is not None and ((p["side"] == "SELL" and level >= cur) or (p["side"] == "BUY" and level <= cur)):
-            return False                                              # the stop is already inside that: the refusal is not about the distance
-        a["circuit_cap"] = {"day": today, "step": step, "level": level}
-        a["stop_target"] = level
-        if p.get("join"):
-            p["join"]["stop"] = level
-        self._ev(a, now, f"stop refused for the exchange's daily price limit: it goes again at {level} (yesterday's close {base} "
-                         f"{'+' if p['side'] == 'SELL' else '-'}{pct * 100:g}%), inside the limit, instead of closing the position")
+        a["stop_watch"] = {"day": today, "step": step, "noted": True}
+        self._ev(a, now, f"the stop {a['stop_target']} was refused for the exchange's daily price limit: watched, its order goes again at the same trigger "
+                         f"when the price comes within {STOP_WITHIN_PCTS[step] * 100:g}%")
         return True
 
     def _join_retry_after(self, a: dict, today: str) -> dt.datetime | None:
@@ -778,7 +807,7 @@ class RealTB:
             elif st in ("rejected", "cancelled"):
                 self._mark(c, o, a, st, b.get("text") or st)
                 self._ev(a, now, f"{o['role']} order {st}" + (" (confirmed by Angel One's order book)" if was_cancelling else f" by Angel One: {b.get('text') or ''}"), order=o["id"])
-                if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling and not self._circuit_clamp(a, a["position"], b.get("text") or "", now):
+                if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling and not self._circuit_watch(a, a["position"], b.get("text") or "", now):
                     if a["position"].get("join"):
                         a["join_safety_exit"] = True
                     a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
@@ -1094,9 +1123,6 @@ class RealTB:
             raw = prot if prot is not None else paper.get("active_stop")
             if raw is not None:
                 target = dryrun.rnd(float(raw), p["tick"])
-                cap = a.get("circuit_cap") or {}
-                if cap.get("day") == now.date().isoformat():          # today the exchange refused anything beyond this
-                    target = min(target, cap["level"]) if p["side"] == "SELL" else max(target, cap["level"])
                 if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
                     if prot is not None or dryrun.may_move_stop(p["side"], a["stop_target"], target, p, now):
                         a["stop_target"] = target
@@ -1161,9 +1187,11 @@ class RealTB:
         if not stops and not self._cancelling(a, "stop") and a["stop_target"] is not None and not a["exit_since"]:
             if await self._gap_wait(broker, a, p, paper, session, now):
                 return
+            if self._stop_watch(a, p, now):
+                return                                            # too far for the exchange's daily limit: watched, sent at its trigger when the price comes near
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
             o = await self._place(c, broker, a, now, "stop", payload, "stop-loss for the open position", ct)
-            if o is not None and o["state"] == "rejected" and not self._circuit_clamp(a, p, o.get("message") or "", now):
+            if o is not None and o["state"] == "rejected" and not self._circuit_watch(a, p, o.get("message") or "", now):
                 if p.get("join"):
                     a["join_safety_exit"] = True
                 a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
@@ -1254,7 +1282,12 @@ class RealTB:
         for r in c.execute(q, (user_id,) if user_id else ()):
             a = json.loads(r["state_json"])
             live = self.state.get((a["user_id"], a["instrument_id"]), a)
+            resting = any(o["role"] == "stop" and o["state"] in ACTIVE for o in live["orders"])
+            sw = live.get("stop_watch") or {}
+            watched = bool(live["position"]) and not resting and bool(sw)
+            step = min(sw.get("step", 0), len(STOP_WITHIN_PCTS) - 1) if sw.get("day") == now_ist().date().isoformat() else 0     # a new day starts at 2% again
             out.append({"user_id": live["user_id"], "instrument_id": live["instrument_id"], "symbol": live["symbol"], "position": live["position"], "pending_entry": bool(live["pending_entry"]),
+                        "stop_resting": resting, "stop_watch_pct": STOP_WITHIN_PCTS[step] * 100 if watched else None,
                         "halted": live["halted"], "stop_target": live["stop_target"], "released": live.get("released", False), "exiting": bool(live.get("manual_exit")), "missed": live["missed"][-5:], "events": live["events"][-15:],
                         "orders": [{k: o[k] for k in ("id", "role", "side", "qty", "type", "price", "trigger", "state", "why", "contract")} for o in live["orders"][-10:]]})
         return out

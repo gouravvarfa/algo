@@ -879,8 +879,8 @@ async def test_a_joined_position_moves_to_breakeven_at_2_percent_and_takes_a_tig
 async def test_after_a_refused_stop_closes_the_join_one_fresh_re_cross_may_join_again_that_day_and_no_more(env, monkeypatch):
     snap, now = await _joined_and_filled(env, monkeypatch, 49760.0)
     sid, _ = env.fb.last("stop")
-    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "Your order price exceeds the circuit limit"
-    await env.rt.tick(now + dt.timedelta(seconds=10))                                              # refused: the safety exit goes out
+    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "RMS: order refused"
+    await env.rt.tick(now + dt.timedelta(seconds=10))                                              # refused (not for the daily limit): the safety exit goes out
     xid, _ = env.fb.last("entry")                                                                  # the exit is a plain LIMIT order
     env.fb.fill(xid, 49790.0)
     await env.rt.tick(now + dt.timedelta(seconds=14))
@@ -910,36 +910,64 @@ def test_a_join_closed_by_a_refused_stop_before_this_rule_is_read_from_the_event
     assert rt._join_retry_after({"events": a["events"][:1]}, "2026-11-16") is None                 # closed some other way: no extra try
 
 
-@async_test
-async def test_a_stop_refused_for_the_daily_price_limit_goes_again_inside_it_instead_of_closing(env):
-    """17 Nov 2026: the GOLDTEN stop 4.6% away was refused for MCX's circuit limit and the safety exit closed the trade."""
-    from app.paper_trading import dryrun
+def _snap_at(position, ltp):
+    return {"instrument": dict(INST), "ltp": ltp, "position": position}
+
+
+async def _open_with_far_stop(env, stop=47000.0):
     env.sync(None)
-    await go(env, env.ev("ENTRY", "BUY", active_stop=47000.0))
+    await go(env, env.ev("ENTRY", "BUY", active_stop=stop))
     env.fb.fill(env.fb.last("entry")[0], 50002.5)
-    far = {"direction": "BUY", "entry_price": 50000.0, "active_stop": 47000.0}                       # 6% away
-    env.sync(far, MON)
+    far = {"direction": "BUY", "entry_price": 50000.0, "active_stop": stop}
+    env.rt.sync(IID, env.uid, SYM, _snap_at(far, 50001.0), MON)
     await env.rt.tick(secs(5))
-    sid, _ = env.fb.last("stop")
+    return far
+
+
+@async_test
+async def test_a_far_stop_is_watched_and_sent_at_its_own_trigger_when_the_price_comes_within_2_percent(env):
+    """17 Nov 2026: a stop beyond the exchange's daily limit was refused. It now waits, and goes out at the strategy's trigger when the price is near."""
+    far = await _open_with_far_stop(env)                                                               # 47,000 is 6% below 50,001
+    a = env.state()
+    assert a["position"] and env.fb.last("stop")[0] is None and a["stop_target"] == 47000.0            # no order yet, the stop is the strategy's
+    assert any("watched" in e["text"] for e in a["events"]) and env.rt.view(env.db, env.uid)[0]["stop_watch_pct"] == 2.0
+    env.rt.sync(IID, env.uid, SYM, _snap_at(far, 47900.0), secs(10))                                   # 1.9% away now
+    await env.rt.tick(secs(10))
+    sid, stop = env.fb.last("stop")
+    assert sid is not None and 46999 < float(stop["p"]["triggerprice"]) < 47000                         # at the strategy's own trigger, one tick beyond
+    assert env.rt.view(env.db, env.uid)[0]["stop_resting"] is True
+
+
+@async_test
+async def test_the_price_reaching_a_watched_stop_exits_at_once(env):
+    far = await _open_with_far_stop(env)
+    env.rt.sync(IID, env.uid, SYM, _snap_at(far, 46990.0), secs(10))                                   # straight through the stop between two rounds
+    await env.rt.tick(secs(10))
+    assert env.state()["exit_since"] and any("reached the watched stop" in e["text"] for e in env.state()["events"])
+
+
+@async_test
+async def test_a_stop_refused_for_the_daily_price_limit_is_watched_closer_each_time_then_exited(env):
+    sid = await open_long(env)                                                                         # stop 49,500, 1% away: sent at once
+    a = env.state()
     env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "Your order price exceeds the circuit limit. Please adjust your order"
     await env.rt.tick(secs(10))
     a = env.state()
-    first = dryrun.rnd(50001.0 * 0.975, 0.05, "up")                                                   # yesterday unknown here: the live price - 2.5%
-    assert a["position"] and not a["exit_since"] and a["circuit_cap"]["step"] == 0 and a["stop_target"] == first
+    assert a["position"] and not a["exit_since"] and a["stop_watch"]["step"] == 1 and a["stop_target"] == 49500.0   # watched within 1% now, same stop
+    near = {"direction": "BUY", "entry_price": 50000.0, "active_stop": 49500.0}
+    env.rt.sync(IID, env.uid, SYM, _snap_at(near, 49900.0), secs(15))                                  # 0.8% away
     await env.rt.tick(secs(15))
-    sid2, stop2 = env.fb.last("stop")
-    assert sid2 != sid and float(stop2["p"]["triggerprice"]) < first                                   # placed again, inside the limit
-    env.sync(far, secs(20))
-    await env.rt.tick(secs(20))
-    assert env.state()["stop_target"] == first                                                         # the far stop is not asked for again today
+    sid2, _ = env.fb.last("stop")
+    assert sid2 not in (None, sid)
     env.fb.orders[sid2]["status"], env.fb.orders[sid2]["text"] = "rejected", "circuit limit"
+    await env.rt.tick(secs(20))
+    assert env.state()["stop_watch"]["step"] == 2 and not env.state()["exit_since"]                   # 0.5% next
+    env.rt.sync(IID, env.uid, SYM, _snap_at(near, 49700.0), secs(25))                                  # 0.4% away
     await env.rt.tick(secs(25))
-    assert env.state()["stop_target"] == dryrun.rnd(50001.0 * 0.98, 0.05, "up") and env.state()["circuit_cap"]["step"] == 1
-    await env.rt.tick(secs(30))
     sid3, _ = env.fb.last("stop")
     env.fb.orders[sid3]["status"], env.fb.orders[sid3]["text"] = "rejected", "circuit limit"
-    await env.rt.tick(secs(35))
-    assert env.state()["exit_since"]                                                                   # after 2.5% and 2%: the safety exit, as before
+    await env.rt.tick(secs(30))
+    assert env.state()["exit_since"]                                                                   # after 2%, 1% and 0.5%: the safety exit, as before
 
 
 @async_test

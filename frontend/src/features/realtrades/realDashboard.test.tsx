@@ -92,3 +92,15 @@ describe('RealSwitch while the account is on paper', () => {
     expect(await screen.findByText(/REAL trading is ON/)).toBeInTheDocument()
   })
 })
+
+describe('the real stop note under "Active stop"', () => {
+  it('says whether the stop order rests at Angel One or is watched until the price comes near', async () => {
+    const { realStopNote } = await import('../topbottom/TopBottomPage')
+    const base = { trades: [], real_on: true, since: 1 }
+    expect(realStopNote({ ...base, state: { position: null, stop_target: 137354, stop_resting: true } }, true)).toBe('stop order at Angel One')
+    expect(realStopNote({ ...base, state: { position: null, stop_target: 142303, stop_resting: false, stop_watch_pct: 2 } }, true)).toBe('watched: the order goes to Angel One within 2%')
+    expect(realStopNote({ ...base, state: { position: null, stop_target: 142303 } }, true)).toBe('stop order not at Angel One yet')
+    expect(realStopNote({ ...base, state: null }, true)).toBe('')
+    expect(realStopNote({ ...base, state: { position: null, stop_target: 1, stop_resting: true } }, false)).toBe('')
+  })
+})

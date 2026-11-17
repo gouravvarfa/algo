@@ -89,7 +89,7 @@ const r2 = (x: number) => Math.round(x * 100) / 100
 /** The open position valued at a live price pushed by the stream, with the server's own multiplier (pnlUnits: points x quantity, or lots x point value for
  * MCX gold / silver, which are quoted per 10 g / per kg). The entry, stop and direction are the engine's. */
 interface RealTrade { direction: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null; entry_at: number; exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string }
-interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null; events?: { at: string; text: string }[] } | null }
+interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null; events?: { at: string; text: string }[]; stop_resting?: boolean; stop_watch_pct?: number | null } | null }
 const NO_REAL: RealData = { trades: [], real_on: false, since: null, state: null }
 const iso = (t: number) => new Date(t * 1000).toISOString()
 
@@ -116,6 +116,15 @@ export function realSnap(s: Snapshot, d: RealData): Snapshot {
   const wins = closed.filter((t) => (t.pnl_amount ?? 0) > 0).length
   return { ...s, position, trades, markers, waiting: !position, pnl_per_point: perPoint,
     stats: { ...s.stats, live_realized: r2(net), live_trades: closed.length, live_win_rate: closed.length ? r2(wins / closed.length * 100) : null, replay_trades: 0, replay_realized: 0 } }
+}
+
+/** Where the real stop is: resting at Angel One, or watched (its order goes out at the same trigger when the price comes within N%). The line on the
+ * chart is always the strategy's own stop. */
+export function realStopNote(d: RealData | undefined, open: boolean): string {
+  if (!open || !d?.state) return ''
+  if (d.state.stop_resting) return 'stop order at Angel One'
+  if (d.state.stop_watch_pct != null) return `watched: the order goes to Angel One within ${d.state.stop_watch_pct}%`
+  return 'stop order not at Angel One yet'
 }
 
 /** `perPoint`: rupees for a 1.00 move of this position (pnlUnits for the paper position, the real quantity's own for the Real view). */
@@ -239,7 +248,7 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
 
       <div className="tbkpis">
         <div className="stat"><div className="k">Entry</div><div className="v">{p ? num(p.entry_price) : '–'}</div><div className="s">{p ? dt(p.entry_date) : 'no open position'}</div></div>
-        <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{p ? (p.breakeven ? `breakeven SL (${be}% done)` : 'structural / trailing') : ''}</div></div>
+        <div className="stat"><div className="k">Active stop</div><div className="v">{p ? num(p.active_stop) : '–'}</div><div className="s">{view === 'real' ? realStopNote(rq.data, !!p) : p ? (p.breakeven ? `breakeven SL (${be}% done)` : 'structural / trailing') : ''}</div></div>
         <div className="stat"><div className="k">Latest top</div><div className="v">{n2(s.latest_top)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Latest bottom</div><div className="v">{n2(s.latest_bottom)}</div><div className="s">confirmed swing</div></div>
         <div className="stat"><div className="k">Closed trades · win</div><div className="v">{closed.length} · {closed.length ? `${(wins.length / closed.length * 100).toFixed(0)}%` : '–'}</div><div className="s">all closed trades</div></div>
