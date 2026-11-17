@@ -8,7 +8,7 @@ import { useSession } from '../lib/session'
 import { fresh, useLiveTicks } from '../lib/stream'
 import type { IndexQuote } from '../lib/types'
 import { Icon, type IconName } from './Icon'
-import { Hamburger, NavBackdrop } from './MobileNav'
+import { BottomNav, Hamburger, NavBackdrop } from './MobileNav'
 import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
 import { IndexChart, MarketTicker, type TickerItem } from '../features/market/MarketTicker'
@@ -17,8 +17,8 @@ interface Item { to: string; label: string; icon: IconName }
 
 const MAIN: Item[] = [
   { to: '/top-bottom', label: 'Top Bottom', icon: 'chart' },
-  { to: '/real-trades', label: 'Real Trades', icon: 'history' },
-  { to: '/positions', label: 'Positions', icon: 'history' },
+  { to: '/real-trades', label: 'Real Trades', icon: 'money' },
+  { to: '/positions', label: 'Positions', icon: 'stack' },
   { to: '/simulator', label: 'Options Simulator', icon: 'sim' },
   { to: '/options-journal', label: 'Options Journal', icon: 'chain' },
   { to: '/dry-run', label: 'Dry Run', icon: 'backtest' },
@@ -144,6 +144,7 @@ export function Shell() {
       <MarketTicker />
       <Notices />
       <Outlet />
+      <BottomNav moreOpen={nav} onMore={() => setNav((v) => !v)} />
     </div>
   )
 }

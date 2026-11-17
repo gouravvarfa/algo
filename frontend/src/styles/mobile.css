@@ -62,3 +62,50 @@
   .actbar .tl { flex: 1 1 100%; }
 }
 @media (prefers-color-scheme: dark) { @media (max-width: 860px) { :root:not([data-theme="light"]):not([data-theme="dark"]) .sidebar { background: linear-gradient(180deg, #1c222b 0%, #141920 60%, #11151b 100%) !important; } } }
+
+/* ================= professional phone layout (17 Nov 2026) =================
+   bottom tab bar, nothing wider than the screen, scrollable chip rows, compact top bar, 44 px touch targets, smooth transitions */
+.bottomnav { display: none; }
+@media (max-width: 860px) {
+  html, body { overflow-x: hidden; }
+  .shell { overflow-x: clip; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  .page, .page > *, .card, .tbhero, .stats > *, .tbgrid > * { min-width: 0; max-width: 100%; }
+  .bottomnav { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    height: calc(60px + env(safe-area-inset-bottom)); padding: 4px 6px env(safe-area-inset-bottom);
+    background: color-mix(in srgb, var(--bg-surface) 94%, transparent); border-top: 1px solid var(--border);
+    -webkit-backdrop-filter: saturate(1.4) blur(10px); backdrop-filter: saturate(1.4) blur(10px); box-shadow: 0 -6px 24px -14px rgba(8, 14, 30, .35); }
+  .bn { display: grid; justify-items: center; align-content: center; gap: 3px; min-height: 48px; border: 0; background: none; border-radius: 12px; color: var(--text-muted);
+    font: 600 10.5px/1 var(--font-sans); text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: color .2s ease, background-color .2s ease, transform .12s ease; }
+  .bn .ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .bn.active { color: var(--accent); background: var(--accent-soft); }
+  .bn:active { transform: scale(.94); }
+  .nav-open .bottomnav { z-index: 65; }
+
+  /* top bar: one line, the status chips scroll sideways instead of being cut off */
+  .topbar { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .topbar::-webkit-scrollbar { display: none; }
+  .topbar .title { display: none; }
+  .topbar .spacer { display: none; }
+  .topbar > * { flex: none; }
+  .topbar .pill { height: 30px; white-space: nowrap; }
+
+  /* instrument chips: a smooth sideways strip that snaps */
+  .tabs, .seg, .instabs { overflow-x: auto; scrollbar-width: none; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; flex-wrap: nowrap; max-width: 100%; }
+  .tabs::-webkit-scrollbar, .seg::-webkit-scrollbar, .instabs::-webkit-scrollbar { display: none; }
+  .tabs > *, .instabs > * { scroll-snap-align: start; flex: none; }
+
+  /* hero: the stop / entry / now line and its labels wrap instead of overlapping */
+  .tbhero, .tbhero * { overflow-wrap: anywhere; }
+  .stoprail-labels, .railnote { flex-wrap: wrap; row-gap: 4px; }
+  .btn, button.btn { min-height: 44px; }
+  table { font-size: 12.5px; }
+  .tablewrap, .tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+/* smoother everywhere: cards and buttons ease instead of jumping */
+.card, .stat, .pill, .btn, .navlink { transition: background-color .2s ease, border-color .2s ease, box-shadow .2s ease, color .2s ease, transform .12s ease; }
+.btn:active { transform: translateY(1px); }
+@media (max-width: 480px) {
+  .topbar { gap: 5px; padding: 0 8px; }
+  .topbar .pill { padding: 0 8px; font-size: 11px; height: 28px; }
+  .topbar .themetoggle, .topbar .themecorner { display: none; }
+}

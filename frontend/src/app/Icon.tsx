@@ -1,4 +1,7 @@
 const PATHS = {
+  money: 'M3 6h18v12H3zM7 12h.01M17 12h.01M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z',
+  stack: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17l9 5 9-5',
+  menu: 'M4 6h16M4 12h16M4 18h16',
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   sim: 'M4 4h16v16H4zM8 15l3-4 3 2 3-5',
   builder: 'M6 4v16M18 4v16M6 8h12M6 16h12',
