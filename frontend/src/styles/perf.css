@@ -65,3 +65,35 @@ html { scroll-behavior: auto; }
 /* hover lifts: transform only */
 .shell:not(.console) .card, .shell:not(.console) .tbkpis .stat, .shell:not(.console) .tbhero { transition: transform .2s ease !important; }
 @media (hover: none) { .shell:not(.console) .tbkpis .stat:hover, .shell:not(.console) .card:hover { transform: none; } }
+
+/* ================= sidebar: pastel icon tiles (premium fintech look, 17 Nov 2026) =================
+   Each main page has its own tone; the tile is 40 px, radius 12 px; active = pastel row, 3 px rounded left bar, stronger icon, bolder text. */
+.tone-blue    { --tone: #2563eb; --tone-soft: #e8efff; }
+.tone-green   { --tone: #16a34a; --tone-soft: #e6f6ec; }
+.tone-purple  { --tone: #9333ea; --tone-soft: #f3e8ff; }
+.tone-sky     { --tone: #0284c7; --tone-soft: #e0f2fe; }
+.tone-orange  { --tone: #ea580c; --tone-soft: #fff1e6; }
+.tone-emerald { --tone: #059669; --tone-soft: #e3f7ef; }
+.tone-violet  { --tone: #7c3aed; --tone-soft: #efe9ff; }
+.tone-pink    { --tone: #db2777; --tone-soft: #fde8f2; }
+.tone-teal    { --tone: #0d9488; --tone-soft: #e0f5f2; }
+.tone-slate   { --tone: #475b8a; --tone-soft: #eaeef6; }
+.sidebar .navlink.toned { gap: 12px; padding: 4px 8px; min-height: 48px; color: var(--text-secondary); font-weight: 500; border-radius: 12px; transition: background-color .2s ease, color .2s ease; }
+.sidebar .navlink.toned .navicon { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--tone-soft); color: var(--tone);
+  transition: background-color .2s ease, color .2s ease, transform .2s ease; }
+.sidebar .navlink.toned .navicon .ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.sidebar .navlink.toned:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar .navlink.toned:hover .navicon { background: color-mix(in srgb, var(--tone) 18%, white); }
+.sidebar .navlink.toned.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.sidebar .navlink.toned.active::before { background: var(--accent); left: -12px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; }
+.sidebar .navlink.toned.active .navicon { background: color-mix(in srgb, var(--tone) 20%, white); color: var(--tone); }
+:root[data-theme="dark"] .sidebar .navlink.toned { color: #c3cbd8; }
+:root[data-theme="dark"] .sidebar .navlink.toned .navicon { background: color-mix(in srgb, var(--tone) 22%, transparent); color: color-mix(in srgb, var(--tone) 70%, white); }
+:root[data-theme="dark"] .sidebar .navlink.toned.active { background: var(--accent-soft); color: #fff; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active .navicon { background: var(--tone); color: #fff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sidebar .navlink.toned { color: #c3cbd8; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned .navicon { background: color-mix(in srgb, var(--tone) 22%, transparent); color: color-mix(in srgb, var(--tone) 70%, white); }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: color-mix(in srgb, var(--tone) 16%, transparent); color: #fff; }
+}
+@media (max-width: 860px) { .sidebar .navlink.toned { padding: 4px 8px; font-size: 14.5px; } }

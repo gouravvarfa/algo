@@ -345,6 +345,27 @@ async def instrument(instrument_id: str, request: Request):
     return snap
 
 
+@app.get("/api/instruments/{instrument_id}/candles")
+async def instrument_candles(instrument_id: str, request: Request, minutes: int = 15, days: int = 10):
+    """Intraday candles of the instrument's ACTIVE contract for the chart (15 minutes by default), made from the stored 1-minute candles and the
+    live ticks. Read-only: no request goes to Angel One. Display only: the strategy itself is unchanged."""
+    if engine.owned(instrument_id, _owner(request)) is None:
+        raise HTTPException(404, "Instrument not found")
+    snap = engine.snapshots.get(instrument_id)
+    if snap is None:
+        raise HTTPException(503, engine.errors.get(instrument_id, "Not evaluated yet"))
+    from app.live import candle_store
+    import datetime as dt
+    from app.paper_trading.engine import IST, intraday_candles
+    inst = snap["instrument"]
+    size, days = max(1, min(int(minutes), 60)), max(1, min(int(days), 30))
+    since = dt.datetime.now(IST).replace(tzinfo=None) - dt.timedelta(days=days)
+    stored = candle_store.get(str(inst.get("token")), "ONE_MINUTE", since)
+    rows = [(t.to_pydatetime(), float(r.open), float(r.high), float(r.low), float(r.close)) for t, r in stored.iterrows()]
+    ticks = [(t.replace(tzinfo=None), o, h, l, c) for t, o, h, l, c in engine.feed.builder.minutes(str(inst.get("token"))) if t.replace(tzinfo=None) >= since]
+    return {"contract": inst.get("trading_symbol"), "minutes": size, "candles": intraday_candles(rows, ticks, size, inst.get("exch_seg") or "NFO")}
+
+
 @app.post("/api/instruments")
 async def add_instrument(body: AddInstrument, request: Request):
     owner = _owner(request)

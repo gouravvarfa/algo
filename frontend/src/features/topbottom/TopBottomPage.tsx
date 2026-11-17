@@ -10,6 +10,8 @@ import { fresh, streamSpec, useLiveTicks } from '../../lib/stream'
 import type { IndexQuote, JournalEvent, Overview, Position, Snapshot, Trade } from '../../lib/types'
 import { RealSwitch } from './RealSwitch'
 import { TradeChart } from './TradeChart'
+
+type Candle15 = { time: number; open: number; high: number; low: number; close: number }
 import './topbottom.css'
 
 const SINCE = '2026-01-01T00:00:00+05:30'      // history starts on 1 Jan 2026
@@ -52,12 +54,18 @@ export default function TopBottomPage({ realOnly = false, only, top, bottom }: {
   const qc = useQueryClient()
   const { ov, found, add, needsAdd, futures } = useInstrumentId(realOnly ? only ?? [] : undefined)
   const [, setParams] = useSearchParams()
+  const [tf, setTf] = useState<'1D' | '15m'>(() => { try { return localStorage.getItem('dash.tf') === '15m' ? '15m' : '1D' } catch { return '1D' } })
+  const pickTf = (v: '1D' | '15m') => { setTf(v); try { localStorage.setItem('dash.tf', v) } catch { /* private window */ } }
   const [kind, setKind] = useState<'line' | 'candle'>(() => { try { return localStorage.getItem('dash.ctype') === 'candle' ? 'candle' : 'line' } catch { return 'line' } })
   const [fit, setFit] = useState(0)
   const [showAll, setShowAll] = useState(false)
 
   if (needsAdd && !add.isPending && !add.isError && !add.isSuccess) add.mutate()
 
+  const snapId = found?.instrument.id
+  // 15-minute chart candles (display only), asked only while that view is chosen; a viewing admin's page keeps the daily chart
+  const c15 = useQuery({ queryKey: ['tb', 'c15', snapId], queryFn: () => get<{ contract: string; candles: Candle15[] }>(`/api/instruments/${snapId}/candles?minutes=15&days=10`),
+    enabled: tf === '15m' && !!snapId && !ds.readOnly, refetchInterval: 30_000, retry: false })
   const snapQ = useQuery({
     queryKey: ['tb', ds.key, 'snap', found?.instrument.id],
     enabled: !!found,
@@ -78,7 +86,7 @@ export default function TopBottomPage({ realOnly = false, only, top, bottom }: {
   if (!snap) return <div className="page"><div className="skeleton" style={{ height: 120 }} /><div className="skeleton" style={{ height: 420 }} />{(add.isError || snapQ.isError) && <div className="alert">Could not load the strategy: {((add.error ?? snapQ.error) as Error)?.message}. Retrying.</div>}</div>
 
   const tabs = futures.length > 1 ? <div className="symtabs" role="tablist">{futures.map((f) => <button key={f.instrument.id} role="tab" aria-selected={f.instrument.id === found?.instrument.id} className={f.instrument.id === found?.instrument.id ? 'on' : ''} onClick={() => setParams({ s: f.instrument.symbol })}>{f.instrument.symbol}</button>)}</div> : null
-  return <Content tabs={tabs} snap={snap} ov={ov.data!} idx={idx.data} journal={jq.data} kind={kind} setKind={setKindSaved} fit={fit} onFit={() => setFit((f) => f + 1)}
+  return <Content tabs={tabs} snap={snap} ov={ov.data!} idx={idx.data} journal={jq.data} kind={kind} setKind={setKindSaved} tf={tf} pickTf={pickTf} c15={c15.data} fit={fit} onFit={() => setFit((f) => f + 1)}
     showAll={showAll} onToggleAll={() => setShowAll((s) => !s)} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} readOnly={ds.readOnly} updated={snapQ.dataUpdatedAt}
     realOnly={realOnly} top={top} bottom={bottom} />
 }
@@ -128,6 +136,28 @@ export function realStopNote(d: RealData | undefined, open: boolean): string {
   return 'stop order not at Angel One yet'
 }
 
+/** The chart on 15-minute candles: the same snapshot, its candles replaced, and the entry / exit arrows moved onto the 15-minute candle they fell in. */
+export function with15m(s: Snapshot, candles: Candle15[], exch?: string): Snapshot {
+  const open = exch === 'MCX' ? 9 * 60 : 9 * 60 + 15
+  const first = candles[0]?.time ?? 0
+  const bucket = (iso: string | null | undefined): number | null => {
+    if (!iso || iso.length < 16) return null
+    const t = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), +iso.slice(11, 13), +iso.slice(14, 16)) / 1000
+    const m = Math.floor((t % 86400) / 60)
+    if (m < open) return null
+    return t - (m - open) % 15 * 60
+  }
+  const marks: Snapshot['markers'] = []
+  for (const t of s.trades) {
+    const a = bucket(t.entry_date)
+    if (a != null && a >= first) marks.push({ time: a, position: t.direction === 'BUY' ? 'belowBar' : 'aboveBar', shape: t.direction === 'BUY' ? 'arrowUp' : 'arrowDown', color: t.direction === 'BUY' ? '#16a34a' : '#dc2626', text: `${t.direction} ${num(t.entry_price)}` } as Snapshot['markers'][number])
+    const b = bucket(t.exit_date)
+    if (b != null && b >= first && t.exit_price != null) marks.push({ time: b, position: 'inBar', shape: 'circle', color: '#64748b', text: `exit ${num(t.exit_price)}` } as Snapshot['markers'][number])
+  }
+  marks.sort((x, y) => x.time - y.time)
+  return { ...s, candles, markers: marks }
+}
+
 /** `perPoint`: rupees for a 1.00 move of this position (pnlUnits for the paper position, the real quantity's own for the Real view). */
 export function livePosition(p: Position, ltp: number, perPoint: number): Position {
   const pts = p.direction === 'BUY' ? ltp - p.entry_price : p.entry_price - ltp
@@ -148,7 +178,7 @@ function StopBar({ dir, entry, stop, ltp }: { dir: string; entry: number; stop: 
 
 interface CP {
   tabs?: ReactNode
-  snap: Snapshot; ov: Overview; idx?: IndexQuote; journal?: JournalEvent[]; kind: 'line' | 'candle'; setKind: (k: 'line' | 'candle') => void; fit: number; onFit: () => void
+  snap: Snapshot; ov: Overview; idx?: IndexQuote; journal?: JournalEvent[]; kind: 'line' | 'candle'; setKind: (k: 'line' | 'candle') => void; tf: '1D' | '15m'; pickTf: (v: '1D' | '15m') => void; c15?: { contract: string; candles: Candle15[] }; fit: number; onFit: () => void
   showAll: boolean; onToggleAll: () => void; onRefresh: () => void; refreshing: boolean; readOnly: boolean; updated: number
   realOnly?: boolean; top?: ReactNode; bottom?: ReactNode
 }
@@ -180,7 +210,7 @@ function StrategyOffBanner() {
   return <div className="banner warn" role="status"><span><b>Strategy is OFF.</b> {q.data.locked ? 'An admin switched it off; only an admin can switch it back on. ' : ''}Nothing new is evaluated: no signals, entries or exits. An open position is not closed.</span></div>
 }
 
-function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated, realOnly = false, top, bottom }: CP) {
+function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, tf, pickTf, c15, fit, onFit, showAll, onToggleAll, onRefresh, refreshing, readOnly, updated, realOnly = false, top, bottom }: CP) {
   const rq = useQuery({ queryKey: ['broker-tb-trades', s0.instrument.id], queryFn: () => get<RealData>(`/api/me/broker/tb/${s0.instrument.id}/trades`), enabled: !readOnly, refetchInterval: 10_000, retry: false })
   const [pick, setPick] = useState<'paper' | 'real' | null>(null)
   const hasReal = !!rq.data && (rq.data.real_on || rq.data.trades.length > 0 || !!rq.data.state?.position)
@@ -259,14 +289,16 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, fit, onFit, 
       <div className="tbgrid">
         <div className="card chartcard">
           <div className="card-head">
-            <h2>{inst.trading_symbol} · {inst.timeframe} · qty {inst.quantity}</h2>
+            <h2>{inst.trading_symbol} · {tf === '15m' ? '15 min' : inst.timeframe} · qty {inst.quantity}</h2>
 
             <span className="spacer" />
+            <span className="seg"><button className={tf === '1D' ? 'on' : ''} onClick={() => pickTf('1D')}>1D</button><button className={tf === '15m' ? 'on' : ''} onClick={() => pickTf('15m')}>15m</button></span>
             <span className="seg"><button className={kind === 'line' ? 'on' : ''} onClick={() => setKind('line')}>Line</button><button className={kind === 'candle' ? 'on' : ''} onClick={() => setKind('candle')}>Candles</button></span>
             <button className="btn sm" onClick={onFit}>Fit</button>
           </div>
           <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
-          <TradeChart snap={s} kind={kind} fitSignal={fit} liveLtp={liveLtp} />
+          <TradeChart snap={tf === '15m' && c15?.candles?.length ? with15m(s, c15.candles, inst.exch_seg) : s} kind={tf === '15m' ? 'candle' : kind} fitSignal={fit} liveLtp={liveLtp} />
+          {tf === '15m' && <p className="note">15-minute candles of {c15?.contract ?? inst.trading_symbol} for display (from the stored 1-minute candles and live ticks); the strategy itself still uses daily System Points.</p>}
           {s.engine_note && <p className={`note ${s.engine_warning ? 'neg' : ''}`} style={s.engine_warning ? { fontWeight: 650 } : undefined}>{s.engine_warning ? '⚠ ' : '✔ '}{s.engine_note}</p>}
           <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle (Angel One) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>
         </div>

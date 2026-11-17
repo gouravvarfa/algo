@@ -124,3 +124,15 @@ def test_nse_minutes_outside_the_session_are_left_out_from_18_nov_mcx_keeps_all(
     got = nse_session_only(old + new, "NFO")
     assert [(m.ts.day, m.ts.time()) for m in got] == [(17, dt.time(9, 8)), (17, dt.time(9, 15)), (17, dt.time(15, 32)), (18, dt.time(9, 15)), (18, dt.time(15, 29))]
     assert nse_session_only(new, "MCX") == new
+
+
+def test_intraday_candles_make_15_minute_bars_from_the_session_open():
+    from app.paper_trading.engine import intraday_candles
+    d = dt.date(2026, 11, 17)
+    rows = [(dt.datetime.combine(d, dt.time(9, m)), 100 + m, 101 + m, 99 + m, 100.5 + m) for m in range(0, 32)]         # MCX 09:00-09:31
+    bars = intraday_candles(rows, [], 15, "MCX")
+    assert len(bars) == 3 and bars[0]["open"] == 100 and bars[0]["high"] == 115 and bars[0]["low"] == 99 and bars[0]["close"] == 114.5
+    nse = intraday_candles([(dt.datetime.combine(d, dt.time(9, 8)), 1, 1, 1, 1), (dt.datetime.combine(d, dt.time(9, 15)), 2, 3, 1, 2)], [], 15, "NFO")
+    assert len(nse) == 1 and nse[0]["open"] == 2                                                                     # the 09:08 pre-open minute is left out
+    tk = intraday_candles(rows[:1], [(dt.datetime.combine(d, dt.time(9, 0)), 9, 9, 9, 9), (dt.datetime.combine(d, dt.time(9, 1)), 5, 6, 4, 5)], 15, "MCX")
+    assert tk[0]["open"] == 100 and tk[0]["close"] == 5                                                              # REST wins its minute; ticks fill the rest

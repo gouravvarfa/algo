@@ -71,6 +71,9 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
       fitted.current = false
       ch.priceScale('right').applyOptions({ autoScale: true })
     }
+    // intraday candles (the 15-minute view): show the time of day on the axis, not only the date
+    const c0 = snap.candles
+    ch.timeScale().applyOptions({ timeVisible: c0.length > 1 && c0[c0.length - 1].time - c0[c0.length - 2].time < 86400 })
     ls.setData(snap.candles.map((k) => ({ time: k.time as UTCTimestamp, value: k.close })))
     cs.setData(snap.candles.map((k) => ({ time: k.time as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close })))
     ls.applyOptions({ visible: kind === 'line' })

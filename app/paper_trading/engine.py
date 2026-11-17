@@ -222,6 +222,27 @@ def nse_session_only(mins: list, exch_seg: str) -> list:
     return [m for m in mins if m.ts.date() < NSE_SESSION_ONLY_FROM or lo <= m.ts.time() < hi]
 
 
+def intraday_candles(rest: list[tuple], ticks: list[tuple], size: int = 15, exch_seg: str = "NFO") -> list[dict]:
+    """1-minute (ts, o, h, l, c) rows -> `size`-minute chart candles counted from the session open (NSE 09:15, MCX 09:00), so a 15-minute candle is
+    09:15-09:30, 09:30-09:45 ... REST minutes win; tick minutes only fill the ones REST does not have. Times are IST wall time as unix seconds."""
+    by = {r[0].replace(second=0, microsecond=0): r for r in ticks}
+    by.update({r[0].replace(second=0, microsecond=0): r for r in rest})
+    open_t = dt.time(9, 0) if (exch_seg or "").upper() == "MCX" else dt.time(9, 15)
+    out: dict = {}
+    for ts in sorted(by):
+        _t, o, h, l, c = by[ts]
+        start = dt.datetime.combine(ts.date(), open_t)
+        if ts < start:
+            continue
+        b = start + dt.timedelta(minutes=((ts - start).seconds // 60) // size * size)
+        k = out.get(b)
+        if k is None:
+            out[b] = {"time": _ts(b), "open": o, "high": h, "low": l, "close": c}
+        else:
+            k["high"], k["low"], k["close"] = max(k["high"], h), min(k["low"], l), c
+    return list(out.values())
+
+
 def trim_partial_first_day(mins: list, lenient: bool = False) -> list:
     """The REST window starts N days back at the current time of day, so its FIRST day is usually only a partial session. A
     partial first day hides the morning crossings that happened before the window began (the engine then 'enters' on the

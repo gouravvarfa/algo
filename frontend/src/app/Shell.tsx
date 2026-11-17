@@ -13,20 +13,20 @@ import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
 import { IndexChart, MarketTicker, type TickerItem } from '../features/market/MarketTicker'
 
-interface Item { to: string; label: string; icon: IconName }
+interface Item { to: string; label: string; icon: IconName; tone?: string }
 
 const MAIN: Item[] = [
-  { to: '/top-bottom', label: 'Top Bottom', icon: 'chart' },
-  { to: '/real-trades', label: 'Real Trades', icon: 'money' },
-  { to: '/positions', label: 'Positions', icon: 'stack' },
-  { to: '/simulator', label: 'Options Simulator', icon: 'sim' },
-  { to: '/options-journal', label: 'Options Journal', icon: 'chain' },
-  { to: '/dry-run', label: 'Dry Run', icon: 'backtest' },
-  { to: '/builder', label: 'Strategy Builder', icon: 'builder' },
-  { to: '/backtesting', label: 'Backtesting', icon: 'backtest' },
-  { to: '/history', label: 'History', icon: 'history' },
-  { to: '/options', label: 'Option Chain', icon: 'chain' },
-  { to: '/settings', label: 'Settings', icon: 'settings' },
+  { to: '/top-bottom', label: 'Top Bottom', icon: 'chart', tone: 'blue' },
+  { to: '/real-trades', label: 'Real Trades', icon: 'money', tone: 'green' },
+  { to: '/positions', label: 'Positions', icon: 'stack', tone: 'purple' },
+  { to: '/simulator', label: 'Options Simulator', icon: 'sim', tone: 'sky' },
+  { to: '/options-journal', label: 'Options Journal', icon: 'chain', tone: 'orange' },
+  { to: '/dry-run', label: 'Dry Run', icon: 'backtest', tone: 'emerald' },
+  { to: '/builder', label: 'Strategy Builder', icon: 'builder', tone: 'violet' },
+  { to: '/backtesting', label: 'Backtesting', icon: 'backtest', tone: 'blue' },
+  { to: '/history', label: 'History', icon: 'history', tone: 'pink' },
+  { to: '/options', label: 'Option Chain', icon: 'chain', tone: 'teal' },
+  { to: '/settings', label: 'Settings', icon: 'settings', tone: 'slate' },
 ]
 function titleFor(pathname: string): string {
   const all = [...MAIN, { to: '/account', label: 'Account', icon: 'user' as IconName }]
@@ -90,8 +90,8 @@ export function Sidebar() {
 
 function NavItem({ item }: { item: Item }) {
   return (
-    <NavLink to={item.to} title={item.label} className={({ isActive }) => 'navlink' + (isActive ? ' active' : '')}>
-      <Icon name={item.icon} />
+    <NavLink to={item.to} title={item.label} className={({ isActive }) => 'navlink' + (item.tone ? ` toned tone-${item.tone}` : '') + (isActive ? ' active' : '')}>
+      {item.tone ? <i className="navicon"><Icon name={item.icon} /></i> : <Icon name={item.icon} />}
       <span>{item.label}</span>
     </NavLink>
   )
