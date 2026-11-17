@@ -26,7 +26,8 @@ function useInstrumentId(only?: string[]) {
     queryKey: ['tb', ds.key, 'overview'],
     queryFn: ds.overview,
     // closed: asked every 15 s (it was 60 s), so the page turns live within seconds of the open (MCX 09:00, NSE 09:15), not up to a minute late
-    refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : 15_000),
+    // closed: also ask on the whole minute, when every session opens, so the page turns live at 09:00:00 (it was 09:00:09, 16 Nov 2026)
+    refetchInterval: (q) => (q.state.data?.market_open || q.state.data?.mcx_open ? 10_000 : Math.min(15_000, 60_000 - (Date.now() % 60_000) + 300)),
   })
   const [params] = useSearchParams()
   const all1d = (ov.data?.items ?? []).filter((i, n, all) => i.instrument.timeframe === '1D' && !!i.instrument.expiry && all.findIndex((o) => o.instrument.symbol === i.instrument.symbol && o.instrument.timeframe === '1D') === n)

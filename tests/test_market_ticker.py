@@ -298,21 +298,29 @@ def test_todays_daily_candle_comes_from_todays_5_minute_candles_when_the_daily_a
     assert len(out) == 4 and (out[-1]["open"], out[-1]["high"], out[-1]["low"], out[-1]["close"]) == (200.0, 212.0, 199.0, 208.0)
 
 
-def test_a_closed_market_is_looked_at_every_few_seconds_so_the_open_is_not_missed(monkeypatch):
-    """The engine slept 300 s while the market was closed: begun at 08:57:30 it woke at 09:02:30, minutes after MCX opened."""
+def test_a_closed_market_wakes_on_the_whole_minute_so_the_open_is_not_missed():
+    """The engine slept 300 s while closed (08:57:30 -> 09:02:30), then looked every 5 s; now it wakes on the whole minute, when every session opens."""
     import asyncio
     from app.paper_trading import engine as em
-    calls = {"n": 0}
-    slept = []
+    base = 1_800_000_000                                   # a whole minute
+    t = {"now": base + 30.5}                               # 30.5 s past it, e.g. 08:59:30.5
+    looks = {"n": 0}
 
     class E:
         _wait_for_open = em.PaperEngine._wait_for_open
 
         def _any_market_open(self):
-            calls["n"] += 1
-            return calls["n"] >= 3                      # opens on the third look
+            looks["n"] += 1
+            return True                                    # the market opens on the next whole minute
 
     async def fake_sleep(s):
-        slept.append(s)
-    asyncio.run(E()._wait_for_open(sleep=fake_sleep))
-    assert sum(slept) == 15 and max(slept) == 5        # went within 5 s of the open, not after 300 s
+        t["now"] += s
+    asyncio.run(E()._wait_for_open(sleep=fake_sleep, clock=lambda: t["now"]))
+    assert looks["n"] == 1 and abs(t["now"] - (base + 60.02)) < 1e-6          # awake 0.02 s after the minute, at the first look
+
+    class Closed(E):
+        def _any_market_open(self):
+            return False
+    t["now"] = base + 10.0
+    asyncio.run(Closed()._wait_for_open(sleep=fake_sleep, clock=lambda: t["now"]))
+    assert abs(t["now"] - (base + 310.0)) < 1e-6                              # never longer than 300 s, as before

@@ -42,11 +42,14 @@ STALE_SIGNAL_S = 900.0
 NO_PRICE_MISS_S = 120.0
 ENTRY_BAND_PCT = 0.005
 MISMATCH_HALT_S = 20.0
+CF_GRACE_S = 300.0                 # a position carried from an earlier day that Angel One's positions book does not list yet in the session: this long before halting
 IDLE_POLL_S = 60.0                 # a released position (switch off) or a closed market: look at Angel One once a minute, not every 5 s
 GAP_WAIT_MAX_S = 1500.0            # a gap open: wait for the strategy's 15-minute decision at most this long (25 min), then the ordinary stop
 REAL_TICK_FALLBACK = 1.0           # price grid when the contract's tick is unknown: Rs 1 is a multiple of every NSE / MCX futures tick (0.05, 0.10, 0.20, 1), so the price is always valid
 EXCHANGES = ("NFO", "MCX")        # MCX quantity = lots x the scrip master's lotsize (its own unit: GOLD 1 = 1 kg lot, GOLDM 100 g, SILVER 30 kg), checked Nov 2026
 MAX_ORDERS_PER_DAY = 40
+CIRCUIT_STEPS = (0.025, 0.02)      # a stop refused for the exchange's daily price limit goes again this far from yesterday's close (MCX gold's limit is 3%)
+MIN_ROUND_GAP_S = 1.1              # a round woken early by a signal still keeps this gap (Angel One answers about one order-book read a second)
 JOIN_STOP_PCT = 0.01               # a real account that JOINS the strategy's side is a fresh trade: entry +/- 1% (the strategy's entry-day stop), owner 16 Nov 2026
 JOIN_BE_PCT_DEFAULT = 2.0          # its breakeven: the instrument's own rule (2% index / MCX, 3% stocks) from the snapshot
 TICK_S = 5.0
@@ -218,10 +221,14 @@ class RealTB:
         self._task: asyncio.Task | None = None
         self._fail_since: dict[str, dt.datetime] = {}               # per person: since when every round's first Angel One read has failed
         self._relogin_at: dict[str, dt.datetime] = {}
+        self._wake = asyncio.Event()                                 # a signal arrived: the next round starts at once, not after TICK_S
 
     # ------------------------------------------------------------------ what the paper engine tells us (cheap, synchronous, never raises into it)
     def handle(self, events: list[dict], snap: dict, now: dt.datetime) -> None:
-        self.queue.extend(e for e in events if not e.get("backfill"))
+        fresh = [e for e in events if not e.get("backfill")]
+        self.queue.extend(fresh)
+        if fresh:
+            self._wake.set()                                         # the order goes out now, not up to 5 s later (owner, 17 Nov 2026)
 
     def sync(self, inst_id: str, owner, symbol: str, snap: dict, now: dt.datetime) -> None:
         if not snap.get("real_ready", True):
@@ -470,6 +477,54 @@ class RealTB:
             a["pending_entry"]["join"] = True                 # its stop is a fresh trade's (entry +/- 1%), set from the fill price
         self._save(c, a)
 
+    def _lift_offhours_halt(self, c, a: dict, now: dt.datetime) -> bool:
+        """A halt the positions check raised OUTSIDE the market hours is lifted: that check no longer runs outside the session, because Angel One
+        rebuilds its positions book overnight (17 Nov 2026, 07:01: GOLDTEN read 0 while the position was carried). Any other halt stays for a person."""
+        if not str(a.get("halted") or "").startswith("Angel One shows a net quantity of"):
+            return False
+        ev = next((e for e in reversed(a.get("events", [])) if str(e.get("text", "")).startswith("HALTED: Angel One shows a net quantity of")), None)
+        if ev is None:
+            return False
+        session = ((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("session", "NSE")
+        if self._market_open(session, _p(ev["at"])):
+            return False                                                  # raised in the session: a real difference, a person looks
+        a["halted"] = None
+        a.pop("mismatch_since", None)
+        self._ev(a, now, f"halt lifted: it was raised at {ev['at']}, outside the market hours, while Angel One rebuilds its positions book; "
+                         "that check now runs only in the session")
+        audit.append(c, "broker.tb.halt_lifted", actor_id=None, actor_role="system", target_type="user", target_id=a["user_id"],
+                     detail={"instrument": a["symbol"], "halted_at": ev["at"], "why": "raised outside the session by the positions check"})
+        return True
+
+    def _circuit_clamp(self, a: dict, p: dict, msg: str, now: dt.datetime) -> bool:
+        """A stop refused for the exchange's daily price limit (the MCX circuit): it goes again INSIDE the limit instead of closing the position
+        (owner, 17 Nov 2026: the GOLDTEN stop 4.6% away was refused and the trade was closed). Yesterday's close +/- 2.5%, then 2%; after that the
+        safety exit as before. True when a closer stop was set: the next round places it."""
+        if "circuit" not in (msg or "").lower():
+            return False
+        today = now.date().isoformat()
+        cap = a.get("circuit_cap") or {}
+        step = cap.get("step", -1) + 1 if cap.get("day") == today else 0
+        if step >= len(CIRCUIT_STEPS):
+            return False
+        snap = self.snaps.get(a["instrument_id"]) or {}
+        base = snap.get("prev_close") or snap.get("ltp") or p.get("entry_price")
+        if not base:
+            return False
+        pct = CIRCUIT_STEPS[step]
+        tick = p.get("tick") or 1.0
+        level = dryrun.rnd(float(base) * (1 + pct), tick, "down") if p["side"] == "SELL" else dryrun.rnd(float(base) * (1 - pct), tick, "up")
+        cur = a.get("stop_target")
+        if cur is not None and ((p["side"] == "SELL" and level >= cur) or (p["side"] == "BUY" and level <= cur)):
+            return False                                              # the stop is already inside that: the refusal is not about the distance
+        a["circuit_cap"] = {"day": today, "step": step, "level": level}
+        a["stop_target"] = level
+        if p.get("join"):
+            p["join"]["stop"] = level
+        self._ev(a, now, f"stop refused for the exchange's daily price limit: it goes again at {level} (yesterday's close {base} "
+                         f"{'+' if p['side'] == 'SELL' else '-'}{pct * 100:g}%), inside the limit, instead of closing the position")
+        return True
+
     def _join_retry_after(self, a: dict, today: str) -> dt.datetime | None:
         """When today's join ended through the stop-rejection safety exit (Angel One refused the stop, not the strategy): the moment it closed, so a
         fresh re-cross after it may open the real position ONCE more today (owner, 16 Nov 2026). None otherwise."""
@@ -659,6 +714,8 @@ class RealTB:
             a["released"] = False                                           # real is on again (account back on REAL, or the switch on again) with a position still open
             self._ev(a, now, f"real orders are on again: this app manages the open position ({a['position']['contract']}) and its stop again")
         if a["halted"]:
+            self._lift_offhours_halt(c, a, now)
+        if a["halted"]:
             self._save(c, a)
             return
         await self._reconcile(c, broker, a, now)
@@ -721,7 +778,7 @@ class RealTB:
             elif st in ("rejected", "cancelled"):
                 self._mark(c, o, a, st, b.get("text") or st)
                 self._ev(a, now, f"{o['role']} order {st}" + (" (confirmed by Angel One's order book)" if was_cancelling else f" by Angel One: {b.get('text') or ''}"), order=o["id"])
-                if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling:
+                if o["role"] == "stop" and st == "rejected" and a["position"] and not was_cancelling and not self._circuit_clamp(a, a["position"], b.get("text") or "", now):
                     if a["position"].get("join"):
                         a["join_safety_exit"] = True
                     a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
@@ -809,6 +866,12 @@ class RealTB:
         While this app is flat it only notes the person's own quantity (the baseline); while it holds a position, a difference halts and a person looks."""
         if not (a["position"] or a["pending_entry"] or a["orders"]):
             return
+        session = ((a["pending_entry"] or {}).get("contract") or {}).get("session") or ((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("session", "NSE")
+        if not self._market_open(session, now):
+            # Angel One rebuilds its positions book outside the session (17 Nov 2026, 07:01: the GOLDTEN position carried overnight read 0 and this
+            # halted it before the open, so no stop would have gone out at 09:00). Nothing is compared until the market opens.
+            a.pop("mismatch_since", None)
+            return
         try:
             pos = await broker.positions()
         except Exception:
@@ -857,7 +920,9 @@ class RealTB:
             a.pop("mismatch_since", None)
             return
         a.setdefault("mismatch_since", _s(now))
-        if _age(a["mismatch_since"], now) >= MISMATCH_HALT_S:                      # positions reports can lag a few seconds behind a fill
+        carried = bool(a["position"] and a["position"].get("entry_at") and _p(a["position"]["entry_at"]).date() < now.date())
+        wait = CF_GRACE_S if carried and net == base else MISMATCH_HALT_S          # a carried position the day's book does not list yet: a few minutes, not 20 s
+        if _age(a["mismatch_since"], now) >= wait:                                 # positions reports can lag a few seconds behind a fill
             own = f" ({base} of it held by hand before this app traded)" if base else ""
             self._halt(c, a, now, f"Angel One shows a net quantity of {net} in {contract}{own} but this app holds {mine}. If you changed your own position in this contract, check it, then clear the halt.")
             a.pop("mismatch_since", None)
@@ -1029,6 +1094,9 @@ class RealTB:
             raw = prot if prot is not None else paper.get("active_stop")
             if raw is not None:
                 target = dryrun.rnd(float(raw), p["tick"])
+                cap = a.get("circuit_cap") or {}
+                if cap.get("day") == now.date().isoformat():          # today the exchange refused anything beyond this
+                    target = min(target, cap["level"]) if p["side"] == "SELL" else max(target, cap["level"])
                 if a["stop_target"] is None or abs(target - a["stop_target"]) >= p["tick"] - 1e-9:
                     if prot is not None or dryrun.may_move_stop(p["side"], a["stop_target"], target, p, now):
                         a["stop_target"] = target
@@ -1095,7 +1163,7 @@ class RealTB:
                 return
             payload = dryrun._stop_order(ct, a["symbol"], p["side"], p["qty"], a["stop_target"])
             o = await self._place(c, broker, a, now, "stop", payload, "stop-loss for the open position", ct)
-            if o is not None and o["state"] == "rejected":
+            if o is not None and o["state"] == "rejected" and not self._circuit_clamp(a, p, o.get("message") or "", now):
                 if p.get("join"):
                     a["join_safety_exit"] = True
                 a["exit_since"] = _s(now - dt.timedelta(seconds=STOP_GRACE_S + 1))
@@ -1198,13 +1266,21 @@ class RealTB:
 
     async def _loop(self) -> None:
         while True:
+            self._wake.clear()
+            started = time.monotonic()
             try:
                 await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("real order loop")
-            await asyncio.sleep(TICK_S)
+            try:
+                await asyncio.wait_for(self._wake.wait(), TICK_S)       # every TICK_S, or at once when a signal arrives
+            except asyncio.TimeoutError:
+                pass
+            gap = MIN_ROUND_GAP_S - (time.monotonic() - started)
+            if gap > 0:
+                await asyncio.sleep(gap)
 
     async def stop(self) -> None:
         if self._task:

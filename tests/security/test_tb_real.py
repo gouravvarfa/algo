@@ -908,3 +908,115 @@ def test_a_join_closed_by_a_refused_stop_before_this_rule_is_read_from_the_event
     assert rt._join_retry_after(a, "2026-11-16") == dt.datetime(2026, 11, 16, 9, 52, 16)
     assert rt._join_retry_after(dict(a, join_retry_day="2026-11-16"), "2026-11-16") is None
     assert rt._join_retry_after({"events": a["events"][:1]}, "2026-11-16") is None                 # closed some other way: no extra try
+
+
+@async_test
+async def test_a_stop_refused_for_the_daily_price_limit_goes_again_inside_it_instead_of_closing(env):
+    """17 Nov 2026: the GOLDTEN stop 4.6% away was refused for MCX's circuit limit and the safety exit closed the trade."""
+    from app.paper_trading import dryrun
+    env.sync(None)
+    await go(env, env.ev("ENTRY", "BUY", active_stop=47000.0))
+    env.fb.fill(env.fb.last("entry")[0], 50002.5)
+    far = {"direction": "BUY", "entry_price": 50000.0, "active_stop": 47000.0}                       # 6% away
+    env.sync(far, MON)
+    await env.rt.tick(secs(5))
+    sid, _ = env.fb.last("stop")
+    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "Your order price exceeds the circuit limit. Please adjust your order"
+    await env.rt.tick(secs(10))
+    a = env.state()
+    first = dryrun.rnd(50001.0 * 0.975, 0.05, "up")                                                   # yesterday unknown here: the live price - 2.5%
+    assert a["position"] and not a["exit_since"] and a["circuit_cap"]["step"] == 0 and a["stop_target"] == first
+    await env.rt.tick(secs(15))
+    sid2, stop2 = env.fb.last("stop")
+    assert sid2 != sid and float(stop2["p"]["triggerprice"]) < first                                   # placed again, inside the limit
+    env.sync(far, secs(20))
+    await env.rt.tick(secs(20))
+    assert env.state()["stop_target"] == first                                                         # the far stop is not asked for again today
+    env.fb.orders[sid2]["status"], env.fb.orders[sid2]["text"] = "rejected", "circuit limit"
+    await env.rt.tick(secs(25))
+    assert env.state()["stop_target"] == dryrun.rnd(50001.0 * 0.98, 0.05, "up") and env.state()["circuit_cap"]["step"] == 1
+    await env.rt.tick(secs(30))
+    sid3, _ = env.fb.last("stop")
+    env.fb.orders[sid3]["status"], env.fb.orders[sid3]["text"] = "rejected", "circuit limit"
+    await env.rt.tick(secs(35))
+    assert env.state()["exit_since"]                                                                   # after 2.5% and 2%: the safety exit, as before
+
+
+@async_test
+async def test_a_stop_refused_for_another_reason_still_exits_at_once(env):
+    sid = await open_long(env)
+    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "RMS: margin shortfall"
+    await env.rt.tick(secs(10))
+    assert env.state()["exit_since"] and not env.state().get("circuit_cap")
+
+
+def test_a_signal_wakes_the_executor_at_once_instead_of_after_5_seconds(monkeypatch):
+    import time as _time
+    rounds = []
+    rt = tb_real.RealTB(broker_for=None)
+
+    async def tick(now=None):
+        rounds.append(_time.monotonic())
+    monkeypatch.setattr(rt, "tick", tick)
+    monkeypatch.setattr(tb_real, "MIN_ROUND_GAP_S", 0.0)
+
+    async def run():
+        task = asyncio.create_task(rt._loop())
+        await asyncio.sleep(0.05)
+        rt.handle([{"event": "ENTRY", "backfill": False}], {}, None)
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    asyncio.run(run())
+    assert len(rounds) == 2 and rounds[1] - rounds[0] < 1.0                                            # TICK_S is 5 s: the signal did not wait for it
+
+
+# ---------------------------------------------------------------- Angel One rebuilds its positions book overnight (17 Nov 2026, 07:01)
+@async_test
+async def test_outside_the_session_the_positions_book_is_not_compared(env):
+    await open_long(env)
+
+    async def empty():
+        return []
+    env.fb.positions = empty
+    morning = dt.datetime(2026, 11, 10, 7, 1, 40)                                                    # NSE closed: the book is being rebuilt
+    await env.rt.tick(morning)
+    await env.rt.tick(morning + dt.timedelta(seconds=65))
+    assert not env.state()["halted"] and env.state()["position"]
+
+
+@async_test
+async def test_a_carried_position_missing_from_the_days_book_halts_only_after_a_few_minutes(env):
+    await open_long(env)                                                                             # Monday 10:00
+
+    async def empty():
+        return []
+    env.fb.positions = empty
+    t = dt.datetime(2026, 11, 10, 9, 16)                                                             # Tuesday, in the session, the book still empty
+    await env.rt.tick(t)
+    await env.rt.tick(t + dt.timedelta(seconds=30))
+    assert not env.state()["halted"]                                                                 # not after 20 s: the day's book may come late
+    await env.rt.tick(t + dt.timedelta(seconds=305))
+    assert env.state()["halted"]                                                                     # still missing after 5 minutes: a person looks
+
+
+@async_test
+async def test_a_halt_raised_outside_the_session_by_the_positions_check_is_lifted_and_no_other(env):
+    await open_long(env)
+    a = env.state()
+    a["halted"] = "Angel One shows a net quantity of 0 in BANKNIFTY25NOV26FUT but this app holds 30. If you changed your own position in this contract, check it, then clear the halt."
+    a["events"].append({"at": "2026-11-10 07:01:40", "text": "HALTED: " + a["halted"]})
+    await env.rt.tick(dt.datetime(2026, 11, 10, 8, 30))
+    assert env.state()["halted"] is None and any("halt lifted" in e["text"] for e in env.state()["events"])
+    a = env.state()
+    a["halted"] = "Angel One shows a net quantity of 0 in BANKNIFTY25NOV26FUT but this app holds 30. If you changed your own position in this contract, check it, then clear the halt."
+    a["events"].append({"at": "2026-11-10 10:01:40", "text": "HALTED: " + a["halted"]})              # raised IN the session: a real difference
+    await env.rt.tick(dt.datetime(2026, 11, 10, 10, 2))
+    assert env.state()["halted"]
+    a["halted"] = "two entry orders filled: this app now holds 60"
+    a["events"].append({"at": "2026-11-10 07:05:00", "text": "HALTED: two entry orders filled: this app now holds 60"})
+    await env.rt.tick(dt.datetime(2026, 11, 10, 10, 3))
+    assert env.state()["halted"].startswith("two entry orders")                                      # any other halt stays for a person
