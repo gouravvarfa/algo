@@ -104,3 +104,94 @@ def test_flat_old_contract_enters_the_new_one_only_on_a_genuine_crossing():
     r = run([OCT, NOV], {"1": daily(0), "2": daily(30)}, {"1": oct_m, "2": nov_m})
     nov_trades = [t for t in r.trades if t.contract == "BANKNIFTYNOV"]
     assert nov_trades and nov_trades[0].direction == "BUY" and not nov_trades[0].rolled_in and nov_trades[0].entry_price == 140.0
+
+
+# ---------------------------------------------------------------- hold rule (owner, 17 Nov 2026)
+import pytest  # noqa: E402
+
+from app.live import contracts as ct  # noqa: E402
+
+
+@pytest.fixture
+def hold(monkeypatch):
+    monkeypatch.setattr(ct, "HOLD_ROLL_FROM", D(2026, 1, 1))       # the synthetic Oct contract (cutoff 19 Oct, expiry 27 Oct) follows the hold rule
+
+
+def run_h(mins, now, cap=None):
+    async def gd(c):
+        return {"1": daily(0), "2": daily(30)}[c.token]
+
+    async def gm(c):
+        return mins[c.token]
+
+    return asyncio.run(ce.evaluate(contracts=[OCT, NOV], from_dt=dt.datetime(2026, 10, 1), now=now, symbol="BANKNIFTY", get_daily=gd, get_minutes=gm,
+                                   daily_engine=lambda c, df: [], reconstruct=lambda r, d: (None, []), entry_day_stop_pct=0.01, struct_cap_distance=cap))
+
+
+def days(shift, price, ds):
+    out = []
+    for d in ds:
+        out += flat(d, shift, price)
+    return out
+
+
+def test_hold_limit_dates():
+    assert ct.hold_limit(D(2026, 12, 29), "NFO", "BANKNIFTY") == D(2026, 12, 29)                 # NFO: the expiry day itself
+    assert ct.hold_limit(D(2026, 11, 30), "MCX", "GOLDTEN") == D(2026, 11, 25)                   # tender 26, 27, 30 Nov: held until the 25th's open
+    assert ct.hold_limit(D(2026, 11, 30), "MCX", "SILVERMIC") == D(2026, 11, 25)
+    assert ct.hold_limit(D(2026, 11, 30), "MCX", "CRUDEOIL") == D(2026, 11, 23)                  # unknown MCX symbol: 5-day window -> the cutoff itself
+    assert ct.hold_limit(D(2026, 12, 31), "MCX", "GOLDTEN") == D(2026, 12, 28)
+    assert ct.hold_rule(D(2026, 11, 23)) is False and ct.hold_rule(D(2026, 11, 30)) is True      # NFO Nov (cutoff 16 Nov) stays as it rolled
+
+
+def test_open_position_is_held_past_the_cutoff_in_its_own_contract(hold):
+    nov = days(30, 112.0, (19, 20, 21))
+    r = run_h({"1": oct_with_open_buy(), "2": nov}, dt.datetime(2026, 10, 21, 11, 0))
+    assert [(t.contract, t.direction, t.exit_reason) for t in r.trades] == [("BANKNIFTYOCT", "BUY", "END_OF_BACKTEST")]
+    assert r.active.trading_symbol == "BANKNIFTYOCT" and r.rolls == [] and r.segments[-1].end is None
+    assert any("HELD PAST THE CUTOFF" in e[1] for e in r.trades[0].events)
+
+
+def test_a_system_point_in_the_window_closes_the_old_contract_and_reverses_into_the_next(hold):
+    oct_m = oct_with_open_buy()
+    oct_m = [m for m in oct_m if m.ts.date() != D(2026, 10, 20)] + minutes(20, 0, [112.0] * 5 + [89.0] * 40)
+    oct_m.sort(key=lambda m: m.ts)
+    nov = flat(19, 30, 112.0) + minutes(20, 30, [112.0] * 5 + [89.0] * 40) + flat(21, 30, 89.0)
+    r = run_h({"1": oct_m, "2": nov}, dt.datetime(2026, 10, 21, 11, 0))
+    old, new = r.trades[0], r.trades[1]
+    assert (old.contract, old.direction, old.exit_reason, old.exit_date) == ("BANKNIFTYOCT", "BUY", "STOP_LOSS_REVERSAL", dt.datetime(2026, 10, 20, 9, 20))
+    assert (new.contract, new.direction, new.rolled_in, new.entry_date) == ("BANKNIFTYNOV", "SELL", False, dt.datetime(2026, 10, 20, 9, 20))
+    assert new.entry_price == round(old.exit_price + 30, 2) and new.entry_day_sl == round(new.entry_price * 1.01, 2)     # Nov's price at that minute, 1% stop
+    assert new.initial_sl == 140.0                                                                                          # Nov's own Top
+    assert not [t for t in r.trades if t.contract == "BANKNIFTYOCT" and t.entry_date.date() >= D(2026, 10, 19)]           # nothing new in Oct after its cutoff
+    assert r.rolls[-1]["kind"] == "REVERSE" and r.active.trading_symbol == "BANKNIFTYNOV"
+
+
+def test_no_system_point_until_the_hold_limit_rolls_at_that_open(hold):
+    ds = (19, 20, 21, 22, 23, 26, 27)
+    oct_m = [m for m in oct_with_open_buy() if m.ts.date() < D(2026, 10, 19)] + days(0, 112.0, ds)
+    r = run_h({"1": oct_m, "2": days(30, 112.0, ds)}, dt.datetime(2026, 10, 27, 11, 0))
+    old, new = r.trades[0], r.trades[1]
+    assert (old.exit_reason, old.exit_date, old.exit_price) == (ce.ROLLED, dt.datetime(2026, 10, 27, 9, 15), 112.0)
+    assert (new.contract, new.direction, new.rolled_in, new.entry_price) == ("BANKNIFTYNOV", "BUY", True, 142.0)
+    assert new.entry_day_sl == round(142 * 0.99, 2) and r.rolls[-1]["kind"] == "ROLL"
+
+
+def test_before_the_hold_limit_opens_the_position_is_still_held(hold):
+    ds = (19, 20, 21, 22, 23, 26)
+    oct_m = [m for m in oct_with_open_buy() if m.ts.date() < D(2026, 10, 19)] + days(0, 112.0, ds)
+    r = run_h({"1": oct_m, "2": days(30, 112.0, ds)}, dt.datetime(2026, 10, 27, 8, 0))
+    assert r.trades[-1].exit_reason == "END_OF_BACKTEST" and r.active.trading_symbol == "BANKNIFTYOCT"
+
+
+def test_a_one_percent_stop_in_the_window_leaves_the_strategy_flat_with_no_entry_that_day(hold):
+    oct_m = [m for m in oct_with_open_buy() if m.ts.date() < D(2026, 10, 19)] + flat(19, 0, 112.0) + minutes(20, 0, [112.0] * 5 + [108.0] * 40) + flat(21, 0, 108.0)
+    nov = flat(19, 30, 112.0) + minutes(20, 30, [112.0] * 5 + [108.0] * 3 + [141.0] * 37) + flat(21, 30, 108.0)          # Nov crosses its Top 140 the same day
+    r = run_h({"1": oct_m, "2": nov}, dt.datetime(2026, 10, 21, 11, 0), cap=0.02)
+    assert r.trades[0].exit_reason == "CAPPED_1_PERCENT_STOP_EXIT"
+    assert not [t for t in r.trades if t.contract == "BANKNIFTYNOV" and t.entry_date.date() == D(2026, 10, 20)]
+    assert r.active.trading_symbol == "BANKNIFTYNOV"
+
+
+def test_flat_at_the_cutoff_the_next_contract_starts_that_day_as_before(hold):
+    test_flat_old_contract_enters_the_new_one_only_on_a_genuine_crossing()

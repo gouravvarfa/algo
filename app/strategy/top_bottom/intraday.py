@@ -121,6 +121,11 @@ def run_intraday(
     next_day_reentry_from: dt.date | None = NEXT_DAY_REENTRY_FROM,
     session: Session = NSE,                   # NSE 09:15-15:30; MCX gold / silver start at 09:00
     flat_from: dt.datetime | None = None,     # the moment the instrument was added: a position held then is not taken over (see below)
+    entries_from_day: dt.date | None = None,  # hold rule: from this day (the contract's cutoff) no NEW position here; the open one is still managed
+    start_at: dt.datetime | None = None,      # hold rule: this contract takes over at this moment (earlier minutes only give the day its open / first candle)
+    roll_fill: float | None = None,           # the take-over fill (default: that minute's open)
+    roll_reverse: bool = False,               # the take-over is the REVERSAL of the previous contract's position (closed by its stop / System Point)
+    no_entry_day: dt.date | None = None,      # a 1% stop closed the previous contract's position on this day: nothing more is entered that day
 ) -> IntradayResult:
     """Pure function: completed daily history + 1-minute candles in, trades out.
     `daily_*` must contain only daily candles of days BEFORE or EQUAL to the
@@ -142,7 +147,17 @@ def run_intraday(
     struct_cap_distance (optional, needs entry_day_stop_pct): from the day AFTER entry, every day, if the structural stop (latest opposite
     System Point, trailed as usual) is this fraction or MORE away from the ENTRY price on the LOSS side (a stop trailed into profit is never capped), the stop stays at entry -/+ entry_day_stop_pct
     instead (fixed, never trails); once the structural stop is closer than that, it takes over. If the 1% stop is hit the position closes
-    (CAPPED_1_PERCENT_STOP_EXIT) and the strategy stays FLAT until a System Point confirmed after the exit is crossed (no reverse)."""
+    (CAPPED_1_PERCENT_STOP_EXIT) and the strategy stays FLAT until a System Point confirmed after the exit is crossed (no reverse).
+
+    Contract hold rule (owner, 17 Nov 2026; orchestrated by app/live/chain_eval.py):
+    entries_from_day: from that day on nothing NEW is opened in this contract (no entry, no reversal, no gap entry / gap reverse); a position
+    already open keeps its stop, breakeven and gap rules until they close it. The chain then puts the next trade into the next contract.
+    start_at (+ roll_in, roll_fill, roll_reverse): the next contract takes over at that moment. Minutes before it only give the day its open and
+    first 15-minute candle; nothing is traded before it. With roll_in the position is opened at the first minute at or after start_at, at
+    roll_fill (default: that minute's open), with this contract's OWN System Points as above (anchor, 1% entry-day stop). roll_reverse=True: it
+    is the reversal of the previous contract's position (closed by its stop / System Point), so it is a fresh entry (it counts towards the
+    day's entries) and not marked rolled_in. no_entry_day: a 1% stop closed the previous contract's position that day, so nothing more is
+    entered that day (the same rule as a 1% stop inside one contract)."""
     swings = detect_confirmed_swings(daily_dates, daily_closes, 1, 1)
     by_day: dict[dt.date, list[Minute]] = {}
     for m in minutes:
@@ -172,14 +187,19 @@ def run_intraday(
         flat_from = flat_from.replace(tzinfo=tz) if tz is not None else flat_from.replace(tzinfo=None)
     if flat_from is not None and (not minutes or flat_from <= min(m.ts for m in minutes)):
         flat_from = None                    # added before these minutes begin: the position running then is the strategy's own
+    if start_at is not None and minutes and (start_at.tzinfo is None) != (minutes[0].ts.tzinfo is None):
+        tz = minutes[0].ts.tzinfo
+        start_at = start_at.replace(tzinfo=tz) if tz is not None else start_at.replace(tzinfo=None)
     flat_done = False
     fresh_top: float | None = None          # after the add: the Top / Bottom price was already beyond at that moment, so it is not a fresh crossing
     fresh_bot: float | None = None
-    pct_stop_days: set[dt.date] = set()     # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
+    pct_stop_days: set[dt.date] = {no_entry_day} if no_entry_day else set()   # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
 
     def can_enter(ts) -> bool:
         # decided with the user (12 Nov 2026): the day the 1% stop is hit, nothing more is entered (SILVERMIC 11 Nov: the 1% stop at 20:03 was
         # followed by a SELL at 20:07 on the older Bottom). From the next day the latest Top / Bottom trigger as usual.
+        if entries_from_day is not None and ts.date() >= entries_from_day:
+            return False                    # hold rule: past its cutoff this contract only manages the position it already holds
         return day_entries.get(ts.date(), 0) < MAX_TRADES_PER_DAY and ts.date() not in pct_stop_days
 
     def new_trade(direction, level, fill, anchor, ts, day_i, gap_state=None, count=True) -> Trade:
@@ -204,6 +224,25 @@ def run_intraday(
         if reason == "STOP_LOSS_REVERSAL" and ts.date() == t.entry_date.date():
             t.events.append((ts, WHIPSAW_EVENT))
         trades.append(t)
+
+    def take_over(ts: dt.datetime, day_i: int, fill: float, top_now: float | None, bot_now: float | None) -> None:
+        """The previous contract's position continues here (roll_in) or is reversed into here (roll_reverse), with THIS contract's own System Points."""
+        nonlocal open_t, block_after, rolled_done
+        rolled_done = True
+        anchor_r = bot_now if roll_in == "BUY" else top_now
+        level_r = top_now if roll_in == "BUY" else bot_now
+        what = "reversal" if roll_reverse else "position"
+        if anchor_r is None or (roll_reverse and not can_enter(ts)):
+            why = (f"it has no confirmed {'Bottom' if roll_in == 'BUY' else 'Top'} yet" if anchor_r is None else "no more entries are allowed today")
+            notes.append({"kind": "ROLL_NO_ANCHOR", "side": roll_in, "pct": 0.0, "time": ts.isoformat(), "title": f"{'Reversal' if roll_reverse else 'Roll'} skipped",
+                          "detail": f"The {roll_in} {what} could not be taken in this contract because {why}. The strategy stays flat."})
+            return
+        open_t = new_trade(roll_in, level_r if level_r is not None else fill, fill, anchor_r, ts, day_i, count=roll_reverse)
+        open_t.rolled_in = not roll_reverse
+        open_t.events.append((ts, (f"REVERSAL INTO THIS CONTRACT: the previous contract's position was closed by its stop / System Point, so the {roll_in} is "
+                                   f"taken here at {_f(fill)} (stop {_f(anchor_r)} from this contract's own System Point)") if roll_reverse else
+                              f"ROLL IN: {roll_in} continued in this contract at {_f(fill)} (stop {_f(anchor_r)} from this contract's own System Point)"))
+        block_after = None
 
     last_day = max(by_day) if by_day else None
     for day in sorted(by_day):
@@ -309,18 +348,8 @@ def run_intraday(
                 open_t.active_stop = top
                 open_t.stop_history.append((first.ts, top))
 
-        if roll_in and open_t is None and not rolled_done:
-            rolled_done = True
-            anchor_r = bot if roll_in == "BUY" else top
-            level_r = top if roll_in == "BUY" else bot
-            if anchor_r is not None:
-                open_t = new_trade(roll_in, level_r if level_r is not None else first.open, first.open, anchor_r, first.ts, i, count=False)
-                open_t.rolled_in = True
-                open_t.events.append((first.ts, f"ROLL IN: {roll_in} continued in this contract at {_f(first.open)} (stop {_f(anchor_r)} from this contract's own System Point)"))
-                block_after = None
-            else:
-                notes.append({"kind": "ROLL_NO_ANCHOR", "side": roll_in, "pct": 0.0, "time": first.ts.isoformat(), "title": "Roll skipped: no System Point",
-                              "detail": f"The {roll_in} position could not be continued in this contract because it has no confirmed {'Bottom' if roll_in == 'BUY' else 'Top'} yet. The strategy stays flat."})
+        if roll_in and open_t is None and not rolled_done and (start_at is None or first.ts >= start_at):
+            take_over(first.ts, i, roll_fill if roll_fill is not None else first.open, top, bot)
         # ---- does the gap protocol apply today? ------------------------------
         mode, mode_side, mode_level, mode_anchor = None, None, None, None
         gap_pct = ((day_open - prev_close) / prev_close * 100.0) if prev_close else 0.0
@@ -380,6 +409,8 @@ def run_intraday(
                 t.stop_history.append((c.ts, be))
 
         for c in day_min:
+            if start_at is not None and c.ts < start_at:
+                continue                       # before this contract takes over: the minute only gives the day its open / first 15-minute candle
             if flat_from is not None and not flat_done and c.ts >= flat_from:
                 # decided with the user (13 Nov 2026): an instrument added today starts FLAT; the position its history holds at that moment is
                 # not taken over, and the first entry is a fresh crossing of the latest Top (BUY) / Bottom (SELL) after the add
@@ -392,6 +423,11 @@ def run_intraday(
                 fresh_bot = bot if bot is not None and c.open < bot else None
             clock = c.ts.time()
             used_high = used_low = False  # a candle's high/low can each be "used" once on its assumed path
+            if roll_in and open_t is None and not rolled_done:
+                # hold rule: the take-over happens inside the day (the previous contract's position closed at this minute)
+                take_over(c.ts, i, roll_fill if roll_fill is not None else c.open, top, bot)
+                if open_t is not None:
+                    mode = None                # the day's gap decision was made for a flat strategy; this position is managed by its own stop from now
             # ------- gap decision pending: nothing fires before 09:30 ---------
             if mode is not None and clock < d_second:
                 continue

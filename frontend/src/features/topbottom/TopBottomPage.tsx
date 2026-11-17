@@ -351,7 +351,7 @@ function TradesTable({ rows }: { rows: Trade[] }) {
           <tr key={`${t.n}-${t.entry_date}`} className={t.live ? '' : 'replay'}>
             <td className="num">{t.n}</td>
             <td className="l"><span className={`badge ${t.direction}`}>{t.direction}</span></td>
-            <td className="l">{(t.contract ?? '').replace(/^[A-Z&-]+?(?=\d{2}[A-Z]{3}\d{2}FUT$)|FUT$/g, '')}{t.rolled_in && <span className="chip muted" style={{ marginLeft: 6 }} title="Continued from the previous contract at its cutoff">rolled in</span>}</td>
+            <td className="l">{(t.contract ?? '').replace(/^[A-Z&-]+?(?=\d{2}[A-Z]{3}\d{2}FUT$)|FUT$/g, '')}{t.rolled_in && <span className="chip muted" style={{ marginLeft: 6 }} title="Continued from the previous contract (at its cutoff, or at the hold limit)">rolled in</span>}</td>
             <td className="l">{dt(t.entry_date)}</td><td className="num">{num(t.entry_price)}</td><td className="num">{num(t.active_stop)}</td>
             <td className="l">{dt(t.exit_date)}</td><td className="num">{num(t.exit_price)}</td>
             <td className={`num ${sign(t.pnl_points)}`}>{num(t.pnl_points)}</td><td className={`num ${sign(t.pnl_amount)}`}>{money(t.pnl_amount)}</td>

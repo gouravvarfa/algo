@@ -1048,3 +1048,22 @@ async def test_a_halt_raised_outside_the_session_by_the_positions_check_is_lifte
     a["events"].append({"at": "2026-11-10 07:05:00", "text": "HALTED: two entry orders filled: this app now holds 60"})
     await env.rt.tick(dt.datetime(2026, 11, 10, 10, 3))
     assert env.state()["halted"].startswith("two entry orders")                                      # any other halt stays for a person
+
+
+@async_test
+async def test_hold_rule_reversal_closes_the_old_contract_first_then_enters_the_next_contract(env, monkeypatch):
+    """Owner, 17 Nov 2026: past the cutoff the position stays in its contract; when its stop / System Point closes it, the reversal goes into the
+    NEXT contract. The real account closes the old contract first (its own stop), then enters the next one."""
+    nxt = {"trading_symbol": "BANKNIFTY29DEC26FUT", "token": "777", "exch_seg": "NFO", "lot_size": 30, "tick_size": 0.05}
+    monkeypatch.setattr(tb_real.dryrun, "resolve_contract", lambda sym, name: dict(nxt) if name == nxt["trading_symbol"] else None)
+    sid = await open_long(env)
+    env.sync(None, secs(60))
+    await go(env, env.ev("EXIT", "BUY", now=secs(60), reason="STOP_LOSS_REVERSAL", exit_price=49500.0, contract=CONTRACT),
+             env.ev("ENTRY", "SELL", now=secs(60), entry_price=49800.0, active_stop=50298.0, contract=nxt["trading_symbol"]), now=secs(60))
+    a = env.state()
+    assert a["pending_entry"]["contract"]["trading_symbol"] == nxt["trading_symbol"] and env.fb.last("entry")[0] is None
+    env.fb.fill(sid, 49498.0)                                                                         # the old contract's stop fills
+    await env.rt.tick(secs(65))
+    _, e = env.fb.last("entry")
+    assert e["p"]["tradingsymbol"] == nxt["trading_symbol"] and e["p"]["symboltoken"] == "777" and e["p"]["transactiontype"] == "SELL"
+    assert env.fb.orders[sid]["p"]["tradingsymbol"] == CONTRACT

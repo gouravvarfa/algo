@@ -523,11 +523,12 @@ class PaperEngine:
             raw = pd.concat([older, raw_active]) if len(raw_active) else chain.chart
             overlap = chain.chart if first_active is None else chain.chart[chain.chart.index >= first_active]
             prev_line = {"contract": " + ".join(sg.contract.trading_symbol for sg in chain.segments[:-1]),
-                         "data": [{"time": _ts(t.to_pydatetime()), "value": float(r.close)} for t, r in overlap.iterrows()]}
+                         "data": [{"time": _ts(t.to_pydatetime()), "value": float(r.close)} for t, r in overlap.iterrows()]} if len(chain.segments) > 1 else None
             rolls = chain.rolls
-            engine_note = (f"Contract chain: {' → '.join(sg.contract.trading_symbol for sg in chain.segments)}. A position still open at a contract's cutoff "
-                           f"(8 days before expiry) is closed there and continued in the next contract as a fresh entry with that contract's own System Points; "
-                           f"real intraday rules (1% entry-day stop, capped stop, breakeven, gap) apply in each contract")
+            engine_note = (f"Contract chain: {' → '.join(sg.contract.trading_symbol for sg in chain.segments)}. From the cutoff (8 days before expiry) new entries "
+                           f"go to the next contract. A position open at the cutoff stays in its contract until its stop / System Point (the next trade then goes into "
+                           f"the next contract, 1% stop that day) or until the hold limit (expiry day; MCX: the day before delivery), when it is closed at the open "
+                           f"and the same side is taken in the next contract (1% stop that day). Cutoffs before 18 Nov 2026 rolled at the cutoff")
             engine_warn = bool(chain.warnings)
             if chain.warnings:
                 engine_note = "WARNING: " + "; ".join(chain.warnings) + ". " + engine_note
@@ -614,7 +615,7 @@ class PaperEngine:
         markers = []
         for r in rolls:
             markers.append({"time": bt(r["time"]), "position": "inBar", "shape": "circle", "color": "#f59e0b",
-                            "text": f"ROLL {r['from'][-8:-3]}→{r['to'][-8:-3]}"})
+                            "text": f"{'REV' if r.get('kind') == 'REVERSE' else 'ROLL'} {r['from'][-8:-3]}→{r['to'][-8:-3]}"})
         for t in trades:
             markers.append({
                 "time": bt(t.entry_date), "position": "belowBar" if t.direction == "BUY" else "aboveBar",
