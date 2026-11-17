@@ -78,10 +78,10 @@ html { scroll-behavior: auto; }
 .tone-pink    { --tone: #db2777; --tone-soft: #fde8f2; }
 .tone-teal    { --tone: #0d9488; --tone-soft: #e0f5f2; }
 .tone-slate   { --tone: #475b8a; --tone-soft: #eaeef6; }
-.sidebar .navlink.toned { gap: 12px; padding: 4px 8px; min-height: 48px; color: var(--text-secondary); font-weight: 500; border-radius: 12px; transition: background-color .2s ease, color .2s ease; }
-.sidebar .navlink.toned .navicon { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--tone-soft); color: var(--tone);
+.sidebar .navlink.toned { gap: 10px; padding: 3px 8px; min-height: 40px; color: var(--text-secondary); font-weight: 500; border-radius: 12px; transition: background-color .2s ease, color .2s ease; }
+.sidebar .navlink.toned .navicon { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--tone-soft); color: var(--tone);
   transition: background-color .2s ease, color .2s ease, transform .2s ease; }
-.sidebar .navlink.toned .navicon .ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.sidebar .navlink.toned .navicon .ic { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .sidebar .navlink.toned:hover { background: var(--bg-hover); color: var(--text-primary); }
 .sidebar .navlink.toned:hover .navicon { background: color-mix(in srgb, var(--tone) 18%, white); }
 .sidebar .navlink.toned.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -96,4 +96,14 @@ html { scroll-behavior: auto; }
   :root:not([data-theme="light"]) .sidebar .navlink.toned .navicon { background: color-mix(in srgb, var(--tone) 22%, transparent); color: color-mix(in srgb, var(--tone) 70%, white); }
   :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: color-mix(in srgb, var(--tone) 16%, transparent); color: #fff; }
 }
-@media (max-width: 860px) { .sidebar .navlink.toned { padding: 4px 8px; font-size: 14.5px; } }
+@media (max-width: 860px) { .sidebar .navlink.toned { padding: 3px 8px; font-size: 14px; } }
+/* dark sidebar: quiet tiles (the bright fills looked loud on the dark panel), the active row in the theme accent */
+:root[data-theme="dark"] .sidebar .navlink.toned .navicon { background: color-mix(in srgb, var(--tone) 14%, transparent); color: color-mix(in srgb, var(--tone) 55%, #cbd5e1); }
+:root[data-theme="dark"] .sidebar .navlink.toned:hover .navicon { background: color-mix(in srgb, var(--tone) 22%, transparent); }
+:root[data-theme="dark"] .sidebar .navlink.toned.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: #e6ecf7; border-color: transparent; box-shadow: none; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active .navicon { background: color-mix(in srgb, var(--tone) 24%, transparent); color: color-mix(in srgb, var(--tone) 45%, #fff); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sidebar .navlink.toned .navicon { background: color-mix(in srgb, var(--tone) 14%, transparent); color: color-mix(in srgb, var(--tone) 55%, #cbd5e1); }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: #e6ecf7; box-shadow: none; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active .navicon { background: color-mix(in srgb, var(--tone) 24%, transparent); color: color-mix(in srgb, var(--tone) 45%, #fff); }
+}
