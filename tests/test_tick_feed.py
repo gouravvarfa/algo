@@ -37,6 +37,38 @@ def test_minute_builder_ohlc_from_ticks_only():
     assert m[0] == (base, 100.0, 103.0, 99.0, 101.0) and m[1][1:] == (105.0, 105.0, 105.0, 105.0) and b.minutes("2") == []
 
 
+def test_minute_builder_makes_candles_only_inside_the_trading_session():
+    """17 Nov 2026: on every (re)subscribe before the open Angel One sent each stock future's last price stamped 06:55 (04:05 after an earlier restart);
+    the builder made 'today's first minute' of it and the strategy entered SELL at 06:55 with NSE shut. Off-session ticks make no candle now."""
+    b = ticks.MinuteBuilder()
+    tue = dt.date(2026, 11, 17)
+
+    def add(token, exch, hh, mm, ss=0, day=tue):
+        b.add(ticks.Tick(token, exch, 100.0, dt.datetime.combine(day, dt.time(hh, mm, ss), tzinfo=IST), time.time()))
+
+    for hh, mm in ((4, 5), (6, 55), (9, 0), (9, 8), (9, 14), (15, 30), (15, 39), (18, 15)):
+        add("nfo", 2, hh, mm)                                         # NFO: off-hours snapshots, the F&O pre-open, after the close, a Muhurat-like evening
+    add("nfo", 2, 10, 0, day=dt.date(2026, 11, 21))                   # a Saturday
+    assert b.minutes("nfo") == []
+    add("nfo", 2, 9, 15)
+    add("nfo", 2, 15, 29, 59)
+    assert [m[0].time() for m in b.minutes("nfo")] == [dt.time(9, 15), dt.time(15, 29)]
+    for hh, mm in ((6, 55), (8, 59), (23, 55), (23, 59)):
+        add("mcx", 5, hh, mm)
+    assert b.minutes("mcx") == []
+    for hh, mm in ((9, 0), (17, 0), (23, 54)):                        # MCX opens 09:00; on an NSE holiday it trades from 17:00
+        add("mcx", 5, hh, mm)
+    assert [m[0].time() for m in b.minutes("mcx")] == [dt.time(9, 0), dt.time(17, 0), dt.time(23, 54)]
+
+
+def test_the_feed_keeps_the_latest_price_of_an_off_session_tick_but_makes_no_candle():
+    feed = ticks.TickFeed(get_session=lambda: None)
+    t = ticks.parse_tick(frame(ts=dt.datetime(2026, 11, 17, 6, 55, 1, tzinfo=IST)))
+    feed.latest[t.token] = t                                          # what the socket loop does for every frame
+    feed.builder.add(t)
+    assert feed.latest["48699"].ltp == 54939.8 and feed.builder.minutes("48699") == []
+
+
 class M:
     def __init__(self, ts, o, h, l, c):
         self.ts, self.open, self.high, self.low, self.close = ts, o, h, l, c

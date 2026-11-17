@@ -56,14 +56,29 @@ def parse_tick(data: bytes, recv_at: float | None = None) -> Tick | None:
     return Tick(token, exch, ltp_paise / 100.0, dt.datetime.fromtimestamp(ts_ms / 1000.0, IST), recv_at or time.time())
 
 
+NSE_HOURS = (dt.time(9, 15), dt.time(15, 30))       # NSE cash and F&O, BSE: the trading session (the F&O pre-open 09:00-09:15 is not part of it)
+SESSION_HOURS = {5: (dt.time(9, 0), dt.time(23, 55))}   # by exchange type; 5 = MCX (09:00 to 23:55, 23:30 in US summer time: no ticks come after it)
+
+
+def in_session(t: Tick) -> bool:
+    """True when a tick belongs to its exchange's trading session (weekday, from the open to before the close). Outside it Angel One still
+    sends each token's last price, stamped with an off-hours exchange time, every time the feed (re)subscribes: on 17 Nov 2026 such ticks
+    at 04:05 and 06:55 became 'today's first minute' of the NSE stock futures and the strategy entered SELL at 06:55 with the market shut."""
+    lo, hi = SESSION_HOURS.get(t.exchange_type, NSE_HOURS)
+    return t.exch_ts.weekday() < 5 and lo <= t.exch_ts.time() < hi
+
+
 class MinuteBuilder:
     """1-minute OHLC built ONLY from received ticks (by exchange time). High/low are the extremes of the ticks we received,
-    so a very brief spike between two ticks can be missed: that is a property of tick data, stated here, not hidden."""
+    so a very brief spike between two ticks can be missed: that is a property of tick data, stated here, not hidden.
+    Only ticks inside the trading session make candles (see in_session); the latest price of any tick is still kept by the feed."""
 
     def __init__(self) -> None:
         self.bars: dict[str, dict[dt.datetime, list[float]]] = {}
 
     def add(self, t: Tick) -> None:
+        if not in_session(t):
+            return
         m = t.exch_ts.replace(second=0, microsecond=0)
         bars = self.bars.setdefault(t.token, {})
         b = bars.get(m)
