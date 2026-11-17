@@ -91,7 +91,8 @@ const r2 = (x: number) => Math.round(x * 100) / 100
 interface RealTrade { direction: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null; entry_at: number; exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string }
 interface RealData { trades: RealTrade[]; real_on: boolean; since: number | null; state: { position: { side: 'BUY' | 'SELL'; qty: number; contract: string; entry_price: number | null } | null; stop_target: number | null; events?: { at: string; text: string }[]; stop_resting?: boolean; stop_watch_pct?: number | null } | null }
 const NO_REAL: RealData = { trades: [], real_on: false, since: null, state: null }
-const iso = (t: number) => new Date(t * 1000).toISOString()
+// IST wall time like the strategy's own dates ('2026-11-16 10:23'); toISOString() is UTC, which showed 04:53 for a 10:23 fill (17 Nov 2026)
+export const iso = (t: number) => new Date((t + 19800) * 1000).toISOString().slice(0, 16).replace('T', ' ')
 
 /** The same page, but with the person's REAL trades: only fills Angel One confirmed. Candles and System Points stay the strategy's. */
 export function realSnap(s: Snapshot, d: RealData): Snapshot {

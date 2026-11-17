@@ -104,3 +104,10 @@ describe('the real stop note under "Active stop"', () => {
     expect(realStopNote({ ...base, state: { position: null, stop_target: 1, stop_resting: true } }, false)).toBe('')
   })
 })
+
+describe('real fill times are shown in IST', () => {
+  it('a 10:23 IST fill (04:53 UTC) reads 10:23', async () => {
+    const { iso } = await import('../topbottom/TopBottomPage')
+    expect(iso(Date.UTC(2026, 10, 16, 4, 53, 16) / 1000)).toBe('2026-11-16 10:23')
+  })
+})

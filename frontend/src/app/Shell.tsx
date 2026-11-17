@@ -99,8 +99,10 @@ function NavItem({ item }: { item: Item }) {
 
 function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) {
   const { pathname } = useLocation()
-  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
-  const open = ov.data?.market_open
+  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean; mcx_open?: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
+  const open = !!(ov.data?.market_open || ov.data?.mcx_open)
+  // which exchange is open: GOLDTEN / SILVERMIC trade on MCX until 23:55, after NSE closed at 15:30 (it said 'Market closed', 17 Nov 2026)
+  const mkt = ov.data ? `NSE ${ov.data.market_open ? 'open' : 'closed'} · MCX ${ov.data.mcx_open ? 'open' : 'closed'}` : 'Market'
   const br = useQuery({ queryKey: ['broker'], queryFn: () => get<{ effective_mode: string }>('/api/me/broker'), refetchInterval: 60_000, retry: false })
   const real = br.data?.effective_mode === 'real'
   const connected = (br.data as { status?: string } | undefined)?.status === 'connected'
@@ -113,8 +115,8 @@ function StatusBar({ navOpen, onNav }: { navOpen: boolean; onNav: () => void }) 
       <Hamburger open={navOpen} onClick={onNav} />
       <span className="title">{titleFor(pathname)}</span>
       <span className="spacer" />
-      <span className={'pill' + (open ? ' open' : '')} title="NSE session 09:15-15:30 IST, Mon-Fri. Exchange holidays are not detected.">
-        <i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}
+      <span className={'pill' + (open ? ' open' : '')} title="NSE 09:15-15:30 IST, MCX 09:00-23:55 IST, Mon-Fri.">
+        <i />{mkt}
       </span>
       {connected && f?.connected && (
         <Link to="/settings" className="pill" style={{ textDecoration: 'none', color: 'inherit' }} title={f.error ?? `Angel One margin available. Used: SPAN ${rs(f.span_margin)} · Exposure ${rs(f.exposure_margin)}. Updated every minute.`}>

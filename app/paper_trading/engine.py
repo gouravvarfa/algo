@@ -209,6 +209,19 @@ def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
     return now.weekday() < 5 and session.first_start <= now.time() <= session.close
 
 
+NSE_SESSION_ONLY_FROM = dt.date(2026, 11, 18)   # from this day NSE minutes outside 09:15-15:30 are left out (earlier days stay as they were evaluated)
+
+
+def nse_session_only(mins: list, exch_seg: str) -> list:
+    """NSE / NFO minutes before 09:15 (the F&O pre-open prints a 09:08 candle) or from 15:30 on (Angel One returns 15:30-15:39 candles) are not
+    trading the strategy can act on: the pre-open minute became the day's first candle, so the 15-minute gap rule could not apply (BANKNIFTY,
+    17 Nov 2026), and an after-close minute could move a stop when no order can go out. MCX keeps every minute."""
+    if (exch_seg or "").upper() == "MCX":
+        return mins
+    lo, hi = dt.time(9, 15), dt.time(15, 30)
+    return [m for m in mins if m.ts.date() < NSE_SESSION_ONLY_FROM or lo <= m.ts.time() < hi]
+
+
 def trim_partial_first_day(mins: list, lenient: bool = False) -> list:
     """The REST window starts N days back at the current time of day, so its FIRST day is usually only a partial session. A
     partial first day hides the morning crossings that happened before the window began (the engine then 'enters' on the
@@ -780,7 +793,7 @@ class PaperEngine:
                 self._refresh_later(key, lambda: self._load_minutes(c, first_day, now_ist()))
         else:
             base = await self._load_minutes(c, first_day, now)
-        out = trim_partial_first_day(merge_minutes(base, self.feed.builder.minutes(c.token)), lenient)
+        out = trim_partial_first_day(nse_session_only(merge_minutes(base, self.feed.builder.minutes(c.token)), c.exch_seg), lenient)
         return [m for m in out if m.ts.date() >= pin] if pin else out
 
     async def _load_minutes(self, c: ContractRef, first_day: dt.date, now: dt.datetime) -> list:

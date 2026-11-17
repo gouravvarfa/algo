@@ -49,9 +49,11 @@ function titleFor(kind: ConsoleKind, pathname: string): string {
 export function ConsoleShell({ kind }: { kind: ConsoleKind }) {
   const { me, can, logout } = useSession()
   const { pathname } = useLocation()
-  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
+  const ov = useQuery({ queryKey: ['shell', 'market'], queryFn: () => get<{ market_open: boolean; mcx_open?: boolean }>('/api/overview'), refetchInterval: 15_000, retry: false })
   const sys = useQuery({ queryKey: ['console', 'summary'], queryFn: () => get<{ overall: string; problems?: { key: string; title: string; status: string; reason: string }[] }>('/api/admin/system-summary'), refetchInterval: 15_000, retry: false, enabled: can('users.read') })
-  const open = ov.data?.market_open
+  const open = !!(ov.data?.market_open || ov.data?.mcx_open)
+  // which exchange is open: GOLDTEN / SILVERMIC trade on MCX until 23:55, after NSE closed at 15:30 (it said 'Market closed', 17 Nov 2026)
+  const mkt = ov.data ? `NSE ${ov.data.market_open ? 'open' : 'closed'} · MCX ${ov.data.mcx_open ? 'open' : 'closed'}` : 'Market'
   const [nav, setNav] = useState(false)
   const other: ConsoleKind | null = kind === 'admin' ? (can('system.read') ? 'dev' : null) : can('users.read') ? 'admin' : null
   return (
@@ -82,7 +84,7 @@ export function ConsoleShell({ kind }: { kind: ConsoleKind }) {
         <span className="title">{titleFor(kind, pathname)}</span>
         <span className="spacer" />
         {sys.data && <span className={`pill sys ${sys.data.overall === 'OK' ? 'okk' : sys.data.overall === 'DEGRADED' ? 'degr' : 'down'}`} title={sys.data.problems?.length ? sys.data.problems.map((p) => `${p.title}: ${p.status} - ${p.reason}`).join("\n") : "Overall system health (details in the Developer console)"}><i />System {sys.data.overall}{sys.data.problems?.[0] ? ` · ${sys.data.problems[0].title}` : ''}</span>}
-        <span className={'pill' + (open ? ' open' : '')}><i />{ov.data ? (open ? 'Market open' : 'Market closed') : 'Market'}</span>
+        <span className={'pill' + (open ? ' open' : '')}><i />{mkt}</span>
         <span className="pill paper" title="Paper trading only. No order is ever sent to a broker."><b>PAPER</b>&nbsp;no orders</span>
         <ThemeToggle />
       </header>

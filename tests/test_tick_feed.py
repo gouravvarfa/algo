@@ -112,3 +112,15 @@ def test_subscribe_message_groups_tokens_by_exchange():
         raise AssertionError("unknown exchange must be rejected")
     except ValueError:
         pass
+
+
+def test_nse_minutes_outside_the_session_are_left_out_from_18_nov_mcx_keeps_all():
+    from app.paper_trading.engine import nse_session_only
+
+    def mk(day, hh, mm):
+        return M(dt.datetime(2026, 11, day, hh, mm), 1, 1, 1, 1)
+    old = [mk(17, 9, 8), mk(17, 9, 15), mk(17, 15, 32)]                              # 17 Nov and earlier: as they were evaluated
+    new = [mk(18, 9, 8), mk(18, 9, 15), mk(18, 15, 29), mk(18, 15, 30), mk(18, 15, 39)]
+    got = nse_session_only(old + new, "NFO")
+    assert [(m.ts.day, m.ts.time()) for m in got] == [(17, dt.time(9, 8)), (17, dt.time(9, 15)), (17, dt.time(15, 32)), (18, dt.time(9, 15)), (18, dt.time(15, 29))]
+    assert nse_session_only(new, "MCX") == new
