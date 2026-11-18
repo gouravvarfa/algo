@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.options import bs
-from app.options.master import IST, EXPIRY_TIME, OptionContract, UnderlyingInfo
+from app.options.master import IST, NSE_SESSION, OptionContract, UnderlyingInfo
 from app.providers import angelone_client as ac
 
 QUOTE_PATH = "/rest/secure/angelbroking/market/v1/quote/"
@@ -74,9 +74,9 @@ class Chain:
     fetched_at: dt.datetime
 
 
-def market_open(now: dt.datetime) -> bool:
-    """By the clock only: there is no exchange holiday calendar here (a holiday shows up as no fresh ticks)."""
-    return now.weekday() < 5 and dt.time(9, 15) <= now.time() <= dt.time(15, 30)
+def market_open(now: dt.datetime, session: tuple = NSE_SESSION) -> bool:
+    """By the clock only: there is no exchange holiday calendar here (a holiday shows up as no fresh ticks). NSE 09:15-15:30, MCX 09:00-23:55."""
+    return now.weekday() < 5 and session[0] <= now.time() <= session[1]
 
 
 def _t(raw: str | None) -> dt.datetime | None:
@@ -124,10 +124,11 @@ async def fetch_chain(session, info: UnderlyingInfo, expiry: dt.date, n_strikes:
         raise ValueError(f"no contracts for expiry {expiry}")
     async with httpx.AsyncClient(timeout=30) as client:
         # 1) spot + VIX first (they decide which strikes are 'ATM +/- n')
-        idx_tokens = [info.spot_token] + ([info.vix_token] if info.vix_token else [])
-        j = await _post(client, session, QUOTE_PATH, {"mode": "FULL", "exchangeTokens": {"NSE": idx_tokens}})
+        und_token = info.underlying_for(expiry)[0]            # the index, or (MCX) the futures contract these options are on
+        idx_tokens = [und_token] + ([info.vix_token] if info.vix_token else [])
+        j = await _post(client, session, QUOTE_PATH, {"mode": "FULL", "exchangeTokens": {info.spot_exch: idx_tokens}})
         got = {f["symbolToken"]: f for f in j["data"]["fetched"]}
-        spot_q = got.get(info.spot_token)
+        spot_q = got.get(und_token)
         if not spot_q or not spot_q.get("ltp"):
             raise RuntimeError(f"no spot quote for {info.name}")
         spot = float(spot_q["ltp"])
@@ -141,21 +142,24 @@ async def fetch_chain(session, info: UnderlyingInfo, expiry: dt.date, n_strikes:
         unfetched: list[str] = []
         for i in range(0, len(tokens), MAX_TOKENS_PER_QUOTE):
             await asyncio.sleep(MIN_SECONDS_BETWEEN_CALLS)
-            jj = await _post(client, session, QUOTE_PATH, {"mode": "FULL", "exchangeTokens": {"NFO": tokens[i:i + MAX_TOKENS_PER_QUOTE]}})
+            jj = await _post(client, session, QUOTE_PATH, {"mode": "FULL", "exchangeTokens": {info.exch: tokens[i:i + MAX_TOKENS_PER_QUOTE]}})
             quotes.update({f["symbolToken"]: f for f in jj["data"]["fetched"]})
             unfetched += [str(u) for u in (jj["data"].get("unfetched") or [])]
         # 3) the broker's own Greeks / IV for this expiry
-        await asyncio.sleep(MIN_SECONDS_BETWEEN_CALLS)
         greeks: dict[tuple[float, str], dict] = {}
-        try:
-            gj = await _post(client, session, GREEK_PATH, {"name": info.name, "expirydate": expiry.strftime("%d%b%Y").upper()})
-            for g in gj.get("data") or []:
-                greeks[(float(g["strikePrice"]), g["optionType"])] = g
-        except RuntimeError:
-            pass   # handled below: every leg then falls back to the local Black-Scholes calculation (flagged)
+        if info.exch == "NFO":                                  # Angel One's option Greeks cover NSE index options only
+            await asyncio.sleep(MIN_SECONDS_BETWEEN_CALLS)
+            try:
+                gj = await _post(client, session, GREEK_PATH, {"name": info.name, "expirydate": expiry.strftime("%d%b%Y").upper()})
+                for g in gj.get("data") or []:
+                    greeks[(float(g["strikePrice"]), g["optionType"])] = g
+            except RuntimeError:
+                pass   # handled below: every leg then falls back to the local Black-Scholes calculation (flagged)
 
-    open_now = market_open(now)
-    expiry_dt = dt.datetime.combine(expiry, EXPIRY_TIME, tzinfo=IST)
+    open_now = market_open(now, info.session)
+    expiry_dt = dt.datetime.combine(expiry, info.expiry_time, tzinfo=IST)
+    if info.black76:
+        div = rate                                              # an option on futures: Black-76 (Black-Scholes with q = r)
     t_years = max((expiry_dt - now).total_seconds(), 0.0) / (365.0 * 86400.0)
     violations, stale, warnings = [], [], []
     rows: dict[float, dict[str, Leg]] = {}

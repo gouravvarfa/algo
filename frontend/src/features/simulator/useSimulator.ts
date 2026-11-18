@@ -4,9 +4,10 @@ import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { fresh, useLiveTicks } from '../../lib/stream'
 import { useToast } from '../../lib/toast'
-import { ADJ_DELTA, ADJ_MAX, ADJ_SELL_DELTA, AUTO_FLY, AUTO_FLY_ADJ, AUTO_FLY_DELTA, PRESET_RULES, pickResell, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
+import { MCX_SYMS, ADJ_DELTA, ADJ_MAX, ADJ_SELL_DELTA, AUTO_FLY, AUTO_FLY_ADJ, AUTO_FLY_DELTA, PRESET_RULES, pickResell, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
-const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY']
+const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY', 'GOLDM', 'SILVERM']
+const INDEX_SPEC: Record<string, string> = { NIFTY: 'NSE:99926000', BANKNIFTY: 'NSE:99926009' }
 const ls = {
   get: (k: string): string | null => { try { return localStorage.getItem(k) } catch { return null } },
   set: (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* private mode */ } },
@@ -98,7 +99,10 @@ export function useSimulator(ds: DataSource) {
         if (!alive) return
         const all = [...new Set([...eod, ...intra])].sort()
         setEodSet(new Set(eod)); setIntraSet(new Set(intra)); setDates(all)
-        if (!all.length) { setInitError(`No ${sym} data loaded. Load data from the Option Chain page.`); return }
+        if (!all.length) {
+          if (MCX_SYMS.includes(sym)) { setInitError(`${sym}: no history yet. Its 1-minute data is collected every morning from now on; today's chain is LIVE.`); setLiveState(true); return }
+          setInitError(`No ${sym} data loaded. Load data from the Option Chain page.`); return
+        }
         const last = all.length - 1
         let m: string[] = []
         if (intra.includes(all[last])) {
@@ -158,7 +162,7 @@ export function useSimulator(ds: DataSource) {
   const valKey = useRef('')
   const keyOf = (d: string, t?: string | null) => `${d}|${t ?? ''}`
   const loadChain = async (silent: boolean) => {
-    if (idx < 0) return
+    if (idx < 0 && !live) return               // LIVE needs no historical day (gold / silver have none yet)
     const tok = ++loadTok.current
     if (!silent) setLoading(true)
     try {
@@ -182,7 +186,7 @@ export function useSimulator(ds: DataSource) {
   // LIVE: every price of the chain is pushed by the server (SSE); the chain itself (IV, greeks, OI, the strikes around the money) is still fetched,
   // every second until the stream is up and every 5 s while it is, so nothing on screen is older than its tick
   const optionSpecs = useMemo(() => (live && chain?.mode === 'live'
-    ? [...chain.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `NFO:${t}`), `NSE:${sym === 'BANKNIFTY' ? '99926009' : '99926000'}`]
+    ? [...chain.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `${chain.option_exch ?? 'NFO'}:${t}`), chain.underlying_spec ?? INDEX_SPEC[sym]]
     : []), [live, chain?.mode, chain?.expiry, chain?.rows.length, sym]) // eslint-disable-line react-hooks/exhaustive-deps
   const { ticks, status: streamStatus } = useLiveTicks(optionSpecs, optionSpecs.length > 0)
   const streamLive = streamStatus === 'live'
@@ -401,7 +405,7 @@ export function useSimulator(ds: DataSource) {
   }
 
   // what the screen shows: the chain and the positions' marks with each price replaced by its latest pushed tick (LIVE only; a stale tick is ignored)
-  const indexTick = ticks[sym === 'BANKNIFTY' ? '99926009' : '99926000']
+  const indexTick = ticks[(chain?.underlying_spec ?? INDEX_SPEC[sym] ?? '').split(':')[1] ?? '']
   const shownChain = useMemo(() => {
     if (!chain || chain.mode !== 'live' || !streamLive) return chain
     const apply = (l: typeof chain.rows[number]['CE']) => {

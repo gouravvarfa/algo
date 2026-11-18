@@ -72,7 +72,7 @@ export default function OptionsJournalPage({ userId }: { userId?: string }) {
       <div className="card">
         <div className="card-head">
           <h2>Trades</h2><span className="chip muted">{rows.length}</span><span className="spacer" />
-          <select value={index} onChange={(e) => setIndex(e.target.value)}><option value="">all indexes</option><option>NIFTY</option><option>BANKNIFTY</option></select>
+          <select value={index} onChange={(e) => setIndex(e.target.value)}><option value="">all</option><option>NIFTY</option><option>BANKNIFTY</option><option>GOLDM</option><option>SILVERM</option></select>
           <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="">all</option><option value="OPEN">open</option><option value="CLOSED">closed</option><option value="REMOVED">removed</option></select>
         </div>
         <div className="scroll"><table>

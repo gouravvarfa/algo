@@ -36,9 +36,9 @@ export default function SimulatorPage() {
   return (
     <div className="page simpage">
       <div className="titlebar">
-        <div className="tt"><h1>Options Strategy Simulator</h1><p className="sub">Analyse historical index option data (NIFTY, BANKNIFTY), test positions and understand the risk. Simulation only, no broker orders.</p></div>
+        <div className="tt"><h1>Options Strategy Simulator</h1><p className="sub">Analyse option data (NIFTY, BANKNIFTY; MCX gold and silver), test positions and understand the risk. Simulation only, no broker orders.</p></div>
         <div className="ctrl">
-          <label className="field">Index<select value={s.sym} onChange={(e) => s.setSym(e.target.value as Sym)}><option>NIFTY</option><option>BANKNIFTY</option></select></label>
+          <label className="field">Underlying<select value={s.sym} onChange={(e) => s.setSym(e.target.value as Sym)}><option>NIFTY</option><option>BANKNIFTY</option><option value="GOLDM">GOLDM · Gold Mini (MCX)</option><option value="SILVERM">SILVERM · Silver Mini (MCX)</option></select></label>
           <label className="field">Expiry<select value={s.curExp ?? ''} onChange={(e) => s.pickExpiry(e.target.value)} style={{ width: 210 }}>
             {c?.expiries.map((e) => <option key={e} value={e}>{dmy(e)} (DTE {Math.round((new Date(e).getTime() - new Date(c.date).getTime()) / 864e5)})</option>)}</select></label>
           <label className="field">Historical date
@@ -48,14 +48,14 @@ export default function SimulatorPage() {
               <button className="ib" disabled={s.idx <= 0 || s.live} onClick={() => s.goIndex(s.idx - 1)} title="Previous trading day">‹</button>
               <button className="ib" disabled={s.idx >= s.dates.length - 1 || s.live} onClick={() => s.goIndex(s.idx + 1)} title="Next trading day">›</button>
             </span></label>
-          <label className="field">Lot<span className="lotv">{c?.lot_size ?? '–'}</span></label>
+          <label className="field" title={c?.lot_note ?? undefined}>{c?.option_exch === 'MCX' ? 'Rs / point / lot' : 'Lot'}<span className="lotv">{c?.lot_size ?? '–'}</span></label>
           <button className={'livebtn' + (s.live ? ' on' : '')} onClick={() => s.setLive(!s.live)} title="Live chain from Angel One WebSocket ticks (paper only, no orders). Updates every second."><i />LIVE</button>
           <span className={'eod' + (isLive ? ' livechip' : '')}>{dataBadge}</span>
         </div>
       </div>
 
       <div className="stats">
-        <div className="stat"><div className="k">{isLive ? 'Index (live)' : 'Index close'}</div><div className="v">{c ? num(c.underlying) : '–'}</div>
+        <div className="stat"><div className="k">{c?.option_exch === 'MCX' ? `${c.underlying_symbol ?? 'Futures'}${isLive ? ' (live)' : ''}` : isLive ? 'Index (live)' : 'Index close'}</div><div className="v">{c ? num(c.underlying) : '–'}</div>
           <div className="s">{chg == null ? ' ' : <span className={chg >= 0 ? 'pos' : 'neg'}>{chg >= 0 ? '▲ +' : '▼ '}{num(chg)} ({chgPct?.toFixed(2)}%)</span>} {chg != null ? 'vs prev. close' : ''}</div></div>
         <div className="stat"><div className="k">PCR (OI)</div><div className="v">{c?.pcr ?? '–'}</div><div className="s">{c?.mode === 'eod' ? 'Put OI / Call OI, this expiry' : c?.oi_day ? `OI of ${dmy(c.oi_day)} EOD (no OI in ${isLive ? 'live ticks' : '1-min data'})` : 'no OI available'}</div></div>
         <div className="stat"><div className="k">ATM IV <span className="chip muted">calc</span></div><div className="v">{c?.atm_iv ? `${c.atm_iv}%` : 'n/a'}</div><div className="s">Black-Scholes estimate, avg CE/PE</div></div>

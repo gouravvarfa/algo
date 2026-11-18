@@ -23,9 +23,13 @@ log = logging.getLogger(__name__)
 
 SYMBOLS = ("BANKNIFTY", "NIFTY")
 RUN_AFTER = dt.time(15, 45)
+# MCX gold / silver options (owner, 18 Nov 2026): MCX trades until 23:55, so they are collected the next morning, 05:00-07:30, when no market is open
+# and Angel One answers best (the data account is shared with the live strategy). Tuesday to Saturday: Saturday morning collects Friday.
+MCX_SYMBOLS = ("GOLDM", "SILVERM")
+MCX_RUN_WINDOW = (dt.time(5, 0), dt.time(7, 30))     # ends 90 minutes before MCX opens: the live strategy shares the data account
 DAYS_BACK = 5                  # overlap: covers a missed day or two
 HORIZON_DAYS = 45              # expiries within this many days
-PAD_POINTS = {"BANKNIFTY": 1500.0, "NIFTY": 600.0}   # strikes within the day's index range +/- this
+PAD_POINTS = {"BANKNIFTY": 1500.0, "NIFTY": 600.0, "GOLDM": 4000.0, "SILVERM": 8000.0}   # strikes within the day's underlying range +/- this
 SYMBOL_TRIES = 3               # Angel One refusing once (HTTP 403 in the first minutes after the close) must not lose the day
 RETRY_WAIT_S = 90.0
 STATUS = Path(__file__).resolve().parents[2] / "data" / "intraday" / "collector_status.json"
@@ -47,8 +51,13 @@ def due(now: dt.datetime, last: str | None) -> bool:
     return now.weekday() < 5 and now.time() >= RUN_AFTER and last != now.date().isoformat()
 
 
+def due_mcx(now: dt.datetime, last: str | None) -> bool:
+    """Tuesday to Saturday morning inside MCX_RUN_WINDOW, and not yet done today (it collects the sessions before today)."""
+    return 1 <= now.weekday() <= 5 and MCX_RUN_WINDOW[0] <= now.time() < MCX_RUN_WINDOW[1] and last != now.date().isoformat()
+
+
 @tracked("collector.run_once")
-async def run_once(provider, symbols=SYMBOLS) -> dict:
+async def run_once(provider, symbols=SYMBOLS, mark: str = "last_run_date") -> dict:
     st = _status()
     session = await provider.get_session()
     for sym in symbols:
@@ -59,7 +68,7 @@ async def run_once(provider, symbols=SYMBOLS) -> dict:
                 break
             log.warning("collector %s: try %d of %d failed, again in %.0fs", sym, attempt, SYMBOL_TRIES, RETRY_WAIT_S)
             await asyncio.sleep(RETRY_WAIT_S)
-    st["last_run_date"] = dt.datetime.now(IST).date().isoformat()
+    st[mark] = dt.datetime.now(IST).date().isoformat()
     STATUS.parent.mkdir(parents=True, exist_ok=True)
     STATUS.write_text(json.dumps(st, indent=1))
     return st
@@ -91,6 +100,10 @@ async def loop(provider, check_every: int = 300) -> None:
                 log.info("daily option collector starting")
                 await run_once(provider)
                 log.info("daily option collector finished")
+            if ops_flags.get("feature.collector") and due_mcx(now, _status().get("last_mcx_run_date")):
+                log.info("MCX option collector starting (%s)", ", ".join(MCX_SYMBOLS))
+                await run_once(provider, MCX_SYMBOLS, mark="last_mcx_run_date")
+                log.info("MCX option collector finished")
         except Exception:
             log.exception("daily option collector loop error")
         await asyncio.sleep(check_every)

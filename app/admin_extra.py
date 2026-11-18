@@ -25,7 +25,7 @@ from app.security import authz, users
 from app.security.users import AuthError
 
 router = APIRouter()
-SYMBOLS = ("NIFTY", "BANKNIFTY")
+SYMBOLS = ("NIFTY", "BANKNIFTY", "GOLDM", "SILVERM")
 
 
 # ---- optional IP allow-list for /api/admin and /api/dev --------------------------------------------------------------------------------

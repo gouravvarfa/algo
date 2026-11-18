@@ -9,6 +9,7 @@ interface Leg { token?: string | null; ltp: number | null; bid: number | null; a
 interface Row { strike: number; CE: Leg | null; PE: Leg | null }
 interface Chain {
   spot: number; atm: number; vix: number | null; pcr: number | null; expiry: string; lot_size: number; market_open: boolean; fetched_at: string
+  option_exch?: string; underlying_spec?: string; underlying_symbol?: string
   violations: string[]; stale: string[]; warnings: string[]; rows: Row[]
   helpers: { CE: Record<string, number | null>; PE: Record<string, number | null> }
 }
@@ -53,10 +54,11 @@ export default function OptionChainPage() {
   })
   const c = chain.data
   // live prices pushed by the server (SSE): the LTP column of every strike and the spot follow the tick; bid / ask / volume / OI / IV stay from the fetch
-  const specs = c ? [...c.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `NFO:${t}`), `NSE:${sym === 'BANKNIFTY' ? '99926009' : '99926000'}`] : []
+  const idxSpec = sym === 'BANKNIFTY' ? 'NSE:99926009' : 'NSE:99926000'
+  const specs = c ? [...c.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `${c.option_exch ?? 'NFO'}:${t}`), c.underlying_spec ?? idxSpec] : []
   const { ticks, status } = useLiveTicks(specs, !!c && c.market_open)
   const px = (leg: Leg | null) => { const t = leg?.token ? ticks[leg.token] : undefined; return fresh(t) ? t.ltp : undefined }
-  const spotTick = ticks[sym === 'BANKNIFTY' ? '99926009' : '99926000']
+  const spotTick = ticks[(c?.underlying_spec ?? idxSpec).split(':')[1]]
   const spot = c ? (fresh(spotTick) ? spotTick.ltp : c.spot) : 0
   return (
     <div className="page">
@@ -64,7 +66,7 @@ export default function OptionChainPage() {
       <div className="card">
         <div className="card-head"><h2>Live option chain (Angel One)</h2></div>
         <div className="row" style={{ alignItems: 'center' }}>
-          <select value={sym} onChange={(e) => { setSym(e.target.value); setExp('nearest') }}><option>BANKNIFTY</option><option>NIFTY</option></select>
+          <select value={sym} onChange={(e) => { setSym(e.target.value); setExp('nearest') }}><option>BANKNIFTY</option><option>NIFTY</option><option value="GOLDM">GOLDM · Gold Mini (MCX)</option><option value="SILVERM">SILVERM · Silver Mini (MCX)</option></select>
           <select value={exp} onChange={(e) => setExp(e.target.value)}><option value="nearest">nearest</option>{exps.data?.expiries.map((e) => <option key={e}>{e}</option>)}</select>
           <label className="inline">Strikes ± <input type="number" value={n} min={1} max={30} style={{ width: 64 }} onChange={(e) => setN(Math.max(1, Math.min(30, Number(e.target.value) || 10)))} /></label>
           <button className="btn primary" onClick={() => void chain.refetch()} disabled={chain.isFetching}>{chain.isFetching ? 'Fetching…' : 'Fetch chain'}</button>

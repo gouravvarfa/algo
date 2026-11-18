@@ -19,7 +19,7 @@ router = APIRouter()
 LOCAL_USER = "local"
 MAX_POSITIONS = 300
 MAX_BYTES = 400_000
-SYMBOLS = ("NIFTY", "BANKNIFTY")
+SYMBOLS = ("NIFTY", "BANKNIFTY", "GOLDM", "SILVERM")      # the Options Simulator underlyings
 
 
 def user_id_of(request: Request) -> str:

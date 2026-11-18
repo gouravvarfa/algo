@@ -56,9 +56,21 @@ def connect(db: Path | None = None) -> sqlite3.Connection:
     return c
 
 
-def clean_rows(raw: list[list], day_filter=None) -> tuple[list[tuple], int]:
+def _session(info) -> tuple[dt.time, dt.time]:
+    return getattr(info, "session", None) or (dt.time(9, 15), dt.time(15, 30))
+
+
+def _hm_range(info) -> tuple[str, str]:
+    """The minutes a symbol trades: NSE 09:15-15:30 (the 15:30 candle is the real closing minute), MCX 09:00-23:55."""
+    if info is None:
+        return OPEN, CLOSE
+    a, b = _session(info)
+    return a.strftime("%H:%M"), b.strftime("%H:%M")
+
+
+def clean_rows(raw: list[list], day_filter=None, hours: tuple[str, str] = (OPEN, CLOSE)) -> tuple[list[tuple], int]:
     """Angel rows [ts_iso, o, h, l, c, v] -> (ts 'YYYY-MM-DD HH:MM', o, h, l, c, v). Rejects (never repairs):
-    unparsable rows, minutes outside 09:15-15:30 (the 15:30 candle is the real closing minute), non-positive prices,
+    unparsable rows, minutes outside the session (`hours`: NSE 09:15-15:30, MCX 09:00-23:55), non-positive prices,
     inconsistent OHLC."""
     out, bad = [], 0
     for r in raw:
@@ -69,7 +81,7 @@ def clean_rows(raw: list[list], day_filter=None) -> tuple[list[tuple], int]:
             bad += 1
             continue
         hm = t.strftime("%H:%M")
-        if not (OPEN <= hm <= CLOSE) or min(o, h, l, c) <= 0 or not (l <= min(o, c) and max(o, c) <= h):
+        if not (hours[0] <= hm <= hours[1]) or min(o, h, l, c) <= 0 or not (l <= min(o, c) and max(o, c) <= h):
             bad += 1
             continue
         out.append((t.strftime("%Y-%m-%d %H:%M"), o, h, l, c, v))
@@ -91,13 +103,14 @@ async def ingest(session, info: UnderlyingInfo, days_back: int = 30, expiry_hori
     """Fetch the index and every listed option of `info` that expires within `expiry_horizon_days`, for strikes that the
     index actually came near during the window (index low/high +/- pad_points). Re-running is safe (upsert by minute)."""
     now = dt.datetime.now(IST).replace(tzinfo=None, second=0, microsecond=0)
-    start = (now - dt.timedelta(days=days_back)).replace(hour=9, minute=15)
+    hours = _hm_range(info)
+    start = (now - dt.timedelta(days=days_back)).replace(hour=_session(info)[0].hour, minute=_session(info)[0].minute)
     c = connect(db)
     summary = {"index_rows": 0, "contracts": 0, "contracts_with_data": 0, "rows": 0, "rejected": 0, "errors": []}
     stamp = lambda: dt.datetime.now().isoformat(timespec="seconds")
 
-    raw = await _fetch(session, "NSE", info.spot_token, start, now)
-    rows, bad = clean_rows(raw)
+    raw = await _fetch(session, getattr(info, "spot_exch", "NSE"), info.spot_token, start, now)     # the index, or (MCX) the futures of the nearest option expiry
+    rows, bad = clean_rows(raw, hours=hours)
     with c:
         c.executemany("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?,?,?)", [(info.name, *INDEX_KEY, *r) for r in rows])
         c.execute("INSERT INTO fetch_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (info.name, "", 0, "IDX", info.spot_token, str(start), str(now), len(rows), bad, "ok", "", stamp()))
@@ -113,13 +126,13 @@ async def ingest(session, info: UnderlyingInfo, days_back: int = 30, expiry_hori
     log(f"contracts to fetch: {len(todo)} ({len({k.expiry for k in todo})} expiries)")
     for i, k in enumerate(todo, 1):
         try:
-            raw = await _fetch(session, "NFO", k.token, start, now)
+            raw = await _fetch(session, getattr(info, "exch", "NFO"), k.token, start, now)
         except AngelOneApiError as exc:
             summary["errors"].append(f"{k.symbol}: {exc}")
             with c:
                 c.execute("INSERT INTO fetch_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (info.name, k.expiry.isoformat(), k.strike, k.option_type, k.token, str(start), str(now), 0, 0, "error", str(exc)[:200], stamp()))
             continue
-        rows, bad = clean_rows(raw)
+        rows, bad = clean_rows(raw, hours=hours)
         with c:
             c.executemany("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?,?,?)",
                           [(info.name, k.expiry.isoformat(), k.strike, k.option_type, *r) for r in rows])
@@ -137,7 +150,8 @@ async def repair_errors(session, info: UnderlyingInfo, days_back: int = 5, db: P
     Real data only: a contract that still fails stays missing and is reported. Safe to run any number of times (upsert by minute)."""
     import asyncio
     now = dt.datetime.now(IST).replace(tzinfo=None, second=0, microsecond=0)
-    start = (now - dt.timedelta(days=days_back)).replace(hour=9, minute=15)
+    hours = _hm_range(info)
+    start = (now - dt.timedelta(days=days_back)).replace(hour=_session(info)[0].hour, minute=_session(info)[0].minute)
     c = connect(db)
     failed = {(r[0], float(r[1]), r[2]) for r in c.execute(
         "SELECT f.expiry, f.strike, f.opt FROM fetch_log f WHERE f.symbol=? AND f.opt!='IDX' AND f.status='error' AND f.fetched_at = "
@@ -148,14 +162,14 @@ async def repair_errors(session, info: UnderlyingInfo, days_back: int = 5, db: P
     for k in todo:
         for attempt in (1, 2, 3):
             try:
-                raw = await _fetch(session, "NFO", k.token, start, now)
+                raw = await _fetch(session, getattr(info, "exch", "NFO"), k.token, start, now)
             except AngelOneApiError as exc:
                 if attempt == 3:
                     out["still_failing"].append(f"{k.symbol}: {exc}")
                 else:
                     await asyncio.sleep(pause * 3)
                 continue
-            rows, bad = clean_rows(raw)
+            rows, bad = clean_rows(raw, hours=hours)
             with c:
                 c.executemany("INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?,?,?)", [(info.name, k.expiry.isoformat(), k.strike, k.option_type, *r) for r in rows])
                 c.execute("INSERT INTO fetch_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (info.name, k.expiry.isoformat(), k.strike, k.option_type, k.token, str(start), str(now), len(rows), bad, "ok", "repaired", stamp()))

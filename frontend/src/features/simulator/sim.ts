@@ -1,6 +1,8 @@
 /** Types and pure helpers of the Options Simulator. Everything that talks to the server lives in useSimulator.ts. */
 
-export type Sym = 'NIFTY' | 'BANKNIFTY'
+export type Sym = 'NIFTY' | 'BANKNIFTY' | 'GOLDM' | 'SILVERM'
+/** MCX options on futures (gold / silver): live chain and collected 1-minute data; no EOD Bhavcopy. */
+export const MCX_SYMS: Sym[] = ['GOLDM', 'SILVERM']
 export type Side = 'BUY' | 'SELL'
 export type Opt = 'CE' | 'PE'
 
@@ -20,6 +22,10 @@ export interface Leg {
 }
 export interface ChainRow { strike: number; CE: Leg | null; PE: Leg | null }
 export interface Chain {
+  option_exch?: string          // NFO (indexes) or MCX (gold / silver)
+  underlying_spec?: string      // EXCHANGE:TOKEN of the price the options are on (live ticks)
+  underlying_symbol?: string
+  lot_note?: string | null
   mode: 'eod' | 'intraday' | 'live'
   date: string
   time?: string

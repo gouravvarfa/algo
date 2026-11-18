@@ -146,6 +146,7 @@ async def chain(symbol: str = "BANKNIFTY", expiry: str = "nearest", strikes: int
                          "premium_100": oc.nearest_premium(ch, side, 100)}
     lot = info.contracts[0].lot_size if info.contracts else None
     return {"symbol": ch.underlying, "expiry": ch.expiry.strftime("%d%b%Y").upper(), "spot": ch.spot, "vix": ch.vix,
+            "option_exch": info.exch, "underlying_spec": f"{info.spot_exch}:{info.underlying_for(exp)[0]}", "underlying_symbol": info.underlying_for(exp)[1],
             "atm": oc.atm_strike(ch), "lot_size": lot, "market_open": ch.market_open, "pcr": round(pe_oi / ce_oi, 3) if ce_oi else None,
             "fetched_at": ch.fetched_at.isoformat(timespec="seconds"), "violations": ch.violations, "stale": ch.stale,
             "warnings": ch.warnings, "helpers": helpers,
@@ -344,7 +345,7 @@ async def sim_margin(req: MarginReq):
         if c is None:
             out["unlisted"].append(f"{p.opt} {p.strike:g} {p.expiry}")
             continue
-        basket.append({"exchange": "NFO", "qty": p.lots * p.lot_size, "price": 0, "productType": "CARRYFORWARD",
+        basket.append({"exchange": info.exch, "qty": p.lots * (c.exch_lot or p.lot_size), "price": 0, "productType": "CARRYFORWARD",
                        "token": c.token, "tradeType": p.side, "orderType": "MARKET"})
     if out["unlisted"]:
         out["note"] = "Angel One's margin calculator only knows contracts that are still listed; expired legs cannot be margined, so no margin is shown"
@@ -547,14 +548,17 @@ async def intraday_chain(date: str, time: str, symbol: str = "NIFTY", expiry: st
         rows = intraday.chain_at(c, sym, date, hm, expiry)
     spot, spot_ts = sp
     oi, oi_day, lot = _prev_oi(sym, date, expiry)
-    if lot is None:
-        try:
-            info = await asyncio.to_thread(master.load_underlying, sym)
-            lot = next((k.lot_size for k in info.contracts if k.expiry.isoformat() == expiry), None)
-        except Exception:
-            lot = None
+    info = None
+    try:
+        info = await asyncio.to_thread(master.load_underlying, sym)
+    except Exception:
+        pass
+    if lot is None and info is not None:
+        lot = next((k.lot_size for k in info.contracts if k.expiry.isoformat() == expiry), None)
+    q_carry = info.carry(RATE) if info is not None else 0.0
+    close_t = info.expiry_time if info is not None else dt.time(15, 30)
     now = dt.datetime.strptime(f"{date} {hm}", "%Y-%m-%d %H:%M")
-    exp_close = dt.datetime.strptime(expiry, "%Y-%m-%d").replace(hour=15, minute=30)
+    exp_close = dt.datetime.combine(dt.date.fromisoformat(expiry), close_t)
     t = max((exp_close - now).total_seconds(), 60) / (365 * 86400)
     strikes = sorted({k for k, _ in rows} | {k for k, _ in oi})
     out = []
@@ -566,11 +570,11 @@ async def intraday_chain(date: str, time: str, symbol: str = "NIFTY", expiry: st
                 rec[o] = None
                 continue
             ltp = r["ltp"] if r else None
-            iv = bs.implied_vol(ltp, spot, k, t, RATE, 0.0, o == "CE") if ltp else None
+            iv = bs.implied_vol(ltp, spot, k, t, RATE, q_carry, o == "CE") if ltp else None
             age = int((now - dt.datetime.strptime(f"{date} {r['ts']}", "%Y-%m-%d %H:%M")).total_seconds() // 60) if r else None
             rec[o] = {"ltp": ltp, "ts": r["ts"] if r else None, "age_min": age, "volume": r["volume"] if r else 0,
                       "oi": oi.get((k, o)), "chg_oi": None, "iv": round(iv, 1) if iv else None,
-                      "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
+                      "delta": round(bs.greeks(spot, k, t, RATE, q_carry, iv / 100, o == "CE")["delta"], 2) if iv else None}
         out.append({"strike": k, **rec})
     if not out:
         raise HTTPException(404, f"no strikes for {expiry} on {date}")
@@ -902,7 +906,30 @@ CHAIN_IDLE_SECONDS = 120
 PIN_IDLE_SECONDS = 900      # a position's leg keeps its token this long after the last time a browser valued it
 _CHAINS: dict[tuple[str, str], tuple[float, list[str]]] = {}     # (symbol, expiry) -> (last asked, tokens nearest the ATM first)
 _PINS: dict[str, float] = {}                                     # token of an open position's leg -> last valued
-_OPTION_TOKENS: set[str] = set()                                 # every index option token seen: the only tokens this module may drop
+_OPTION_TOKENS: set[str] = set()                                 # every option token seen: the only tokens this module may drop
+_TOKEN_EXCH: dict[str, str] = {}                                 # option token -> its exchange (NFO for the indexes, MCX for gold / silver)
+
+
+async def _underlying(info, expiry: dt.date | None) -> dict:
+    """The price the options are on, from live ticks: an NSE index (the market bar's own quote), or the MCX futures contract of that expiry."""
+    feed = _live_ready()
+    if info.spot_exch == "NSE":
+        from app.paper_trading.engine import INDEX_TOKENS
+        ex_i, tok_i = INDEX_TOKENS[info.name]
+        feed.subscribe(ex_i, tok_i)
+        q = await live_engine.index_quote(info.name)
+        return {**q, "spec": f"{ex_i}:{tok_i}", "symbol": info.spot_symbol}
+    tok, sym = info.underlying_for(expiry)
+    feed.subscribe(info.spot_exch, tok)
+    for _ in range(20):                          # just subscribed: the feed sends the last price (also when the market is closed) within a second
+        if feed.latest.get(tok) is not None:
+            break
+        await asyncio.sleep(0.1)
+    tick = feed.latest.get(tok)
+    from app.paper_trading.engine import now_ist
+    today = now_ist().date()
+    return {"price": tick.ltp if tick else None, "live": bool(tick is not None and feed.healthy(tok) and tick.exch_ts.date() == today),
+            "change": None, "pct": None, "prev_close": None, "spec": f"{info.spot_exch}:{tok}", "symbol": sym}
 
 
 def _live_ready():
@@ -937,12 +964,15 @@ def _sync_subs(feed, now: float | None = None) -> dict:
             if tok not in seen:
                 want.append(tok)
                 seen.add(tok)
-    have = feed.subscribed("NFO")
     keep = _protected()
-    drop = [t for t in have if t in _OPTION_TOKENS and t not in seen and t not in keep]
-    feed.subscribe_many("NFO", want)
-    feed.unsubscribe_many("NFO", drop)
-    return {"wanted": len(want), "dropped": len(drop)}
+    dropped = 0
+    for ex in sorted({_TOKEN_EXCH.get(t, "NFO") for t in want} | {"NFO"} | set(_TOKEN_EXCH.values())):
+        have = feed.subscribed(ex)
+        drop = [t for t in have if t in _OPTION_TOKENS and t not in seen and t not in keep]
+        feed.subscribe_many(ex, [t for t in want if _TOKEN_EXCH.get(t, "NFO") == ex])
+        feed.unsubscribe_many(ex, drop)
+        dropped += len(drop)
+    return {"wanted": len(want), "dropped": dropped}
 
 
 @router.get("/live/chain")
@@ -954,36 +984,39 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
         raise HTTPException(503, "the live option chain is switched off by a developer")
     feed = _live_ready()
     sym = symbol.upper()
-    from app.paper_trading.engine import INDEX_TOKENS, now_ist
-    ex_i, tok_i = INDEX_TOKENS[sym]
-    feed.subscribe(ex_i, tok_i)
+    from app.paper_trading.engine import now_ist
     try:
-        q = await live_engine.index_quote(sym)
-    except Exception as exc:
-        raise HTTPException(502, f"index quote unavailable: {exc}")
-    spot = q["price"]
-    if not spot:
-        raise HTTPException(502, "no index price yet")
-    info = await asyncio.to_thread(master.load_underlying, sym)
+        info = await asyncio.to_thread(master.load_underlying, sym)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     now = now_ist()
     exps = [e.isoformat() for e in master.expiries(info)][:6]
     if not exps:
         raise HTTPException(404, "no listed expiries")
     expiry = expiry if expiry in exps else exps[0]
+    try:
+        q = await _underlying(info, dt.date.fromisoformat(expiry))
+    except Exception as exc:
+        raise HTTPException(502, f"underlying quote unavailable: {exc}")
+    spot = q["price"]
+    if not spot:
+        raise HTTPException(502, "no underlying price yet")
     cons = [c for c in info.contracts if c.expiry.isoformat() == expiry]
     strikes_all = sorted({c.strike for c in cons})
     atm = min(strikes_all, key=lambda k: abs(k - spot))
     strikes = strikes_all
     book = {(c.strike, c.option_type): c for c in cons}
     _OPTION_TOKENS.update(str(c.token) for c in info.contracts if c.option_type in ("CE", "PE"))
+    _TOKEN_EXCH.update({str(c.token): info.exch for c in info.contracts})
     _CHAINS[(sym, expiry)] = (time.time(), [str(c.token) for c in sorted(book.values(), key=lambda c: (abs(c.strike - spot), c.option_type))])
     _sync_subs(feed)
     today = now.date().isoformat()
     with _idb() as cdb:
-        stored = intraday.chain_at(cdb, sym, today, "15:30", expiry)
+        stored = intraday.chain_at(cdb, sym, today, info.session[1].strftime("%H:%M"), expiry)
     oi, oi_day, _lot = _prev_oi(sym, today, expiry)
     lot = next(iter(book.values())).lot_size if book else None
-    exp_close = dt.datetime.combine(dt.date.fromisoformat(expiry), dt.time(15, 30))
+    q_carry = info.carry(RATE)
+    exp_close = dt.datetime.combine(dt.date.fromisoformat(expiry), info.expiry_time)
     t = max((exp_close - now.replace(tzinfo=None)).total_seconds(), 60) / (365 * 86400)
     out, live_n = [], 0
     for k in strikes:
@@ -1002,10 +1035,10 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
                 ltp, src, age_s, ts = r["ltp"], "stored", None, r["ts"]
             else:
                 ltp, src, age_s, ts = None, None, None, None
-            iv = bs.implied_vol(ltp, spot, k, t, RATE, 0.0, o == "CE") if ltp else None
+            iv = bs.implied_vol(ltp, spot, k, t, RATE, q_carry, o == "CE") if ltp else None
             rec[o] = {"token": c.token, "ltp": ltp, "src": src, "age_s": age_s, "ts": ts, "age_min": 0, "volume": None, "oi": oi.get((k, o)), "chg_oi": None,
                       "iv": round(iv, 1) if iv else None,
-                      "delta": round(bs.greeks(spot, k, t, RATE, 0.0, iv / 100, o == "CE")["delta"], 2) if iv else None}
+                      "delta": round(bs.greeks(spot, k, t, RATE, q_carry, iv / 100, o == "CE")["delta"], 2) if iv else None}
         out.append({"strike": k, **rec})
     iv_fill.fill(out, spot, t, RATE)
     a = next(r for r in out if r["strike"] == atm)
@@ -1018,7 +1051,9 @@ async def live_chain(symbol: str = "NIFTY", expiry: str | None = None):
             "lot_size": lot, "atm": atm, "dte": (dt.date.fromisoformat(expiry) - now.date()).days,
             "pcr": round(pe_oi / ce_oi, 2) if ce_oi else None, "max_pain": None, "straddle": round(ca + pa, 2) if ca and pa else None,
             "atm_iv": round(sum(ivs) / len(ivs), 1) if ivs else None, "oi_day": oi_day, "live_legs": live_n, "feed_connected": feed.connected,
-            "oi_note": f"OI is the NSE Bhavcopy OI of {oi_day} (live ticks carry no OI)" if oi_day else "no previous-day OI available",
+            "oi_note": f"OI is the NSE Bhavcopy OI of {oi_day} (live ticks carry no OI)" if oi_day else ("MCX: no previous-day OI here (live ticks carry no OI)" if info.exch == "MCX" else "no previous-day OI available"),
+            "option_exch": info.exch, "underlying_spec": q.get("spec"), "underlying_symbol": q.get("symbol"),
+            "lot_note": f"1 lot = Rs {lot} per 1-point move ({master.MCX_OPTIONS[sym]['label']}: the option is on the futures {q.get('symbol')})" if info.exch == "MCX" else None,
             "rows": out}
 
 
@@ -1034,7 +1069,8 @@ async def live_mark(req: LiveMarkReq):
     sym = req.symbol.upper()
     info = await asyncio.to_thread(master.load_underlying, sym)
     book = {(c.expiry.isoformat(), round(c.strike, 2), c.option_type): c for c in info.contracts}
-    q = await live_engine.index_quote(sym)
+    first_exp = min((dt.date.fromisoformat(p.expiry) for p in req.positions), default=None)
+    q = await _underlying(info, first_exp)
     out, pay = [], []
     for p in req.positions:
         qty, sign = p.lots * p.lot_size, (1 if p.side == "BUY" else -1)
@@ -1045,7 +1081,8 @@ async def live_mark(req: LiveMarkReq):
         else:
             _PINS[str(c.token)] = time.time()
             _OPTION_TOKENS.add(str(c.token))
-            feed.subscribe_many("NFO", [c.token])
+            _TOKEN_EXCH[str(c.token)] = info.exch
+            feed.subscribe_many(info.exch, [c.token])
             tick = feed.latest.get(c.token)
             if tick is None:
                 note = "waiting for the first live tick"
