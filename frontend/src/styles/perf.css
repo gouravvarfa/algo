@@ -123,3 +123,36 @@ html { scroll-behavior: auto; }
   :root:not([data-theme="light"]) .sidebar .navlink.toned.active .navicon { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .14); color: #e6ecf7; }
   :root:not([data-theme="light"]) .sidebar .navlink.toned.active::before { background: #9aa6b8; }
 }
+/* ================= active sidebar item: a soft, fading tint of the item's own colour (18 Nov 2026) =================
+   The tint is a ::after layer whose opacity fades in / out (250 ms), so switching pages cross-fades instead of jumping. */
+.sidebar .navlink.toned { isolation: isolate; border: 1px solid transparent; border-radius: 12px; }
+.sidebar .navlink.toned::after { content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: 12px; pointer-events: none; opacity: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 13%, transparent) 0%, color-mix(in srgb, var(--tone) 5%, transparent) 55%, transparent 100%);
+  border: 1px solid color-mix(in srgb, var(--tone) 14%, transparent); box-shadow: 0 2px 10px -6px color-mix(in srgb, var(--tone) 30%, transparent); transition: opacity .25s ease; }
+.sidebar .navlink.toned.active::after { opacity: 1; }
+.sidebar .navlink.toned.active { background: transparent; color: color-mix(in srgb, var(--tone) 72%, #0f172a); font-weight: 600; box-shadow: none; }
+.sidebar .navlink.toned.active::before { background: var(--tone); }
+.sidebar .navlink.toned.active .navicon { background: color-mix(in srgb, var(--tone) 16%, white); border-color: color-mix(in srgb, var(--tone) 22%, transparent); color: var(--tone); }
+/* dark: the same fade, but so faint it stays dark (no colourful blocks) */
+:root[data-theme="dark"] .sidebar .navlink.toned::after { background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 9%, rgba(255,255,255,.04)) 0%, rgba(255,255,255,.02) 60%, transparent 100%); border-color: rgba(255,255,255,.07); box-shadow: none; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active { background: transparent; color: #e6ecf7; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active::before { background: color-mix(in srgb, var(--tone) 45%, #9aa6b8); }
+:root[data-theme="dark"] .sidebar .navlink.toned.active .navicon { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.12); color: color-mix(in srgb, var(--tone) 35%, #e6ecf7); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sidebar .navlink.toned::after { background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 9%, rgba(255,255,255,.04)) 0%, rgba(255,255,255,.02) 60%, transparent 100%); border-color: rgba(255,255,255,.07); box-shadow: none; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: transparent; color: #e6ecf7; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active .navicon { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.12); color: color-mix(in srgb, var(--tone) 35%, #e6ecf7); }
+}
+
+/* ================= easy on the eyes (18 Nov 2026) =================
+   softer text and borders, lighter shadows, calmer red / green panels, balanced type */
+:root { --text-primary: #1b2638; --text-secondary: #4a566b; --border: #e3e7ee; --shadow-md: 0 6px 20px rgba(14, 26, 44, .07); }
+:root[data-theme="dark"] { --text-primary: #dfe5ef; --text-secondary: #aab4c5; --border: #1c2840; }
+body { font-size: 13.5px; line-height: 1.55; letter-spacing: .005em; font-feature-settings: "kern", "liga", "tnum"; text-rendering: optimizeLegibility; }
+h1, h2, h3, .stat .v { letter-spacing: -.01em; }
+.stat .v, .num { font-weight: 600; }
+.card, .stat { box-shadow: 0 1px 2px rgba(14, 26, 44, .04), 0 4px 14px -8px rgba(14, 26, 44, .10); }
+:root[data-theme="dark"] .card, :root[data-theme="dark"] .stat { box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 6px 18px -10px rgba(0, 0, 0, .6); }
+/* the REAL panel: a quiet rose tint instead of a loud pink block */
+.realpanel.on { background: color-mix(in srgb, var(--danger-soft) 55%, var(--bg-surface)) !important; border-color: color-mix(in srgb, var(--danger) 22%, var(--border)) !important; }
+* { scroll-behavior: smooth; }
