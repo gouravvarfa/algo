@@ -107,3 +107,19 @@ html { scroll-behavior: auto; }
   :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: #e6ecf7; box-shadow: none; }
   :root:not([data-theme="light"]) .sidebar .navlink.toned.active .navicon { background: color-mix(in srgb, var(--tone) 24%, transparent); color: color-mix(in srgb, var(--tone) 45%, #fff); }
 }
+/* sidebar tiles, simpler (18 Nov 2026): a neutral tile with a hairline border; only the icon carries a soft tone in light mode.
+   Dark mode: everything dark and grey, no colour; the active item uses the theme accent only. */
+.sidebar .navlink.toned .navicon { background: var(--bg-soft); border: 1px solid var(--border); color: color-mix(in srgb, var(--tone) 75%, #475569); }
+.sidebar .navlink.toned:hover .navicon { background: var(--bg-surface); }
+.sidebar .navlink.toned.active .navicon { background: var(--bg-surface); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); color: var(--accent); }
+:root[data-theme="dark"] .sidebar .navlink.toned .navicon,
+:root[data-theme="dark"] .sidebar .navlink.toned:hover .navicon { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .08); color: #8a96a8; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active { background: rgba(255, 255, 255, .06); color: #e6ecf7; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active .navicon { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .14); color: #e6ecf7; }
+:root[data-theme="dark"] .sidebar .navlink.toned.active::before { background: #9aa6b8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .sidebar .navlink.toned .navicon { background: rgba(255, 255, 255, .04); border-color: rgba(255, 255, 255, .08); color: #8a96a8; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active { background: rgba(255, 255, 255, .06); color: #e6ecf7; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active .navicon { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .14); color: #e6ecf7; }
+  :root:not([data-theme="light"]) .sidebar .navlink.toned.active::before { background: #9aa6b8; }
+}
