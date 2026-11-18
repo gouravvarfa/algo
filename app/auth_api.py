@@ -68,7 +68,7 @@ def _secure(request: Request) -> bool:
 def _set_cookies(resp: JSONResponse, request: Request, token: str, csrf: str) -> None:
     # session id: invisible to scripts. CSRF token: readable by our own page script (it copies it into a request header);
     # an attacking site can neither read it (same-origin) nor have the browser send our cookies cross-site (SameSite=Strict).
-    life = sessions.seconds_left(time.time()) + 60          # the browser keeps the cookie until a minute past 4 pm; the server ends the session at 4 pm
+    life = sessions.seconds_left(time.time()) + 60          # the browser keeps the cookie until a minute past 4 am; the server ends the session at 4 am
     resp.set_cookie(sessions.COOKIE, token, max_age=life, httponly=True, samesite="strict", secure=_secure(request))
     resp.set_cookie(sessions.CSRF_COOKIE, csrf, max_age=life, httponly=False, samesite="strict", secure=_secure(request))
 

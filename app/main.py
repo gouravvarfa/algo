@@ -233,7 +233,7 @@ async def dry_run_api(request: Request, limit: int = 300):
 
 
 def _still_signed_in(request: Request) -> bool:
-    """The same login check every request goes through, asked again while a live stream is open (so the daily 16:00 sign-out cuts it off)."""
+    """The same login check every request goes through, asked again while a live stream is open (so the daily 04:00 sign-out cuts it off)."""
     current = login_mode.current()
     if current == "open":
         return True

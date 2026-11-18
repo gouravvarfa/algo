@@ -5,8 +5,8 @@ is therefore instant, which a signed stateless cookie cannot do.
 
   * heartbeat  : the open page pings every 30 s -> last_seen_at. No ping for 2 minutes = the page is gone (tab closed, laptop asleep).
   * activity   : a ping that reports real user input -> last_activity_at (shown to developers; it no longer signs anyone out).
-  * daily end  : every session ends at the next 16:00 IST after it started (the owner's rule: stay signed in all trading day, sign out
-                 at 4 pm). Until then only logout or an admin ends it.
+  * daily end  : every session ends at the next 04:00 IST after it started (the owner, 18 Nov 2026: sign out at 4 am, when no market is open,
+                 so nobody is signed out during NSE or MCX hours; before that it was 4 pm). Until then only logout or an admin ends it.
 A login on another device opens its own session and leaves the others signed in (the owner, 15 Nov 2026: no limit on devices).
 """
 from __future__ import annotations
@@ -23,13 +23,15 @@ COOKIE = "algo_sid"
 CSRF_COOKIE = "algo_csrf"
 HEARTBEAT_DEAD = 120
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
-DAILY_END = dt.time(16, 0)                 # 4 pm IST: every session ends at the next one of these
+DAILY_END = dt.time(4, 0)                  # 4 am IST: every session ends at the next one of these (no market is open then)
+SWITCHED_AT = dt.datetime(2026, 11, 18, 13, 0, tzinfo=dt.timezone(dt.timedelta(hours=5, minutes=30))).timestamp()   # 4 pm -> 4 am
 ABSOLUTE_LIFETIME = 24 * 3600              # a session can never be older than one day
 
 
 def ends_at(started_at: float) -> float:
-    """The next 16:00 IST after `started_at` (a login at 15:59 ends a minute later; at 16:00 or after, it ends at 16:00 the next day)."""
-    t = dt.datetime.fromtimestamp(started_at, IST)
+    """The next 04:00 IST after `started_at` (a login at 03:59 ends a minute later; at 04:00 or after, it ends at 04:00 the next day). A session
+    started before the switch from 4 pm keeps going until the first 4 am after the switch, so the change itself signs nobody out."""
+    t = dt.datetime.fromtimestamp(max(started_at, SWITCHED_AT) if started_at < SWITCHED_AT else started_at, IST)
     end = t.replace(hour=DAILY_END.hour, minute=DAILY_END.minute, second=0, microsecond=0)
     if end <= t:
         end += dt.timedelta(days=1)
@@ -73,7 +75,7 @@ def create(c: sqlite3.Connection, user_id: str, user_agent: str | None, ip: str,
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
     with write_tx(c):
         for old in c.execute("SELECT id, started_at FROM sessions WHERE user_id=? AND ended_at IS NULL", (user_id,)).fetchall():
-            if _end_reason_if_dead(old, now):            # past its 4 pm on a device that never came back: closed now, so the lists stay true
+            if _end_reason_if_dead(old, now):            # past its 4 am on a device that never came back: closed now, so the lists stay true
                 c.execute("UPDATE sessions SET ended_at=?, end_reason='expired' WHERE id=?", (now, old["id"]))
         c.execute(
             "INSERT INTO sessions (id, user_id, csrf_token, started_at, last_seen_at, last_activity_at, device_label, user_agent_hash, ip_hash) "

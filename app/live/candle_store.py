@@ -67,3 +67,10 @@ def merge(stored: pd.DataFrame, fresh: pd.DataFrame) -> pd.DataFrame:
         return stored
     out = pd.concat([stored[~stored.index.isin(fresh.index)], fresh]).sort_index()
     return out
+
+
+def drop_day(interval: str, day: dt.date, db: Path | None = None) -> int:
+    """Remove every stored candle of `interval` dated `day` (all tokens). Used at start-up for today's daily bars: one fetched during the session
+    was still forming, and kept in the store it would pass as that day's real close the next morning."""
+    with _conn(db) as c:
+        return c.execute("DELETE FROM candles WHERE interval=? AND ts LIKE ?", (interval, day.isoformat() + "%")).rowcount

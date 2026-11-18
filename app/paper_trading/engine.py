@@ -243,6 +243,42 @@ def intraday_candles(rest: list[tuple], ticks: list[tuple], size: int = 15, exch
     return list(out.values())
 
 
+NSE_DAY_CLOSE, MCX_DAY_CLOSE = dt.time(15, 30), dt.time(23, 55)
+
+
+def day_close_for(exch_seg: str) -> dt.time:
+    return MCX_DAY_CLOSE if (exch_seg or "").upper() == "MCX" else NSE_DAY_CLOSE
+
+
+def complete_daily(df: pd.DataFrame, now: dt.datetime, close: dt.time) -> pd.DataFrame:
+    """Only finished daily bars: before the session close today's bar is still forming, so it is not stored as that day's candle."""
+    if df is None or df.empty or now.time() >= close:
+        return df
+    return df[df.index.date != now.date()]
+
+
+def final_daily(df: pd.DataFrame, fetched_at: dt.datetime | None, now: dt.datetime, close: dt.time) -> pd.DataFrame:
+    """Daily bars fetched on an EARLIER day, before that day's close: that day's bar was still forming then, so it is left out instead of passing
+    as yesterday's real close (17-18 Nov 2026: SUNPHARMA's 17 Nov bar was a mid-afternoon copy; it hid this morning's gap and a wrong SELL was
+    journaled at 09:15). The next refresh brings the final bar."""
+    if df is None or df.empty or fetched_at is None:
+        return df
+    fd = fetched_at.date()
+    if fd >= now.date() or fetched_at.time() >= close:
+        return df
+    return df[df.index.date != fd]
+
+
+def unconfirmed_day(minutes: list, daily_dates: list, today: dt.date) -> dt.date | None:
+    """The last session day before today that has 1-minute candles but no daily candle yet (None: the daily data is complete). Without it the day's
+    System Points, the previous close and so the gap rule are not certain."""
+    days = {m.ts.date() for m in minutes or [] if m.ts.date() < today}
+    if not days:
+        return None
+    last = max(days)
+    return None if last in set(daily_dates) else last
+
+
 def trim_partial_first_day(mins: list, lenient: bool = False) -> list:
     """The REST window starts N days back at the current time of day, so its FIRST day is usually only a partial session. A
     partial first day hides the morning crossings that happened before the window began (the engine then 'enters' on the
@@ -582,6 +618,13 @@ class PaperEngine:
                     real_ready = False
                 if inst.instrument_type == "FUTURE" and _expired(getattr(inst, "expiry", ""), now):
                     real_ready = False              # the chain could not run yet (roll day, before the next contract's first minute): an expired contract's result
+        if minutes is None:
+            gap_day = unconfirmed_day((self._chain_cache.get(("m", active.token)) or (None, []))[1], [d.date() for d in dates], now.date())
+            if gap_day is not None:
+                real_ready = False      # not journaled and not given to real accounts: their last good result stays until the candle arrives
+                engine_warn = True
+                engine_note = (f"WARNING: the daily candle of {gap_day:%d %b} has not come from Angel One yet, so today's System Points and gap rule are not "
+                               f"certain: no live signal is acted on until it arrives. ") + engine_note
         ltp = float(raw["close"].iloc[-1])
         tick = self.feed.latest.get(active.token)
         live_tick = self.feed.healthy(active.token) and tick is not None
@@ -784,7 +827,7 @@ class PaperEngine:
         if hit:
             if (now - hit[0]).total_seconds() >= DAILY_RAW_CACHE_WITH_FEED and not _settled(c.expiry, _last_ts(hit[1]), now):
                 self._refresh_later(key, lambda: self._load_daily(c, from_dt, now_ist()))
-            return hit[1]
+            return final_daily(hit[1], hit[0], now, day_close_for(c.exch_seg))
         return await self._load_daily(c, from_dt, now)
 
     async def _load_daily(self, c: ContractRef, from_dt: dt.datetime, now: dt.datetime) -> pd.DataFrame:
@@ -795,7 +838,7 @@ class PaperEngine:
         else:
             try:
                 fresh = await self._candles(c.exch_seg, c.token, "ONE_DAY", (now - from_dt).days + 2, include_partial=True)
-                candle_store.put(c.token, "ONE_DAY", fresh)
+                candle_store.put(c.token, "ONE_DAY", complete_daily(fresh, now, day_close_for(c.exch_seg)))     # a forming bar is never stored
             except Exception as exc:
                 log.warning("daily candles for %s unavailable (%s); using the stored copy", c.trading_symbol, str(exc)[:60])
                 fresh = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -940,7 +983,8 @@ class PaperEngine:
         if rc:
             if (now - rc[0]).total_seconds() >= ttl and not _settled(getattr(inst, "expiry", ""), _last_ts(rc[1]), now):
                 self._refresh_later(("o", inst.id), lambda: self._load_own(inst, interval, from_dt, days_back, now_ist()))
-            return rc[1][rc[1].index >= from_dt]
+            out = rc[1][rc[1].index >= from_dt]
+            return final_daily(out, rc[0], now, inst.sess.close) if interval == "ONE_DAY" else out
         return await self._load_own(inst, interval, from_dt, days_back, now)
 
     async def _load_own(self, inst: Instrument, interval: str, from_dt: dt.datetime, days_back: int, now: dt.datetime) -> pd.DataFrame:
@@ -1202,6 +1246,12 @@ class PaperEngine:
                 return
 
     def start(self) -> None:
+        try:
+            gone = candle_store.drop_day("ONE_DAY", now_ist().date())   # today's stored daily bars were fetched while still forming
+            if gone:
+                log.info("start-up: %d stored daily bars of today removed (still forming when stored)", gone)
+        except Exception:
+            log.warning("could not clear today's stored daily bars")
         for inst in self.instruments.values():
             self.feed.subscribe(inst.exch_seg, inst.token)
         for ex, tok in INDEX_TOKENS.values():        # index prices for the day-change display

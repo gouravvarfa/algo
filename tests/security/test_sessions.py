@@ -67,7 +67,8 @@ def test_an_admin_force_logout_ends_every_device(db, new_client):
     assert laptop.get("/api/auth/me").status_code == 401 and phone.get("/api/auth/me").status_code == 401
 
 
-def test_a_device_left_signed_in_past_4pm_is_closed_at_the_next_login(db, new_client):
+def test_a_device_left_signed_in_past_its_4am_is_closed_at_the_next_login(db, new_client, monkeypatch):
+    monkeypatch.setattr(sessions, "SWITCHED_AT", 0)                                 # the rule itself, without the one-time 4 pm -> 4 am grace
     acct = make_user(db)
     login(new_client(), acct)
     age(db, acct.id, started_at=2 * 24 * 3600)                                     # signed in two days ago and never came back
@@ -84,37 +85,43 @@ def test_the_admin_list_shows_a_person_once_however_many_devices(db, new_client)
     assert len(rows) == 1 and rows[0]["online"] and rows[0]["devices_online"] == 2 and rows[0]["device"].endswith("+1 more")
 
 
-# ---- one daily sign-out time (4 pm IST), no idle timeout ----
+# ---- one daily sign-out time (4 am IST), no idle timeout ----
 def _ist(y, mo, d, h, mi):
     return dt.datetime(y, mo, d, h, mi, tzinfo=sessions.IST).timestamp()
 
 
-def test_sessions_end_at_the_next_4pm_ist():
-    assert sessions.ends_at(_ist(2026, 10, 26, 9, 15)) == _ist(2026, 10, 26, 16, 0)       # morning login: 4 pm the same day
-    assert sessions.ends_at(_ist(2026, 10, 26, 15, 59)) == _ist(2026, 10, 26, 16, 0)
-    assert sessions.ends_at(_ist(2026, 10, 26, 16, 0)) == _ist(2026, 10, 27, 16, 0)       # at or after 4 pm: 4 pm the next day
-    assert sessions.ends_at(_ist(2026, 10, 26, 21, 30)) == _ist(2026, 10, 27, 16, 0)
+def test_sessions_end_at_the_next_4am_ist():
+    assert sessions.ends_at(_ist(2026, 11, 20, 9, 15)) == _ist(2026, 11, 21, 4, 0)        # a trading-day login lasts through NSE and MCX hours
+    assert sessions.ends_at(_ist(2026, 11, 20, 23, 50)) == _ist(2026, 11, 21, 4, 0)       # MCX evening: still signed in after 23:55
+    assert sessions.ends_at(_ist(2026, 11, 21, 3, 59)) == _ist(2026, 11, 21, 4, 0)
+    assert sessions.ends_at(_ist(2026, 11, 21, 4, 0)) == _ist(2026, 11, 22, 4, 0)         # at or after 4 am: 4 am the next day
+
+
+def test_the_switch_from_4pm_to_4am_signs_nobody_out():
+    assert sessions.ends_at(_ist(2026, 11, 17, 16, 0)) == _ist(2026, 11, 19, 4, 0)        # signed in before the switch: until the first 4 am after it
+    assert sessions.ends_at(_ist(2026, 11, 18, 6, 54)) == _ist(2026, 11, 19, 4, 0)
 
 
 def test_hours_without_any_action_do_not_sign_the_person_out(db, client):
     acct = make_user(db)
     login(client, acct)
     age(db, acct.id, last_activity_at=6 * 3600, last_seen_at=6 * 3600)              # six hours with no input and no ping
-    assert client.get("/api/auth/me").status_code == 200                            # still signed in: only 4 pm ends it
+    assert client.get("/api/auth/me").status_code == 200                            # still signed in: only 4 am ends it
 
 
-def test_the_session_ends_at_4pm(db, client):
+def test_the_session_ends_at_4am(db, client, monkeypatch):
+    monkeypatch.setattr(sessions, "SWITCHED_AT", 0)
     acct = make_user(db)
     login(client, acct)
     started = db.execute("SELECT started_at FROM sessions WHERE ended_at IS NULL").fetchone()[0]
-    yesterday_3pm = sessions.ends_at(started) - 86400 - 3600                       # a login at 3 pm yesterday: its 4 pm has passed
-    db.execute("UPDATE sessions SET started_at=? WHERE ended_at IS NULL", (yesterday_3pm,))
+    before_last_4am = sessions.ends_at(started) - 86400 - 3600                     # a login an hour before the last 4 am: that 4 am has passed
+    db.execute("UPDATE sessions SET started_at=? WHERE ended_at IS NULL", (before_last_4am,))
     db.commit()
     assert client.get("/api/auth/me").status_code == 401
     assert end_reason(db, acct.id) == ["expired"]
 
 
-def test_the_cookie_lives_until_just_after_4pm(db, client):
+def test_the_cookie_lives_until_just_after_4am(db, client):
     acct = make_user(db)
     r = login(client, acct)
     cookie = [h for h in r.headers.get_list("set-cookie") if h.startswith(sessions.COOKIE + "=")][0]

@@ -30,7 +30,7 @@ MAX_TOKENS_PER_CLIENT = 400
 MAX_CLIENTS = 200
 BATCH_SECONDS = 0.15              # ticks arriving within this window travel in one message
 HEARTBEAT_SECONDS = 15
-RECHECK_SECONDS = 60              # the login is checked again this often; a signed-out browser is cut off (the daily 16:00 sign-out included)
+RECHECK_SECONDS = 60              # the login is checked again this often; a signed-out browser is cut off (the daily 04:00 sign-out included)
 MAX_LIFETIME_SECONDS = 3600       # then the stream ends and the browser reconnects (this also clears any half-dead connection)
 SPEC = re.compile(r"^[A-Z]{3,4}:\d{1,10}$")
 
