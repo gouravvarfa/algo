@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import re
 import urllib.parse
 
 from fastapi import FastAPI, HTTPException, Request
@@ -134,9 +135,17 @@ for _sub in ("assets", "fonts"):
         app.mount(f"/app/{_sub}", StaticFiles(directory=FRONTEND_DIST / _sub), name=f"app-{_sub}")
 
 
+_ROOT_FILE_TYPES = {".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+_ROOT_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
 @app.get("/app")
 @app.get("/app/{path:path}")
 async def react_app(path: str = ""):
+    # a real file in the build's top folder (the browser-tab icon) is sent as itself: before, /app/favicon.svg answered with the page, so the tab
+    # never showed the icon (18 Nov 2026). Only a plain file name with one of these types; every other path is a page of the React app.
+    if _ROOT_FILE_NAME.fullmatch(path or "") and (FRONTEND_DIST / path).suffix.lower() in _ROOT_FILE_TYPES and (FRONTEND_DIST / path).is_file():
+        return FileResponse(FRONTEND_DIST / path, media_type=_ROOT_FILE_TYPES[(FRONTEND_DIST / path).suffix.lower()], headers={"Cache-Control": "public, max-age=86400"})
     index = FRONTEND_DIST / "index.html"
     if not index.exists():
         return PlainTextResponse("The React app is not built yet: run `npm install && npm run build` inside the frontend folder.", status_code=503)
