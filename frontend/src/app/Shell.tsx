@@ -8,6 +8,7 @@ import { useSession } from '../lib/session'
 import { fresh, useLiveTicks } from '../lib/stream'
 import type { IndexQuote } from '../lib/types'
 import { Icon, type IconName } from './Icon'
+import { BrandMark } from './BrandMark'
 import { BottomNav, Hamburger, NavBackdrop } from './MobileNav'
 import { ThemeToggle } from './ThemeToggle'
 import '../features/admin/admin.css'
@@ -70,9 +71,9 @@ export function Sidebar() {
   const { me, mode, logout, can } = useSession()
   return (
     <aside className="sidebar" id="app-sidebar">
-      <NavLink className="logo" to="/top-bottom">
-        <i><Icon name="chart" /></i>
-        <span>Algo Trading<small>Research · paper trading</small></span>
+      <NavLink className="logo brand" to="/top-bottom" aria-label="Algo Trading: home">
+        <BrandMark size={36} />
+        <span>Algo Trading<small>Research · Strategy</small><em className="brandline" /></span>
       </NavLink>
       {MAIN.map((i) => <NavItem key={i.to} item={i} />)}
       <div className="idxcards">

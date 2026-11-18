@@ -162,3 +162,16 @@ h1, h2, h3, .stat .v { letter-spacing: -.01em; }
 .sidebar .navlink.toned::after { box-shadow: none !important; }
 .sidebar .navlink:focus, .sidebar .navlink:focus-visible { outline: none; }
 .sidebar .navlink.toned:focus-visible:not(.active) { background: var(--bg-hover); }
+
+/* ================= brand mark (18 Nov 2026): three rising candlesticks in a soft rounded tile ================= */
+.brandmark { flex: none; display: block; --bm-a: #f5f8ff; --bm-b: #dce7ff; --bm-line: #c5d6fb; --bm-c: #1d5bf0; }
+.brandmark .bm-c { fill: var(--bm-c); }
+.brandmark .bm-w { fill: none; stroke: var(--bm-c); stroke-width: 1.6; stroke-linecap: round; }
+:root[data-theme="dark"] .brandmark { --bm-a: #1b2944; --bm-b: #101a2d; --bm-line: rgba(120, 160, 255, .30); --bm-c: #6d99ff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .brandmark { --bm-a: #1b2944; --bm-b: #101a2d; --bm-line: rgba(120, 160, 255, .30); --bm-c: #6d99ff; } }
+:root .brandmark.ondark { --bm-a: rgba(255, 255, 255, .24); --bm-b: rgba(255, 255, 255, .10); --bm-line: rgba(255, 255, 255, .38); --bm-c: #ffffff; }
+.sidebar .logo.brand { gap: 11px; font-weight: 700; font-size: 16px; letter-spacing: -.015em; color: var(--text-primary); }
+.sidebar .logo.brand > span { display: grid; gap: 1px; line-height: 1.2; }
+.sidebar .logo.brand small { font-size: 11px; font-weight: 500; letter-spacing: .01em; }
+.sidebar .logo.brand .brandline { display: block; width: 22px; height: 2px; border-radius: 2px; background: var(--accent); margin-top: 4px; opacity: .85; }
+:root[data-theme="dark"] .sidebar .logo.brand .brandline { background: #6d99ff; opacity: .7; }

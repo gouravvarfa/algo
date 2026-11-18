@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { ApiError, post } from '../../lib/api'
 import { useSession } from '../../lib/session'
+import { BrandMark } from '../../app/BrandMark'
 import './auth.css'
 
 interface Refusal { message: string; device?: string; last_active?: string; canTakeOver: boolean }
@@ -59,7 +60,7 @@ export function LoginPage() {
     <div className="auth-page">
       <main className="auth-card login">
         <section className="auth-brand">
-          <div className="auth-logo"><span className="bars"><b /><b /><b /></span>Algo Trading</div>
+          <div className="auth-logo"><BrandMark size={46} onDark /><span>Algo Trading<small>Research · Paper Trading · Strategy</small></span></div>
           <h1>Smarter trading<br />with <span className="grad">data &amp; strategy</span></h1>
           <p>Analyse. Backtest. Paper trade.<br />Research with real market data, no broker orders.</p>
           <ul>

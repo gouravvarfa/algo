@@ -9,7 +9,10 @@
 @keyframes orbA { 0% { transform: translate(0, 0) scale(1); } 33% { transform: translate(-150px, 120px) scale(1.12); } 66% { transform: translate(-60px, 300px) scale(.92); } 100% { transform: translate(-260px, 180px) scale(1.06); } }
 @keyframes orbB { 0% { transform: translate(0, 0) scale(1); } 40% { transform: translate(190px, -150px) scale(1.15); } 75% { transform: translate(90px, -300px) scale(.9); } 100% { transform: translate(300px, -120px) scale(1.05); } }
 .auth-brand > * { position: relative; }
-.auth-logo { display: flex; align-items: center; gap: 12px; font-weight: 700; font-size: 20px; }
+.auth-logo { display: flex; align-items: center; gap: 14px; font-weight: 700; font-size: 22px; letter-spacing: -.015em; }
+.auth-logo > span { display: grid; gap: 3px; line-height: 1.15; }
+.auth-logo small { font-size: 12.5px; font-weight: 500; letter-spacing: .01em; color: #c9d6ff; }
+.auth-logo small::after { content: ""; display: block; width: 30px; height: 3px; border-radius: 3px; background: #8be9ff; margin-top: 7px; }
 .bars { display: inline-flex; align-items: flex-end; gap: 3px; height: 26px; }
 .bars b { width: 6px; background: #fff; border-radius: 2px; } .bars b:nth-child(1) { height: 11px; } .bars b:nth-child(2) { height: 19px; } .bars b:nth-child(3) { height: 26px; }
 .auth-brand h1 { margin: 56px 0 0; font-size: clamp(28px, 3vw, 40px); line-height: 1.12; color: #fff; }
