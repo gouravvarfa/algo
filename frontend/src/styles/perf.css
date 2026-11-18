@@ -156,3 +156,9 @@ h1, h2, h3, .stat .v { letter-spacing: -.01em; }
 /* the REAL panel: a quiet rose tint instead of a loud pink block */
 .realpanel.on { background: color-mix(in srgb, var(--danger-soft) 55%, var(--bg-surface)) !important; border-color: color-mix(in srgb, var(--danger) 22%, var(--border)) !important; }
 * { scroll-behavior: smooth; }
+/* the active menu item stays flat and simple (18 Nov 2026): no card shadow (an older "glass" rule with a stronger selector added a white card
+   with a shadow), no glow on the tint, and no thick focus ring after a click; keyboard focus shows only a light background */
+:root:not([data-theme="dark"]) .sidebar .navlink.toned.active { background: transparent; box-shadow: none; }
+.sidebar .navlink.toned::after { box-shadow: none !important; }
+.sidebar .navlink:focus, .sidebar .navlink:focus-visible { outline: none; }
+.sidebar .navlink.toned:focus-visible:not(.active) { background: var(--bg-hover); }

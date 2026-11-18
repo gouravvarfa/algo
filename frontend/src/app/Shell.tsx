@@ -24,12 +24,15 @@ const MAIN: Item[] = [
   { to: '/dry-run', label: 'Dry Run', icon: 'backtest', tone: 'emerald' },
   { to: '/builder', label: 'Strategy Builder', icon: 'builder', tone: 'violet' },
   { to: '/backtesting', label: 'Backtesting', icon: 'backtest', tone: 'blue' },
-  { to: '/history', label: 'History', icon: 'history', tone: 'pink' },
-  { to: '/options', label: 'Option Chain', icon: 'chain', tone: 'teal' },
   { to: '/settings', label: 'Settings', icon: 'settings', tone: 'slate' },
 ]
+// Not in the menu (owner, 18 Nov 2026: not used), but the pages still open from a direct link and keep their title.
+const HIDDEN: Item[] = [
+  { to: '/history', label: 'History', icon: 'history' },
+  { to: '/options', label: 'Option Chain', icon: 'chain' },
+]
 function titleFor(pathname: string): string {
-  const all = [...MAIN, { to: '/account', label: 'Account', icon: 'user' as IconName }]
+  const all = [...MAIN, ...HIDDEN, { to: '/account', label: 'Account', icon: 'user' as IconName }]
   return all.find((i) => pathname === i.to || pathname.startsWith(i.to + '/'))?.label ?? 'Algo Trading'
 }
 
