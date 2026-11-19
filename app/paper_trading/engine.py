@@ -306,6 +306,25 @@ def _candles_with_tick(raw: pd.DataFrame, tick_ltp: float | None) -> list[dict]:
     return out
 
 
+def daily_chart_candles(raw: pd.DataFrame, tick_ltp: float | None, now: dt.datetime, today_minutes: list | None) -> list[dict]:
+    """Daily chart candles where the live price only ever moves TODAY's candle. When the daily answer has no bar for today (19 Nov 2026,
+    09:20-09:49: Angel One refused BANKNIFTY's daily candles and the stored copy, which never keeps a forming bar, ended on 18 Nov), the tick
+    used to be written into yesterday's candle: 18 Nov showed today's price and today had no candle. Today's candle is then built from today's
+    1-minute bars and the tick instead, marked "src": "ticks" (display only: a real account never reads its open, see tb_real.sync)."""
+    out = _candles_with_tick(raw, None)
+    if tick_ltp is None:
+        return out
+    today = now.date()
+    if len(raw) and raw.index[-1].date() == today:
+        last = out[-1]
+        last["close"], last["high"], last["low"] = tick_ltp, max(last["high"], tick_ltp), min(last["low"], tick_ltp)
+        return out
+    day = [m for m in today_minutes or [] if m.ts.date() == today]
+    out.append({"time": _ts(dt.datetime.combine(today, dt.time())), "open": day[0].open if day else tick_ltp,
+                "high": max([m.high for m in day] + [tick_ltp]), "low": min([m.low for m in day] + [tick_ltp]), "close": tick_ltp, "src": "ticks"})
+    return out
+
+
 INDEX_CHART_BUCKET = {"FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15}
 
 
@@ -724,7 +743,9 @@ class PaperEngine:
             "engine_warning": engine_warn,
             "real_ready": real_ready,
             "trades": rows[::-1],
-            "candles": _candles_with_tick(raw, ltp if live_tick else None),
+            "candles": (daily_chart_candles(raw, ltp if live_tick and tick.exch_ts.date() == now.date() else None, now,
+                                            merge_minutes((self._chain_cache.get(("m", active.token)) or (None, []))[1], self.feed.builder.minutes(active.token)))
+                        if minutes is None else _candles_with_tick(raw, ltp if live_tick else None)),
             "prev_contract_line": prev_line,
             # the System Points the rules use (active contract): the last few confirmed Tops / Bottoms, at their pivot day and close
             "system_points": [{"time": _ts(sp.pivot_date.replace(hour=0, minute=0, second=0, microsecond=0)), "kind": sp.kind, "price": round(sp.price, 2)}

@@ -23,6 +23,17 @@ class StreamManager {
   private failures = 0
   status: StreamStatus = 'idle'
 
+  constructor() {
+    // back on the page (another tab / app; a phone freezes a hidden page and its connection): a line that went quiet or closed meanwhile is
+    // reopened at once, not after the next watchdog round
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || !this.es) return
+        if (this.es.readyState === EventSource.CLOSED || Date.now() - this.lastSeen > STALE_AFTER_MS) { this.key = ''; this.reopen() }
+      })
+    }
+  }
+
   subscribe(specs: string[], onChange: () => void): () => void {
     for (const s of specs) this.want.set(s, (this.want.get(s) ?? 0) + 1)
     this.subscribers.add(onChange)

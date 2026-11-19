@@ -1,11 +1,12 @@
 """Yesterday's daily candle must be the FINAL one before today's rules use it (17-18 Nov 2026: SUNPHARMA's 17 Nov bar in the store was a mid-afternoon
 copy, it hid this morning's gap and a wrong paper SELL was journaled at 09:15). Pure helpers; candles are SYNTHETIC."""
+import calendar
 import datetime as dt
 
 import pandas as pd
 
 from app.live import candle_store
-from app.paper_trading.engine import MCX_DAY_CLOSE, NSE_DAY_CLOSE, complete_daily, day_close_for, final_daily, unconfirmed_day
+from app.paper_trading.engine import MCX_DAY_CLOSE, NSE_DAY_CLOSE, complete_daily, daily_chart_candles, day_close_for, final_daily, unconfirmed_day
 from app.strategy.top_bottom.intraday import Minute
 
 
@@ -51,3 +52,18 @@ def test_start_up_removes_todays_stored_daily_bars_only(tmp_path):
     assert candle_store.drop_day("ONE_DAY", dt.date(2026, 11, 18), db=db) == 1
     assert list(candle_store.get("1", "ONE_DAY", db=db).index.day) == [17]
     assert len(candle_store.get("1", "ONE_MINUTE", db=db)) == 1                                                   # minutes untouched
+
+
+def test_the_live_price_only_ever_moves_todays_candle():
+    """19 Nov 2026 09:20-09:49: Angel One refused BANKNIFTY's daily candles, the stored copy ended on 18 Nov and the tick was written into the
+    18 Nov candle (it showed today's price, today had no candle). Today's candle is built from today's minutes instead; yesterday stays final."""
+    now = dt.datetime(2026, 11, 19, 9, 30)
+    mins = [Minute(dt.datetime(2026, 11, 18, 15, 29), 9.0, 9.0, 9.0, 9.0),
+            Minute(dt.datetime(2026, 11, 19, 9, 15), 102.0, 103.0, 101.5, 102.5), Minute(dt.datetime(2026, 11, 19, 9, 16), 102.5, 104.0, 102.0, 103.5)]
+    out = daily_chart_candles(bars(17, 18), 103.0, now, mins)
+    assert [(c["close"], c["high"], c["low"]) for c in out[:2]] == [(100.5, 101.0, 99.0)] * 2                       # 17 and 18 Nov untouched
+    assert out[-1] == {"time": calendar.timegm((2026, 11, 19, 0, 0, 0)), "open": 102.0, "high": 104.0, "low": 101.5, "close": 103.0, "src": "ticks"}
+    out = daily_chart_candles(bars(18, 19), 103.0, now, mins)                       # Angel One's forming bar of today is there: it follows the tick
+    assert len(out) == 2 and (out[-1]["close"], out[-1]["high"], out[-1]["low"]) == (103.0, 103.0, 99.0) and "src" not in out[-1]
+    assert daily_chart_candles(bars(17, 18), None, now, mins)[-1]["close"] == 100.5  # no live tick: nothing is added
+    assert daily_chart_candles(bars(17, 18), 103.0, now, [])[-1]["open"] == 103.0     # no minute of today yet: the tick alone

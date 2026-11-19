@@ -2,7 +2,7 @@ import { createChart, type IChartApi, type IPriceLine, type ISeriesApi, type Ser
 import { useEffect, useRef, useState } from 'react'
 import { PAGE_FRIENDLY_CHART, attachChartFocus } from '../../lib/chartScroll'
 import { cssVar } from '../../lib/theme'
-import { money, n2, num } from '../../lib/format'
+import { isTodayIst, money, n2, num } from '../../lib/format'
 import { pnlUnits } from '../../lib/pnl'
 import type { Snapshot } from '../../lib/types'
 
@@ -113,6 +113,9 @@ export function TradeChart({ snap, kind, fitSignal, liveLtp }: { snap: Snapshot;
   useEffect(() => {
     const ls = line.current, cs = candle.current, last = snap.candles[snap.candles.length - 1]
     if (liveLtp == null || !ls || !cs || !last) return
+    // only TODAY's candle may move (times are IST wall clock written as UTC): if the snapshot has no candle for today yet, an older day's candle
+    // must never take today's price (19 Nov 2026: 18 Nov showed today's price); the next snapshot brings today's candle
+    if (!isTodayIst(last.time)) return
     const t = last.time as UTCTimestamp
     ls.update({ time: t, value: liveLtp })
     cs.update({ time: t, open: last.open, high: Math.max(last.high, liveLtp), low: Math.min(last.low, liveLtp), close: liveLtp })

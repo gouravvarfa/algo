@@ -1067,3 +1067,17 @@ async def test_hold_rule_reversal_closes_the_old_contract_first_then_enters_the_
     _, e = env.fb.last("entry")
     assert e["p"]["tradingsymbol"] == nxt["trading_symbol"] and e["p"]["symboltoken"] == "777" and e["p"]["transactiontype"] == "SELL"
     assert env.fb.orders[sid]["p"]["tradingsymbol"] == CONTRACT
+
+
+def test_a_daily_candle_built_from_ticks_never_gives_a_real_account_its_open(env):
+    """19 Nov 2026: when today's daily candle has not come from Angel One, the chart builds it from ticks ("src": "ticks"). The join rule must
+    not read that open as the day's open: the real account keeps waiting for the real candle, exactly as before."""
+    day = int(dt.datetime(MON.year, MON.month, MON.day, tzinfo=dt.timezone.utc).timestamp())       # IST wall clock written as UTC
+    candles = [{"time": day - 86400, "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0},
+               {"time": day, "open": 105.0, "high": 106.0, "low": 104.0, "close": 105.5, "src": "ticks"}]
+    snap = {"instrument": dict(INST), "ltp": 105.5, "position": None, "candles": candles}
+    env.rt.sync(IID, env.uid, SYM, snap, MON)
+    assert (env.rt.snaps[IID]["day_open"], env.rt.snaps[IID]["prev_close"]) == (None, None)
+    candles[-1].pop("src")                                                                          # Angel One's own candle of today
+    env.rt.sync(IID, env.uid, SYM, snap, MON)
+    assert (env.rt.snaps[IID]["day_open"], env.rt.snaps[IID]["prev_close"]) == (105.0, 100.0)

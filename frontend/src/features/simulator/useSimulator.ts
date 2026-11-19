@@ -49,7 +49,10 @@ export function useSimulator(ds: DataSource) {
   const [loading, setLoading] = useState(false)
   const [curExp, setCurExp] = useState<string | null>(null)
   const [expPinned, setExpPinned] = useState(false)
-  const [live, setLiveState] = useState(false)
+  // LIVE comes back at once when the page opens again (owner, 19 Nov 2026: "turned LIVE on, went to another tab, it was off"): this browser's
+  // last choice first, then the server's copy (other devices) unless the person or the gold / silver auto-LIVE already decided in this visit
+  const [live, setLiveState] = useState(() => !readOnly && ls.get('sim.live') === '1')
+  const liveDecided = useRef(false)
   const [prevSpot, setPrevSpot] = useState<number | null>(null)
   const spotCache = useRef(new Map<string, number | null>())
 
@@ -100,7 +103,7 @@ export function useSimulator(ds: DataSource) {
         const all = [...new Set([...eod, ...intra])].sort()
         setEodSet(new Set(eod)); setIntraSet(new Set(intra)); setDates(all)
         if (!all.length) {
-          if (MCX_SYMS.includes(sym)) { setInitError(`${sym}: no history yet. Its 1-minute data is collected every morning from now on; today's chain is LIVE.`); setLiveState(true); return }
+          if (MCX_SYMS.includes(sym)) { setInitError(`${sym}: no history yet. Its 1-minute data is collected every morning from now on; today's chain is LIVE.`); liveDecided.current = true; setLiveState(true); return }
           setInitError(`No ${sym} data loaded. Load data from the Option Chain page.`); return
         }
         const last = all.length - 1
@@ -148,11 +151,19 @@ export function useSimulator(ds: DataSource) {
   // ---------- LIVE preference (kept per user on the server)
   useEffect(() => {
     if (readOnly) return
-    get<{ settings: Record<string, unknown> }>('/api/me/settings').then((r) => setLiveState(r.settings['sim.live'] === true)).catch(() => { /* default off */ })
+    get<{ settings: Record<string, unknown> }>('/api/me/settings').then((r) => {
+      const v = r.settings['sim.live']
+      if (liveDecided.current || typeof v !== 'boolean') return          // a choice made meanwhile (or no server copy) is not undone by a slower answer
+      setLiveState(v); ls.set('sim.live', v ? '1' : '0')
+    }).catch(() => { /* keep this browser's choice */ })
   }, [readOnly])
   const setLive = useCallback((on: boolean) => {
+    liveDecided.current = true
     setLiveState(on); setPlaying(false); setExpPinned(false)
-    if (!readOnly) put('/api/me/settings/sim.live', { value: on }).catch(() => undefined)
+    if (!readOnly) {
+      ls.set('sim.live', on ? '1' : '0')
+      put('/api/me/settings/sim.live', { value: on }).catch(() => undefined)
+    }
     if (on) toast('LIVE: chain from Angel One ticks, updates every second. Paper only.')
   }, [readOnly, toast])
 
@@ -198,7 +209,10 @@ export function useSimulator(ds: DataSource) {
       busy = true
       try { await loadRef.current(true) } finally { busy = false }
     }, streamLive ? 5000 : 1000)
-    return () => window.clearInterval(id)
+    // back from another tab / app (a phone pauses a hidden page): fetch the chain at once instead of showing frozen prices until the next round
+    const back = () => { if (!document.hidden && !busy) { busy = true; void loadRef.current(true).finally(() => { busy = false }) } }
+    document.addEventListener('visibilitychange', back)
+    return () => { window.clearInterval(id); document.removeEventListener('visibilitychange', back) }
   }, [live, streamLive])
 
   useEffect(() => {          // previous close, for the "vs prev. close" line

@@ -32,3 +32,8 @@ export function ago(epochSeconds: number | null | undefined, now = Date.now() / 
   const s = Math.max(0, Math.round(now - epochSeconds))
   return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`
 }
+
+/** Is a chart time (IST wall clock encoded as UTC seconds, as the server sends candles) on today's IST date? */
+export function isTodayIst(time: number, nowMs: number = Date.now()): boolean {
+  return new Date(time * 1000).toISOString().slice(0, 10) === new Date(nowMs + 5.5 * 3600_000).toISOString().slice(0, 10)
+}

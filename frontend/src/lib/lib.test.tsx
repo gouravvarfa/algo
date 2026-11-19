@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, api, csrfToken } from './api'
-import { ago, dt, lakh, money, n2, num, sign, words } from './format'
+import { ago, dt, isTodayIst, lakh, money, n2, num, sign, words } from './format'
 
 describe('format', () => {
   it('groups digits the Indian way and keeps decimals', () => {
@@ -29,6 +29,15 @@ describe('format', () => {
     expect(ago(null)).toBe('never')
     expect(ago(1000, 1010)).toBe('10s ago')
     expect(ago(1000, 1000 + 600)).toBe('10m ago')
+  })
+})
+
+describe('chart day (IST)', () => {
+  it('knows whether a candle time is today in IST, whatever the browser zone', () => {
+    const now = Date.UTC(2026, 10, 19, 4, 0)                          // 09:30 IST on 19 Nov
+    expect(isTodayIst(Date.UTC(2026, 10, 19) / 1000, now)).toBe(true)   // 19 Nov candle (IST wall clock written as UTC)
+    expect(isTodayIst(Date.UTC(2026, 10, 18) / 1000, now)).toBe(false)  // yesterday's candle must not take today's price
+    expect(isTodayIst(Date.UTC(2026, 10, 19) / 1000, Date.UTC(2026, 10, 18, 19, 0))).toBe(true)   // 00:30 IST on 19 Nov (still 18 Nov in UTC)
   })
 })
 

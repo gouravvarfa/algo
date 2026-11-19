@@ -239,7 +239,8 @@ class RealTB:
         days = snap.get("candles") or []
         prev_close = day_open = None
         try:
-            if len(days) >= 2 and dt.datetime.fromtimestamp(days[-1]["time"], dt.timezone.utc).date() == now.date():
+            # a candle built from ticks (today's daily candle not yet from Angel One) is display only: its open is not trusted for the join rule
+            if len(days) >= 2 and dt.datetime.fromtimestamp(days[-1]["time"], dt.timezone.utc).date() == now.date() and not days[-1].get("src"):
                 day_open, prev_close = float(days[-1]["open"]), float(days[-2]["close"])
         except (KeyError, TypeError, ValueError):
             pass
