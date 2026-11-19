@@ -9,7 +9,7 @@ import { useToast } from '../../lib/toast'
 
 interface Item { instrument_id: string; symbol: string; real_on: boolean; real_effective: boolean; real_lots: number; lot_size: number; paper_lots: number; approved?: boolean }
 interface TbState {
-  instrument_id: string; position: { side: string; qty: number; contract: string; entry_price: number | null } | null; pending_entry: boolean; halted: string | null; stop_target: number | null
+  instrument_id: string; position: { side: string; qty: number; contract: string; entry_price: number | null; entry_at?: string; restored?: { closed_at: number; reentered_at: number; at: string } } | null; pending_entry: boolean; halted: string | null; stop_target: number | null
   released: boolean; exiting?: boolean; missed: { at: string; reason: string }[]; events: { at: string; text: string }[]; orders: { id: string; role: string; side: string; qty: number; type: string; price: number | null; trigger: number | null; state: string }[]
 }
 interface Data { account_mode: string; real_allowed: boolean; max_lots: number; blockers: string[]; instruments: Item[] }
@@ -142,7 +142,8 @@ function TbStatus({ st, onClear, clearing }: { st: TbState; onClear: () => void;
         </div>
       )}
       <div className="sub">
-        {p ? <>Real position: <b>{p.side} {p.qty}</b> {p.contract} at {p.entry_price ?? '–'}{st.stop_target != null ? ` · stop ${st.stop_target}` : ''}</> : st.pending_entry ? 'Entry is being placed at Angel One…' : 'No real position.'}
+        {p ? <>Real position: <b>{p.side} {p.qty}</b> {p.contract} at {p.entry_price ?? '–'}{p.entry_at ? ` (since ${p.entry_at.slice(0, 16)})` : ''}{st.stop_target != null ? ` · stop ${st.stop_target}` : ''}
+          {p.restored && <> · put back at {p.restored.reentered_at} after the 19 Nov 10:13 deploy exit at {p.restored.closed_at} (one-time correction, same trade)</>}</> : st.pending_entry ? 'Entry is being placed at Angel One…' : 'No real position.'}
         {st.released && ' · real switch is off: this position keeps its stop at Angel One, manage it there'}
       </div>
       {st.orders.slice(-3).map((o) => <div key={o.id} className="sub">{o.role} {o.side} {o.qty} {o.type}{o.price != null ? ` @ ${o.price}` : ''}{o.trigger != null ? ` (trigger ${o.trigger})` : ''} · {o.state}</div>)}

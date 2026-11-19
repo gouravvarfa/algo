@@ -411,12 +411,24 @@ async def my_positions(request: Request, c=Depends(db)):
         orders.drop_if_dead(uid, exc)
         return {"connected": True, "error": f"Angel One not reachable ({type(exc).__name__})"}
     rt = _executor()
-    managed = {x["position"]["contract"]: x for x in (rt.view(c, uid) if rt is not None else []) if x["position"]}
+    views = rt.view(c, uid) if rt is not None else []
+    managed = {x["position"]["contract"]: x for x in views if x["position"]}
+    traded = {o["contract"] for x in views for o in (x.get("orders") or []) if o.get("contract") and o.get("state") == "filled"}   # a contract this app traded (also once closed)
     pos = []
     for p in rows or []:
         q = account._position(p)
         m = managed.get(q["symbol"])
-        pos.append({**q, "app": bool(m), "instrument_id": m["instrument_id"] if m else None, "stop": m["stop_target"] if m else None})
+        trade = None
+        if m and m.get("units") and q.get("ltp") is not None and m["position"].get("entry_price"):
+            # the app's trade, from its own entry (Angel One's row shows today's numbers / its new average): what the Top-Bottom pages show
+            tp = m["position"]
+            sgn = 1 if tp["side"] == "BUY" else -1
+            amt = (float(q["ltp"]) - float(tp["entry_price"])) * m["units"] * sgn
+            rs_ = tp.get("restored")
+            if rs_:
+                amt += (float(rs_["closed_at"]) - float(rs_["reentered_at"])) * m["units"] * sgn
+            trade = {"side": tp["side"], "qty": tp["qty"], "entry_price": tp["entry_price"], "entry_at": tp.get("entry_at"), "pnl": round(amt, 2), "restored": rs_}
+        pos.append({**q, "app": bool(m) or q["symbol"] in traded, "instrument_id": m["instrument_id"] if m else None, "stop": m["stop_target"] if m else None, "trade": trade})
     pos.sort(key=lambda x: (x["net_qty"] in (0, None), x["symbol"] or ""))
     out = {"connected": True, "positions": pos, "open": sum(1 for x in pos if x["net_qty"]), "total_pnl": round(sum(x["pnl"] or 0 for x in pos), 2), "at": time.time()}
     _POS[uid] = (time.time(), out)

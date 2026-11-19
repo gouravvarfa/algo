@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { ApiError, get, post } from '../../lib/api'
 import { useToast } from '../../lib/toast'
 
-interface Pos { symbol: string; exchange: string; product: string; net_qty: number | null; avg_price: number | null; ltp: number | null; pnl: number | null; realised: number | null; unrealised: number | null; app: boolean; instrument_id: string | null; stop: number | null }
+interface Trade { side: string; qty: number; entry_price: number; entry_at: string | null; pnl: number; restored: { closed_at: number; reentered_at: number; at: string } | null }
+interface Pos { symbol: string; exchange: string; product: string; net_qty: number | null; avg_price: number | null; ltp: number | null; pnl: number | null; realised: number | null; unrealised: number | null; app: boolean; instrument_id: string | null; stop: number | null; trade?: Trade | null }
 interface Data { connected: boolean; error?: string; positions?: Pos[]; open?: number; total_pnl?: number; at?: number }
 
 const rs = (v: number | null | undefined, sign = false) => (v == null ? '–' : (sign && v > 0 ? '+' : v < 0 ? '−' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
@@ -66,10 +67,18 @@ export default function PositionsPage() {
               <span>LTP: <b>{p.ltp?.toLocaleString('en-IN') ?? '–'}</b></span>
               {p.app && !!p.net_qty && p.instrument_id && <button className="btn sm danger" disabled={exit.isPending} onClick={() => exitOne(p)}>Exit</button>}
             </div>
+            {p.trade && (
+              <div className="row sub" style={{ marginTop: 4, alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+                <span>App trade: <b>{p.trade.side} {p.trade.qty} @ {p.trade.entry_price.toLocaleString('en-IN')}</b>{p.trade.entry_at ? ` since ${p.trade.entry_at.slice(0, 16)}` : ''}</span>
+                <span className="spacer" />
+                <b className="num" style={{ color: col(p.trade.pnl) }}>{rs(p.trade.pnl, true)}</b>
+                {p.trade.restored && <span style={{ flexBasis: '100%' }}>Put back at {p.trade.restored.reentered_at.toLocaleString('en-IN')} after the 19 Nov 10:13 deploy exit at {p.trade.restored.closed_at.toLocaleString('en-IN')} (one-time correction; the difference is included).</span>}
+              </div>
+            )}
           </div>
         ))}
       </div>
-      <p className="note">Numbers are Angel One&apos;s own, refreshed every 10 seconds. Only positions this app opened can be exited here; the rest stay untouched and are managed in Angel One.</p>
+      <p className="note">Numbers are Angel One&apos;s own (today&apos;s P&amp;L, its own average), refreshed every 10 seconds; &quot;App trade&quot; is the same position from the app&apos;s own entry, as the Top-Bottom pages show it. Only positions this app opened can be exited here; the rest stay untouched and are managed in Angel One.</p>
     </div>
   )
 }

@@ -6,6 +6,7 @@ import TopBottomPage from '../topbottom/TopBottomPage'
 export interface RealTrade {
   instrument_id: string; symbol: string; direction: string; qty: number; contract: string; entry_price: number | null; entry_at: number | null
   exit_price: number | null; exit_at: number | null; exit_by: string | null; pnl_points: number | null; pnl_amount: number | null; status: string
+  correction?: { closed_at: number; reentered_at: number; at: number; points: number; amount: number }   // the one-time 19 Nov correction: one trade, not two
 }
 interface Inst { instrument_id: string; symbol: string; real_on: boolean; position: { side: string; qty: number; contract: string; entry_price: number } | null; stop_target: number | null; halted: string | null }
 export interface RealData { trades: RealTrade[]; instruments: Inst[]; realised: number; closed: number; wins: number; open: number }
@@ -59,7 +60,8 @@ export default function RealTradesPage() {
               <td className="l" style={{ color: t.direction === 'BUY' ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>{t.direction}</td>
               <td className="num">{t.qty}</td>
               <td className="num">{rs(t.entry_price)}<div className="sub">{when(t.entry_at)}</div></td>
-              <td className="num">{t.status === 'OPEN' ? <b>OPEN</b> : rs(t.exit_price)}<div className="sub">{when(t.exit_at)}</div></td>
+              <td className="num">{t.status === 'OPEN' ? <b>OPEN</b> : rs(t.exit_price)}<div className="sub">{when(t.exit_at)}</div>
+                {t.correction && <div className="sub" title="One-time correction: the deploy restart closed this trade; it was put back and continues as the same trade">19 Nov: closed at {t.correction.closed_at.toLocaleString('en-IN')} by a deploy restart, put back at {t.correction.reentered_at.toLocaleString('en-IN')} ({rs(t.correction.amount, true)}, included)</div>}</td>
               <td className="l">{t.exit_by ?? '–'}</td>
               <td className="num" style={{ color: col(t.pnl_points) }}>{t.pnl_points == null ? '–' : t.pnl_points.toFixed(2)}</td>
               <td className="num" style={{ color: col(t.pnl_amount), fontWeight: 600 }}>{rs(t.pnl_amount, true)}</td>

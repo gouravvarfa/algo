@@ -1081,3 +1081,121 @@ def test_a_daily_candle_built_from_ticks_never_gives_a_real_account_its_open(env
     candles[-1].pop("src")                                                                          # Angel One's own candle of today
     env.rt.sync(IID, env.uid, SYM, snap, MON)
     assert (env.rt.snaps[IID]["day_open"], env.rt.snaps[IID]["prev_close"]) == (105.0, 100.0)
+
+
+# ---------------------------------------------------------------- 19 Nov 2026: the restart that closed a watched position, and its one-time correction
+@async_test
+async def test_after_a_restart_a_watched_stop_is_not_sent_before_a_live_price_is_known(env):
+    """19 Nov 2026 10:13: the deploy restart sent a WATCHED stop before any live price was known; three circuit refusals in 21 s and the safety
+    exit closed the position. A watched stop now waits for the first price."""
+    far = await _open_with_far_stop(env)                                                               # 6% away: watched, no stop order
+    assert env.fb.last("stop")[0] is None and env.state()["stop_watch"]
+    env.rt.snaps.clear()                                                                               # a restart: no snapshot, no live price yet
+    for n in (10, 15, 20, 25):
+        await env.rt.tick(secs(n))
+    a = env.state()
+    assert env.fb.last("stop")[0] is None and a["position"] and not a["exit_since"]
+    env.rt.sync(IID, env.uid, SYM, _snap_at(far, 47900.0), secs(30))                                   # the first price: 1.9% away, so it goes out now
+    await env.rt.tick(secs(30))
+    assert env.fb.last("stop")[0] is not None
+
+
+@async_test
+async def test_circuit_refusals_never_lead_to_the_safety_exit_while_the_price_is_unknown(env):
+    sid = await open_long(env)                                                                         # 1% away: sent at once
+    env.rt.snaps.clear()
+    env.fb.orders[sid]["status"], env.fb.orders[sid]["text"] = "rejected", "Your order price exceeds the circuit limit. Please adjust your order"
+    for n in (10, 15, 20, 25):
+        await env.rt.tick(secs(n))
+    a = env.state()
+    assert a["position"] and not a["exit_since"] and env.fb.last("stop")[0] is None                   # watched, nothing sent again without a price
+
+
+def test_rupees_per_point_never_read_10x_without_a_snapshot():
+    rt = tb_real.RealTB(broker_for=None)
+    assert rt._units({"instrument_id": "g", "symbol": "GOLDTEN"}, {"qty": 10, "lot_size": 10}) == 1.0      # 10 g = 1 lot = Rs 1 a point (the event said 65,600)
+    assert rt._units({"instrument_id": "b", "symbol": "BANKNIFTY"}, {"qty": 30, "lot_size": 30}) == 30.0   # index futures: quantity x points, as before
+
+
+def _restore(monkeypatch, env, **kv):
+    r = {"day": MON.date().isoformat(), "user_id": env.uid, "instrument_id": IID, "contract": CONTRACT, "side": "BUY",
+         "entry_price": 50000.0, "entry_at": "2026-11-06 10:00:00", "stop": 50000.0, "closed_at": 50500.0}
+    r.update(kv)
+    monkeypatch.setattr(tb_real, "RESTORE", r)
+    return r
+
+
+def _closed_trade(env, entry=50000.0, exit_=50500.0):
+    """The trade the deploy closed: an entry and an exit Angel One filled, earlier than anything the test sends."""
+    import time as _t
+    t = _t.time() - 600
+    for n, (role, side, px) in enumerate((("entry", "BUY", entry), ("exit", "SELL", exit_))):
+        env.db.execute("INSERT INTO real_tb_orders (id, user_id, instrument_id, symbol, contract, role, side, qty, order_type, price, trigger_price, broker_order_id, status, why, "
+                       "message, created_at, updated_at, filled_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (f"old{n}", env.uid, IID, SYM, CONTRACT, role, side, 30, "LIMIT", px, None, f"X{n}", "filled", "earlier", None, t + n, t + n, px))
+    env.db.commit()
+
+
+@async_test
+async def test_the_one_time_correction_puts_the_trade_back_once_as_the_original_trade(env, monkeypatch):
+    R = _restore(monkeypatch, env)
+    _closed_trade(env)
+    env.sync(PAPER_BUY)                                                                                # the strategy still holds BUY in that contract
+    await env.rt.tick(secs(1))
+    oid, o = env.fb.last("entry")
+    assert oid is not None and o["p"]["transactiontype"] == "BUY" and o["p"]["quantity"] == "30"
+    why = env.db.execute("SELECT why FROM real_tb_orders WHERE broker_order_id=?", (oid,)).fetchone()["why"]
+    assert tb_real.RESTORE_TAG in why
+    env.fb.fill(oid, 50002.5)
+    await env.rt.tick(secs(5))
+    a = env.state()
+    p = a["position"]
+    assert (p["entry_price"], p["entry_at"], p["refill_price"], a["stop_target"], p["join"]) == (50000.0, R["entry_at"], 50002.5, 50000.0, {"stop": 50000.0, "be": True})
+    assert p["restored"]["closed_at"] == 50500.0 and a["restored"] == R["day"] and any(e["text"].startswith("RESTORED") for e in a["events"])
+    for n in (10, 15, 20):
+        await env.rt.tick(secs(n))
+    assert sum(1 for x in env.fb.orders.values() if x["p"]["ordertype"] in ("LIMIT", "MARKET") and x["p"]["transactiontype"] == "BUY") == 1   # once, never again
+    trades = tb_real.RealTB.real_trades(env.db, env.uid, IID)
+    assert len(trades) == 1 and trades[0]["status"] == "OPEN" and trades[0]["entry_price"] == 50000.0                     # one trade, from the original entry
+    assert trades[0]["correction"]["points"] == 497.5                                                                     # sold 50,500, bought back 50,002.5
+
+
+@async_test
+async def test_the_correction_closes_as_one_trade_with_its_own_difference(env, monkeypatch):
+    _restore(monkeypatch, env)
+    _closed_trade(env)
+    env.sync(PAPER_BUY)
+    await env.rt.tick(secs(1))
+    env.fb.fill(env.fb.last("entry")[0], 50002.5)
+    await env.rt.tick(secs(5))
+    sid = env.fb.last("stop")[0]
+    env.fb.fill(sid, 51000.0)                                                                          # say the stop closes it later at 51,000
+    await env.rt.tick(secs(10))
+    t = tb_real.RealTB.real_trades(env.db, env.uid, IID)
+    assert len(t) == 1 and t[0]["status"] == "CLOSED" and t[0]["pnl_points"] == 1497.5                 # 500 (to the deploy exit) + 997.5 (after it)
+    assert any("the whole trade from 50000" in e["text"] for e in env.state()["events"])
+
+
+@async_test
+async def test_no_correction_on_another_day_or_for_another_side(env, monkeypatch):
+    _restore(monkeypatch, env, day="2026-11-08")
+    env.sync(PAPER_BUY)
+    await env.rt.tick(secs(1))
+    assert env.fb.last("entry")[0] is None and not env.state().get("restore_started")
+    _restore(monkeypatch, env, side="SELL")                                                            # the strategy holds BUY, not SELL
+    await env.rt.tick(secs(5))
+    assert env.fb.last("entry")[0] is None
+
+
+@async_test
+async def test_no_correction_when_angel_one_shows_a_position_held_by_hand(env, monkeypatch):
+    _restore(monkeypatch, env)
+    env.fb.orders["M1"] = {"orderid": "M1", "status": "complete", "averageprice": "50000", "text": "",
+                           "p": {"quantity": "30", "transactiontype": "BUY", "tradingsymbol": CONTRACT, "ordertype": "MARKET"}}
+    env.sync(PAPER_BUY)
+    await env.rt.tick(secs(1))
+    await env.rt.tick(secs(5))
+    a = env.state()
+    assert env.fb.last("entry")[0] is None and not a["position"] and any("not done" in m["reason"] for m in a["missed"])
+    await env.rt.tick(secs(10))
+    assert env.fb.last("entry")[0] is None                                                             # started once: never tried again

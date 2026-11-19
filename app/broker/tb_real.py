@@ -67,6 +67,14 @@ RELOGIN_MIN_GAP_S = 300.0
 MISSING_HALT_S = 60.0                        # an order Angel One accepted today but its order book does not list after this long: how it ended is unknown
 GUARD_FUNDS = "could not read your funds"    # entry checks that a busy Angel One can fail: asked again for up to NO_PRICE_MISS_S before the entry is dropped
 GUARD_MARGIN = "margin could not be computed, so the entry is not sent"
+# ONE-TIME correction (owner, 19 Nov 2026). The 10:13 deploy restart closed Yogesh's GOLDTEN SELL (no System Point, no stop: three circuit refusals
+# of a stop sent before any live price was known, then the safety exit; see _stop_watch). It is put back ONCE, at the market, and continues as the
+# original trade: 16 Nov 10:23 SELL @136,080 with its breakeven stop 136,080 (watched, as before). Only on that day, only that account and that
+# instrument, only while Angel One shows the account flat in the contract and the strategy still holds SELL there. Never a general feature: the
+# owner, "bad me esa random entry nahi karna hai".
+RESTORE = {"day": "2026-11-19", "user_id": "957697bdda0840bbbc9f8ee54e3a3412", "instrument_id": "7623dce9f3", "contract": "GOLDTEN30NOV26FUT", "side": "SELL",
+           "entry_price": 136080.0, "entry_at": "2026-11-16 10:23:16", "stop": 136080.0, "closed_at": 129520.0}
+RESTORE_TAG = "one-time correction of the 19 Nov 10:13 deploy exit"
 
 
 def now_ist() -> dt.datetime:
@@ -430,6 +438,32 @@ class RealTB:
                 log.exception("tick minutes unreadable for %s", token)
         return [(k, *v) for k, v in sorted(out.items()) if k.date() == now.date()]
 
+    async def _restore_check(self, c, a: dict, iid: str, row, now: dt.datetime) -> None:
+        """The ONE-TIME correction (see RESTORE): the SELL the deploy closed goes back in at the market. Started at most once; every condition must
+        hold, otherwise nothing happens (and on the next day never). Angel One's own positions are checked flat again just before the order (_manage_entry)."""
+        R = RESTORE
+        today = now.date().isoformat()
+        if today != R["day"] or a["user_id"] != R["user_id"] or iid != R["instrument_id"] or a.get("restore_started"):
+            return
+        if a["position"] or a["pending_entry"] or a["halted"] or a.get("expect_flat") or row is None or not row["real_on"]:
+            return
+        snap = self.snaps.get(iid) or {}
+        paper, inst = snap.get("paper"), snap.get("instrument") or {}
+        if not paper or paper.get("direction") != R["side"] or inst.get("trading_symbol") != R["contract"] or snap.get("ltp") is None:
+            return                                                    # the strategy must still hold SELL in that contract, with a live price known
+        if not self._market_open(inst.get("session", "NSE"), now) or not store.instrument_real(c, a["user_id"], iid):
+            return
+        a["restore_started"] = today
+        a["join_day"], a["join_retry_day"] = today, today              # today's join and its one retry are used up: no second entry today
+        e = {"event": "ENTRY", "direction": R["side"], "entry_price": float(snap["ltp"]), "active_stop": R["stop"], "contract": R["contract"],
+             "symbol": a["symbol"], "instrument_id": iid, "owner": a["user_id"], "entry_date": now.strftime("%Y-%m-%d %H:%M")}
+        await self._on_entry(c, a, e, {"instrument": inst}, now,
+                             note=f"{RESTORE_TAG}: {R['side']} goes back in at the market; the trade continues as the original {R['side']} @{R['entry_price']:g} "
+                                  f"of {R['entry_at'][:16]} with its breakeven stop {R['stop']:g}")
+        if a["pending_entry"]:
+            a["pending_entry"]["restore"] = True
+        self._save(c, a)
+
     async def _join_check(self, c, a: dict, iid: str, row, now: dt.datetime) -> None:
         """The strategy already holds a side while this real account is flat (switched on mid-trade): a FRESH trigger on that side today puts the
         real account in, with the strategy's own stop. At most once a day per instrument, and never chased (a trigger older than STALE_SIGNAL_S)."""
@@ -499,6 +533,14 @@ class RealTB:
                      detail={"instrument": a["symbol"], "halted_at": ev["at"], "why": "raised outside the session by the positions check"})
         return True
 
+    def _units(self, a: dict, p: dict) -> float:
+        """Rupees per point of the position: quantity / lot size x the instrument's point value (GOLDTEN: 10 g = 1 lot = Rs 1 a point). The point value
+        is the snapshot's, else the one kept with the position (just after a restart there is no snapshot yet: 19 Nov 2026 the P&L read 10x)."""
+        from app.providers.commodities import COMMODITIES
+        pv = (((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("point_value") or p.get("point_value")
+              or (COMMODITIES.get(str(a.get("symbol") or "").upper()) or {}).get("point_value"))
+        return p["qty"] / p["lot_size"] * float(pv) if pv and p.get("lot_size") else float(p["qty"])
+
     def _live_price(self, a: dict, p: dict) -> float | None:
         sn = self.snaps.get(a["instrument_id"]) or {}
         if (sn.get("instrument") or {}).get("trading_symbol") == p.get("contract") and sn.get("ltp") is not None:
@@ -514,10 +556,13 @@ class RealTB:
         the exchange refuses an order beyond its daily price limit, so it goes out at the strategy's own trigger as soon as the price comes that near.
         The stop itself stays the strategy's (the chart shows it). If the price reaches a watched stop first, the position is exited at once."""
         ltp = self._live_price(a, p)
-        if ltp is None or not ltp:
-            return False                                              # no live price of this contract: sent as before, the exchange decides
         today = now.date().isoformat()
         w = a.get("stop_watch") if (a.get("stop_watch") or {}).get("day") == today else None
+        if ltp is None or not ltp:
+            # no live price of this contract (just after a restart, before the first snapshot). A stop already WATCHED today stays watched until a
+            # price is known: 19 Nov 2026 10:13 the restart sent it at once, three refusals for the circuit in 21 s and the safety exit closed the
+            # position. A stop not watched is sent as before, the exchange decides.
+            return bool(w)
         stop = float(a["stop_target"])
         if (ltp >= stop) if p["side"] == "SELL" else (ltp <= stop):
             if w:
@@ -549,6 +594,10 @@ class RealTB:
         w = a.get("stop_watch") if (a.get("stop_watch") or {}).get("day") == today else None
         step = (w["step"] + 1) if w else 1
         if step >= len(STOP_WITHIN_PCTS):
+            if self._live_price(a, p) is None:
+                # never the safety exit on refusals while the live price is unknown: watched at the closest distance until a price is known
+                a["stop_watch"] = {"day": today, "step": len(STOP_WITHIN_PCTS) - 1, "noted": True}
+                return True
             return False
         a["stop_watch"] = {"day": today, "step": step, "noted": True}
         self._ev(a, now, f"the stop {a['stop_target']} was refused for the exchange's daily price limit: watched, its order goes again at the same trigger "
@@ -594,7 +643,7 @@ class RealTB:
         j["stop"] = dryrun.rnd(stop, p["tick"])
         return j["stop"]
 
-    async def _on_entry(self, c, a: dict, e: dict, snap: dict, now: dt.datetime) -> None:
+    async def _on_entry(self, c, a: dict, e: dict, snap: dict, now: dt.datetime, note: str | None = None) -> None:
         contract, unresolved = dryrun.event_contract(e, snap)
         if unresolved or not contract.get("token"):
             self._miss(a, now, "contract token unknown, cannot trade it", e)
@@ -629,7 +678,7 @@ class RealTB:
                 a["exit_since"] = _s(now)
             self._ev(a, now, f"strategy reversed to {e['direction']}: the open position closes first (method B), then the entry goes out")
         else:
-            self._ev(a, now, f"System Point {e['direction']}: entry will be sent")
+            self._ev(a, now, note or f"System Point {e['direction']}: entry will be sent")
 
     def _on_exit(self, c, a: dict, e: dict, now: dt.datetime) -> None:
         pe, p = a["pending_entry"], a["position"]
@@ -691,9 +740,14 @@ class RealTB:
         busy = bool(a["position"] or a["pending_entry"] or self._unsettled(a) or a.get("_cancel_entry") or a.get("expect_flat"))
         if not busy and row is not None and row["real_on"]:
             try:
-                await self._join_check(c, a, iid, row, now)
+                await self._restore_check(c, a, iid, row, now)
             except Exception:
-                log.exception("join check failed for %s", sym)
+                log.exception("one-time restore check failed for %s", sym)
+            if not a["pending_entry"]:
+                try:
+                    await self._join_check(c, a, iid, row, now)
+                except Exception:
+                    log.exception("join check failed for %s", sym)
             busy = bool(a["pending_entry"])
         if not busy:
             return                                                        # nothing open, nothing waiting: no call to Angel One at all
@@ -849,10 +903,23 @@ class RealTB:
             wanted = bool(pe and pe.get("side") == o["side"])
             pe = pe or {}
             ct = pe.get("contract") or {}
+            pv = ((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("point_value")
             a["position"] = {"side": o["side"], "qty": o["qty"], "contract": o["contract"], "token": o["token"], "exch": o["exch"], "tick": o["tick"], "lot_size": o["lot_size"],
-                             "entry_price": avg, "entry_at": _s(now), "strategy_price": pe.get("strategy_price"), "symbol": a["symbol"], "tick_assumed": dryrun._tick(ct)[1] if ct else True}
+                             "entry_price": avg, "entry_at": _s(now), "strategy_price": pe.get("strategy_price"), "symbol": a["symbol"], "tick_assumed": dryrun._tick(ct)[1] if ct else True,
+                             "point_value": pv}
             if pe.get("strategy_stop") is not None:
                 a["stop_target"] = dryrun.rnd(float(pe["strategy_stop"]), o["tick"])
+            if pe.get("restore"):
+                # the one-time correction (RESTORE): not a new trade, the original one continues (its entry, its breakeven stop); the real refill is kept
+                R = RESTORE
+                a["position"].update(entry_price=R["entry_price"], entry_at=R["entry_at"], refill_price=avg,
+                                     restored={"closed_at": R["closed_at"], "reentered_at": avg, "at": _s(now)}, join={"stop": R["stop"], "be": True})
+                a["stop_target"] = R["stop"]
+                a.pop("stop_watch", None)                             # watched again from 2%, as before the deploy exit
+                a.pop("gap_wait", None)
+                a["restored"] = R["day"]
+                self._ev(a, now, f"RESTORED ({RESTORE_TAG}): {o['side']} {o['qty']} {o['contract']} re-entered at {avg}; the trade continues as the original "
+                                 f"{R['side']} @{R['entry_price']:g} of {R['entry_at'][:16]} with its breakeven stop {R['stop']:g}", order=o["id"])
             if pe.get("join"):
                 js = float(avg) * (1 + JOIN_STOP_PCT) if o["side"] == "SELL" else float(avg) * (1 - JOIN_STOP_PCT)
                 if pe.get("strategy_stop") is not None:              # the strategy's stop if that is tighter
@@ -873,12 +940,17 @@ class RealTB:
         else:
             p = a["position"]
             if p:
-                pv = ((self.snaps.get(a["instrument_id"]) or {}).get("instrument") or {}).get("point_value")
-                units = p["qty"] / p["lot_size"] * float(pv) if pv and p.get("lot_size") else p["qty"]   # GOLDTEN: 10 g = 1 lot = Rs 1 a point (it said 10x)
-                pnl = ((avg or 0) - (p["entry_price"] or 0)) * units * (1 if p["side"] == "BUY" else -1)
+                units = self._units(a, p)
+                sgn = 1 if p["side"] == "BUY" else -1
+                pnl = ((avg or 0) - (p["entry_price"] or 0)) * units * sgn
+                extra = ""
+                rs = p.get("restored")
+                if rs:                                                # the whole trade from its original entry, with the correction's own difference
+                    pnl += ((rs["closed_at"] or 0) - (rs["reentered_at"] or 0)) * units * sgn
+                    extra = f" (the whole trade from {p['entry_price']:g}, including the 19 Nov correction: closed at {rs['closed_at']:g}, put back at {rs['reentered_at']:g})"
                 if a.pop("join_safety_exit", False):
                     a["join_retry_after"] = _s(now)
-                self._ev(a, now, f"POSITION CLOSED by the {o['role']} order at {avg}; real P&L before charges {pnl:,.2f}", order=o["id"])
+                self._ev(a, now, f"POSITION CLOSED by the {o['role']} order at {avg}; real P&L before charges {pnl:,.2f}{extra}", order=o["id"])
                 a["expect_flat"] = {"contract": p["contract"], "at": _s(now)}         # _reconcile checks that Angel One shows it closed too
             elif not a["halted"]:
                 self._halt(c, a, now, f"a {o['role']} order ({o['side']} {o['qty']} {o['contract']}) filled while this app held no position, so Angel One now "
@@ -1045,6 +1117,22 @@ class RealTB:
             return
         if self._orders_today(c, a["user_id"]) >= MAX_ORDERS_PER_DAY:
             return self._miss(a, now, f"{MAX_ORDERS_PER_DAY} orders were already sent today")
+        if pe.get("restore") and not pe.get("flat_checked"):
+            # the one-time correction goes out only if Angel One itself shows the account flat in the contract (nothing held by hand meanwhile)
+            try:
+                pos = await broker.positions()
+            except Exception:
+                return                                              # asked again next round
+            net = 0
+            for q in pos or []:
+                if q.get("tradingsymbol") == ct["trading_symbol"]:
+                    try:
+                        net += int(float(q.get("netqty") or 0))
+                    except ValueError:
+                        pass
+            if net != 0:
+                return self._miss(a, now, f"{RESTORE_TAG}: not done, Angel One shows a net quantity of {net} in {ct['trading_symbol']}")
+            pe["flat_checked"] = True
         reason = await self._entry_guard(c, broker, a, pe, now)
         if reason:
             if reason in ("market closed",):
@@ -1063,7 +1151,8 @@ class RealTB:
         else:
             payload = dryrun._payload(ct, side, pe["qty"], "MARKET", price=0)
         attempt = pe["attempts"] + 1
-        o = await self._place(c, broker, a, now, "entry", payload, f"entry attempt {attempt} at live {ltp}", ct, attempt=attempt)
+        why = f"entry attempt {attempt} at live {ltp}"
+        o = await self._place(c, broker, a, now, "entry", payload, f"{RESTORE_TAG}: {why}" if pe.get("restore") else why, ct, attempt=attempt)
         if o is None:
             return                                                  # nothing reached Angel One (its session had expired): the same attempt next round
         pe["attempts"] = attempt
@@ -1263,17 +1352,27 @@ class RealTB:
         """The person's REAL Top-Bottom trades, built only from fills Angel One confirmed: each entry fill paired with the stop / exit fill that closed it.
         Newest first. P&L is before charges. `per_qty`: rupees per point for one unit of quantity, i.e. the instrument's pnl_units / quantity. It is 1 for
         NSE futures, but MCX gold is quoted per 10 g while its quantity is in grams (Gold Ten: quantity 10 = Rs 1 per point, so 0.1)."""
-        rows = c.execute("SELECT role, side, qty, contract, filled_avg, updated_at FROM real_tb_orders WHERE user_id=? AND instrument_id=? AND status='filled' ORDER BY updated_at",
+        rows = c.execute("SELECT role, side, qty, contract, filled_avg, updated_at, why FROM real_tb_orders WHERE user_id=? AND instrument_id=? AND status='filled' ORDER BY updated_at",
                          (user_id, inst_id)).fetchall()
         out, cur = [], None
         for r in rows:
             if r["role"] == "entry":
+                prev = out[-1] if out else None
+                if RESTORE_TAG in (r["why"] or "") and prev is not None and prev["status"] == "CLOSED" and prev["direction"] == r["side"]:
+                    # the one-time correction re-opened the trade the deploy closed: one trade from its original entry, not two
+                    sgn = 1 if prev["direction"] == "BUY" else -1
+                    corr = ((prev["exit_price"] or 0) - (r["filled_avg"] or 0)) * sgn
+                    prev.update(status="OPEN", exit_price=None, exit_at=None, exit_by=None, pnl_points=None, pnl_amount=None,
+                                correction={"closed_at": prev["exit_price"], "reentered_at": r["filled_avg"], "at": r["updated_at"], "points": round(corr, 2),
+                                            "amount": round(corr * prev["qty"] * per_qty, 2)})
+                    cur = prev
+                    continue
                 cur = {"direction": r["side"], "qty": r["qty"], "contract": r["contract"], "entry_price": r["filled_avg"], "entry_at": r["updated_at"],
                        "exit_price": None, "exit_at": None, "exit_by": None, "pnl_points": None, "pnl_amount": None, "status": "OPEN"}
                 out.append(cur)
             elif cur is not None and cur["status"] == "OPEN":
                 sgn = 1 if cur["direction"] == "BUY" else -1
-                pts = ((r["filled_avg"] or 0) - (cur["entry_price"] or 0)) * sgn
+                pts = ((r["filled_avg"] or 0) - (cur["entry_price"] or 0)) * sgn + ((cur.get("correction") or {}).get("points") or 0)
                 cur.update(exit_price=r["filled_avg"], exit_at=r["updated_at"], exit_by=r["role"], pnl_points=round(pts, 2), pnl_amount=round(pts * cur["qty"] * per_qty, 2), status="CLOSED")
         return out[::-1]
 
@@ -1288,6 +1387,7 @@ class RealTB:
             watched = bool(live["position"]) and not resting and bool(sw)
             step = min(sw.get("step", 0), len(STOP_WITHIN_PCTS) - 1) if sw.get("day") == now_ist().date().isoformat() else 0     # a new day starts at 2% again
             out.append({"user_id": live["user_id"], "instrument_id": live["instrument_id"], "symbol": live["symbol"], "position": live["position"], "pending_entry": bool(live["pending_entry"]),
+                        "units": self._units(live, live["position"]) if live["position"] and live["position"].get("qty") else None,
                         "stop_resting": resting, "stop_watch_pct": STOP_WITHIN_PCTS[step] * 100 if watched else None,
                         "halted": live["halted"], "stop_target": live["stop_target"], "released": live.get("released", False), "exiting": bool(live.get("manual_exit")), "missed": live["missed"][-5:], "events": live["events"][-15:],
                         "orders": [{k: o[k] for k in ("id", "role", "side", "qty", "type", "price", "trigger", "state", "why", "contract")} for o in live["orders"][-10:]]})
