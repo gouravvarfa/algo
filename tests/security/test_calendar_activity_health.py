@@ -53,7 +53,9 @@ def test_notices_come_on_the_day_and_ahead(db, new_client, monkeypatch):
     u = make_user(db, "noticeuser", "user")
     cl = new_client()
     assert login(cl, u).status_code == 200
-    today = dt.date.today()
+    # the notice counts days in IST, like the app: between 00:00 and 05:30 IST a UTC clock (CI) still shows yesterday, and its "tomorrow"
+    # was IST's today, so the test failed there every night (21 Nov 2026 00:03 IST, CI)
+    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date()
     mc.put(db, (today + dt.timedelta(days=1)).isoformat(), "NSE", "holiday", None, None, "Test holiday", "admin")
     cal = cl.get("/api/announcement").json()["calendar"]
     assert len(cal) == 1 and cal[0]["ahead"] and cal[0]["text"].startswith("Kal") and "band rahega" in cal[0]["text"]
