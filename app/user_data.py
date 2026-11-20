@@ -7,6 +7,7 @@ session, never from the request). With no login (local use) everything belongs t
 from __future__ import annotations
 
 import json
+import logging
 import time
 
 from fastapi import APIRouter, Depends, Request
@@ -16,6 +17,7 @@ from app.auth_api import db
 from app.security.users import AuthError
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 LOCAL_USER = "local"
 MAX_POSITIONS = 300
 MAX_BYTES = 400_000
@@ -67,7 +69,13 @@ def put_sim_positions(body: PositionsBody, request: Request, symbol: str = "NIFT
               (user_id_of(request), _symbol(symbol), data, now))
     c.commit()
     from app import option_journal
-    option_journal.sync(c, user_id_of(request), _symbol(symbol), body.positions, now)       # the options journal keeps every leg for good
+    try:
+        option_journal.sync(c, user_id_of(request), _symbol(symbol), body.positions, now)       # the options journal keeps every leg for good
+    except Exception:
+        # the positions are already saved (committed above): a journal problem is logged and the next save brings the journal up to date,
+        # it never turns this save into an error ("Could not save positions" when they were saved)
+        c.rollback()
+        log.exception("options journal not updated for this save (%s); the positions themselves are saved", _symbol(symbol))
     return {"ok": True, "updated_at": now, "count": len(body.positions)}
 
 

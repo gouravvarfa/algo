@@ -59,3 +59,45 @@ def test_backfill_records_positions_saved_before_the_journal_existed(db):
     option_journal.backfill(db)                                                   # running twice adds nothing
     rows = db.execute("SELECT status FROM option_trades WHERE user_id='old-user' ORDER BY id").fetchall()
     assert [r["status"] for r in rows] == ["OPEN", "CLOSED"]
+
+
+def test_two_saves_of_the_same_new_leg_at_once_do_not_fail(db):
+    """20 Nov 2026 10:06: two saves of the GOLDM screen arrived in the same second; both found the new leg missing, the second insert hit the
+    unique key and the save answered 500. The second one now finds the row the first just wrote and brings it up to date."""
+    from app import option_journal
+    uid = "race-user"
+    leg = _leg(7, strike=122000, expiry="2026-11-24", entry=2668.5, entry_date="2026-11-20", entry_time="10:06")
+    option_journal.sync(db, uid, "GOLDM", [leg])                                         # the first save
+
+    class SlowerSave:
+        """The second save's connection: its first look for the leg ran before the first save committed, so it saw nothing."""
+        def __init__(self, c):
+            self.c, self.missed = c, False
+
+        def execute(self, sql, *a):
+            if not self.missed and sql.startswith("SELECT id, status FROM option_trades WHERE user_id=?"):
+                self.missed = True
+                return self.c.execute("SELECT id, status FROM option_trades WHERE 0")
+            return self.c.execute(sql, *a)
+
+        def commit(self):
+            self.c.commit()
+    s = SlowerSave(db)
+    option_journal.sync(s, uid, "GOLDM", [{**leg, "closed": True, "exit": 2500.0, "exit_date": "2026-11-20", "realized": 1685.0}])
+    assert s.missed
+    rows = db.execute("SELECT status, exit, realized FROM option_trades WHERE user_id=? AND symbol='GOLDM'", (uid,)).fetchall()
+    assert [tuple(r) for r in rows] == [("CLOSED", 2500.0, 1685.0)]                         # one row, with the later save's exit
+
+
+def test_a_journal_problem_never_turns_a_saved_screen_into_an_error(db, new_client, monkeypatch):
+    from app import option_journal
+    u = make_user(db, "optsafe")
+    c = new_client()
+    assert login(c, u).status_code == 200
+
+    def broken(*a, **k):
+        raise RuntimeError("journal down")
+    monkeypatch.setattr(option_journal, "sync", broken)
+    r = api(c, "PUT", "/api/me/sim-positions?symbol=GOLDM", json={"positions": [_leg(1, strike=122000)]})
+    assert r.status_code == 200
+    assert [p["strike"] for p in c.get("/api/me/sim-positions?symbol=GOLDM").json()["positions"]] == [122000]

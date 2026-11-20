@@ -56,19 +56,37 @@ def due_mcx(now: dt.datetime, last: str | None) -> bool:
     return 1 <= now.weekday() <= 5 and MCX_RUN_WINDOW[0] <= now.time() < MCX_RUN_WINDOW[1] and last != now.date().isoformat()
 
 
+def _done_today(st: dict, sym: str, today: str) -> bool:
+    s = st.get(sym) or {}
+    return bool(s.get("ok")) and str(s.get("finished", "")).startswith(today)
+
+
 @tracked("collector.run_once")
-async def run_once(provider, symbols=SYMBOLS, mark: str = "last_run_date") -> dict:
+async def run_once(provider, symbols=SYMBOLS, mark: str = "last_run_date", retry_failed: bool = False) -> dict:
+    """One collection of `symbols`. With `retry_failed` (the MCX morning window) a symbol that failed all its tries leaves the day open, so the
+    next round of the loop tries again while the window lasts; only the symbols not yet saved today are fetched again. 20 Nov 2026: Angel One
+    refused GOLDM three times between 05:02 and 05:08, the day was marked done anyway and nothing more was tried until 07:30."""
     st = _status()
     session = await provider.get_session()
+    today = dt.datetime.now(IST).date().isoformat()
     for sym in symbols:
+        if retry_failed and _done_today(st, sym, today):
+            continue
         info = await asyncio.to_thread(master.load_underlying, sym)
         started = dt.datetime.now(IST).replace(tzinfo=None).isoformat(timespec="seconds")
         for attempt in range(1, SYMBOL_TRIES + 1):
             if await _collect_symbol(session, sym, info, started, st, last=attempt == SYMBOL_TRIES):
                 break
+            if attempt == SYMBOL_TRIES:
+                log.warning("collector %s: try %d of %d failed%s", sym, attempt, SYMBOL_TRIES, ": tried again in the next round of the window" if retry_failed else "")
+                break
             log.warning("collector %s: try %d of %d failed, again in %.0fs", sym, attempt, SYMBOL_TRIES, RETRY_WAIT_S)
             await asyncio.sleep(RETRY_WAIT_S)
-    st[mark] = dt.datetime.now(IST).date().isoformat()
+    failed = [s for s in symbols if not (st.get(s) or {}).get("ok")]
+    if retry_failed and failed:
+        log.warning("collector: %s not saved yet today; the day stays open", ", ".join(failed))
+    else:
+        st[mark] = today
     STATUS.parent.mkdir(parents=True, exist_ok=True)
     STATUS.write_text(json.dumps(st, indent=1))
     return st
@@ -102,7 +120,7 @@ async def loop(provider, check_every: int = 300) -> None:
                 log.info("daily option collector finished")
             if ops_flags.get("feature.collector") and due_mcx(now, _status().get("last_mcx_run_date")):
                 log.info("MCX option collector starting (%s)", ", ".join(MCX_SYMBOLS))
-                await run_once(provider, MCX_SYMBOLS, mark="last_mcx_run_date")
+                await run_once(provider, MCX_SYMBOLS, mark="last_mcx_run_date", retry_failed=True)
                 log.info("MCX option collector finished")
         except Exception:
             log.exception("daily option collector loop error")

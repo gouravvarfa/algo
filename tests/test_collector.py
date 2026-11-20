@@ -86,3 +86,58 @@ def test_a_symbol_that_keeps_failing_is_reported_after_three_tries(tmp_path, mon
         return None
     st = asyncio.run(collector.run_once(SimpleNamespace(get_session=get_session), symbols=("BANKNIFTY",)))
     assert len(n) == 3 and st["BANKNIFTY"]["ok"] is False and "403" in st["BANKNIFTY"]["error"]
+
+
+def test_an_mcx_symbol_refused_all_morning_tries_leaves_the_day_open_and_only_it_is_fetched_again(tmp_path, monkeypatch):
+    """20 Nov 2026 05:02-05:08: Angel One refused GOLDM three times, SILVERM was saved, and the day was marked done: no further try that
+    morning although the window lasts until 07:30. Now the day stays open, the next round fetches GOLDM only, and its success closes the day."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.options import collector
+    monkeypatch.setattr(collector, "STATUS", tmp_path / "status.json")
+    monkeypatch.setattr(collector, "RETRY_WAIT_S", 0)
+    monkeypatch.setattr(collector.master, "load_underlying", lambda sym: SimpleNamespace(name=sym))
+    calls = []
+    refuse = {"GOLDM": True}
+
+    async def ingest(session, info, *a, **k):
+        calls.append(info.name)
+        if refuse.get(info.name):
+            raise RuntimeError("circuit 'angelone.candles' is open; retry in 30s")
+        return {"contracts": 2, "contracts_with_data": 2, "rows": 10, "rejected": 0, "errors": []}
+
+    async def repair(*a, **k):
+        return {"still_failing": [], "fixed": 0}
+    monkeypatch.setattr(collector.intraday, "ingest", ingest)
+    monkeypatch.setattr(collector.intraday, "repair_errors", repair)
+
+    async def get_session():
+        return None
+    prov = SimpleNamespace(get_session=get_session)
+    run = lambda: asyncio.run(collector.run_once(prov, collector.MCX_SYMBOLS, mark="last_mcx_run_date", retry_failed=True))
+    st = run()
+    assert calls == ["GOLDM"] * 3 + ["SILVERM"]
+    assert st["GOLDM"]["ok"] is False and st["SILVERM"]["ok"] and "last_mcx_run_date" not in st          # the day stays open
+    calls.clear(); refuse["GOLDM"] = False
+    st = run()                                                                                          # the next round of the window
+    assert calls == ["GOLDM"]                                                                           # SILVERM is not fetched again
+    assert st["GOLDM"]["ok"] and st["last_mcx_run_date"] == dt.datetime.now(collector.IST).date().isoformat()
+
+
+def test_the_after_close_index_run_still_closes_its_day_even_when_a_symbol_failed(tmp_path, monkeypatch):
+    """Only the MCX morning window retries (it ends by itself at 07:30); the after-close index run keeps its old behaviour (no retry all night)."""
+    import asyncio
+    from types import SimpleNamespace
+    from app.options import collector
+    monkeypatch.setattr(collector, "STATUS", tmp_path / "status.json")
+    monkeypatch.setattr(collector, "RETRY_WAIT_S", 0)
+    monkeypatch.setattr(collector.master, "load_underlying", lambda sym: SimpleNamespace(name=sym))
+
+    async def ingest(*a, **k):
+        raise RuntimeError("HTTP 403")
+    monkeypatch.setattr(collector.intraday, "ingest", ingest)
+
+    async def get_session():
+        return None
+    st = asyncio.run(collector.run_once(SimpleNamespace(get_session=get_session), symbols=("BANKNIFTY",)))
+    assert st["BANKNIFTY"]["ok"] is False and st["last_run_date"] == dt.datetime.now(collector.IST).date().isoformat()

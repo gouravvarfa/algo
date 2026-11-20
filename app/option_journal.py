@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import sqlite3
 import time
 
 from fastapi import APIRouter, Depends, Request
@@ -55,12 +56,20 @@ def sync(c, user_id: str, symbol: str, positions: list[dict], now: float | None 
         vals = dict(lots=int(p.get("lots") or 0), lot_size=int(p.get("lot_size") or 0), expiry=p.get("expiry"), entry_time=p.get("entry_time"), sl=_num(p.get("sl")),
                     exit=_num(p.get("exit")), exit_date=p.get("exit_date"), exit_time=p.get("exit_time"), exit_reason=p.get("exit_reason"), realized=_num(p.get("realized")))
         if row is None:
-            c.execute("INSERT INTO option_trades (user_id, symbol, pos_id, side, opt, strike, expiry, lots, lot_size, entry, entry_date, entry_time, exit, exit_date, exit_time, "
-                      "exit_reason, sl, realized, status, opened_at, closed_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                      (user_id, symbol, str(p.get("id")), side, opt, strike, vals["expiry"], vals["lots"], vals["lot_size"], entry, p.get("entry_date"), vals["entry_time"],
-                       vals["exit"], vals["exit_date"], vals["exit_time"], vals["exit_reason"], vals["sl"], vals["realized"], status, now, now if closed else None, now))
-            seen.add(c.execute("SELECT last_insert_rowid()").fetchone()[0])
-        else:
+            try:
+                c.execute("INSERT INTO option_trades (user_id, symbol, pos_id, side, opt, strike, expiry, lots, lot_size, entry, entry_date, entry_time, exit, exit_date, exit_time, "
+                          "exit_reason, sl, realized, status, opened_at, closed_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (user_id, symbol, str(p.get("id")), side, opt, strike, vals["expiry"], vals["lots"], vals["lot_size"], entry, p.get("entry_date"), vals["entry_time"],
+                           vals["exit"], vals["exit_date"], vals["exit_time"], vals["exit_reason"], vals["sl"], vals["realized"], status, now, now if closed else None, now))
+                seen.add(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+                continue
+            except sqlite3.IntegrityError:
+                # two saves of the same screen at the same moment (20 Nov 2026 10:06: a new GOLDM leg arrived in both, the second insert failed and
+                # the save answered 500): the other one has just written this leg, so it is brought up to date like any existing row
+                row = c.execute("SELECT id, status FROM option_trades WHERE user_id=? AND symbol=? AND pos_id=? AND side=? AND opt=? AND strike=? AND entry_date IS ? AND entry=?", key).fetchone()
+                if row is None:
+                    raise
+        if row is not None:
             seen.add(row["id"])
             c.execute("UPDATE option_trades SET lots=?, lot_size=?, expiry=?, entry_time=?, sl=?, exit=?, exit_date=?, exit_time=?, exit_reason=?, realized=?, status=?, "
                       "closed_at=CASE WHEN ?='CLOSED' THEN COALESCE(closed_at, ?) ELSE NULL END, updated_at=? WHERE id=?",
