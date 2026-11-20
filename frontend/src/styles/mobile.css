@@ -80,6 +80,9 @@
   .bn.active { color: var(--accent); background: var(--accent-soft); }
   .bn:active { transform: scale(.94); }
   .nav-open .bottomnav { z-index: 65; }
+  /* the open menu ends above the tab bar: its last rows (your name, Sign out) always scroll into view instead of staying behind the bar
+     (owner, 20 Nov 2026: "logout dikh hi nahi raha") */
+  .sidebar { padding-bottom: calc(60px + 20px + env(safe-area-inset-bottom)); scroll-padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
 
   /* top bar: one line, the status chips scroll sideways instead of being cut off */
   .topbar { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
