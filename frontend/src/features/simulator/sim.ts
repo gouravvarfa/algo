@@ -82,6 +82,24 @@ export interface SimPos {
 }
 export interface Valued { ltp: number | null; pnl: number | null; note: string }
 
+/** Option prices pushed live per chain. The server takes at most 400 tokens per browser stream, and that one stream also carries the market bar,
+ * so a chain asks for at most this many. 20 Nov 2026: SILVERM's near expiry lists 237 strikes (474 tokens); the stream was refused, the whole tab
+ * lost its pushed prices and the chain refreshed only as fast as each 1-2 s fetch came back. */
+export const STREAM_OPTION_MAX = 300
+
+/** The option tokens of a live chain to follow by pushed ticks: the legs of open positions on this expiry first (always), then the strikes nearest
+ * the money, both sides, up to `max` (300 tokens: 75 strikes either way of the ATM). Strikes further out keep the chain's own refresh (every 5 s). */
+export function streamOptionTokens(chain: Pick<Chain, 'rows' | 'atm' | 'expiry'>, positions: Pick<SimPos, 'strike' | 'opt' | 'expiry' | 'closed'>[], max = STREAM_OPTION_MAX): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (t: string | null | undefined) => { if (t && !seen.has(t) && out.length < max) { seen.add(t); out.push(t) } }
+  const byStrike = new Map(chain.rows.map((r) => [r.strike, r]))
+  for (const p of positions) if (!p.closed && p.expiry === chain.expiry) add(byStrike.get(p.strike)?.[p.opt]?.token)
+  const near = [...chain.rows].sort((a, b) => Math.abs(a.strike - chain.atm) - Math.abs(b.strike - chain.atm) || a.strike - b.strike)
+  for (const r of near) { add(r.CE?.token); add(r.PE?.token) }
+  return out
+}
+
 export interface Payoff { curve: [number, number][]; max_profit: number | null; max_loss: number | null; breakevens: number[]; net_credit: number }
 export interface Mark { underlying: number | null; positions: Valued[]; total: number; payoff: Payoff | null }
 export interface WhatIf {

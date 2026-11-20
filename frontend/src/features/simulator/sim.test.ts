@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AUTO_FLY, AUTO_FLY_ADJ, kfmt, nearestDateIndex, pickResell, planPreset, slPrice, type Chain } from './sim'
+import { AUTO_FLY, AUTO_FLY_ADJ, STREAM_OPTION_MAX, kfmt, nearestDateIndex, pickResell, planPreset, slPrice, streamOptionTokens, type Chain } from './sim'
 
 const row = (strike: number, ce: number | null, pe: number | null) => ({
   strike,
@@ -65,5 +65,34 @@ describe('date picker', () => {
     expect(nearestDateIndex(dates, '2026-12-01')).toBe(3)           // after everything: the last
     expect(nearestDateIndex([], '2026-03-09')).toBe(-1)
     expect(nearestDateIndex(dates, '')).toBe(-1)
+  })
+})
+
+describe('live chain: which option prices are pushed', () => {
+  // SILVERM's near expiry of 20 Nov 2026: 237 strikes = 474 tokens, more than the 400 a stream may carry
+  const leg = (t: string) => ({ token: t, ltp: 1, oi: null, chg_oi: null, volume: null, iv: null, delta: null })
+  const big = { atm: 150000, expiry: '2026-11-24', rows: Array.from({ length: 237 }, (_, i) => { const k = 120000 + i * 250; return { strike: k, CE: leg(`c${k}`), PE: leg(`p${k}`) } }) }
+  it('asks for at most STREAM_OPTION_MAX tokens, nearest the money first, both sides', () => {
+    const t = streamOptionTokens(big, [])
+    expect(t.length).toBe(STREAM_OPTION_MAX)
+    expect(t.slice(0, 4)).toEqual(['c150000', 'p150000', 'c149750', 'p149750'])     // the ATM, then the nearest strike (the lower one on a tie)
+    expect(t).toContain('c140750')                                                   // 37 strikes below: still pushed
+    expect(t).not.toContain('c120000')                                               // the far end keeps the chain's own refresh
+  })
+  it('always pushes the legs of open positions, however far, but not closed ones or another expiry', () => {
+    const pos = [
+      { strike: 120000, opt: 'PE' as const, expiry: '2026-11-24', closed: false },
+      { strike: 179000, opt: 'CE' as const, expiry: '2026-11-24', closed: true },
+      { strike: 120250, opt: 'CE' as const, expiry: '2026-12-22', closed: false },
+    ]
+    const t = streamOptionTokens(big, pos)
+    expect(t[0]).toBe('p120000')
+    expect(t.length).toBe(STREAM_OPTION_MAX)
+    expect(t).not.toContain('c179000')
+    expect(t).not.toContain('c120250')
+  })
+  it('a small chain is pushed whole, a leg without a token is skipped', () => {
+    const small = { atm: 23000, expiry: '2026-11-24', rows: [{ strike: 22950, CE: leg('a'), PE: null }, { strike: 23000, CE: leg('b'), PE: { ...leg('x'), token: null } }] }
+    expect(streamOptionTokens(small, [])).toEqual(['b', 'a'])
   })
 })

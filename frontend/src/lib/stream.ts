@@ -10,6 +10,10 @@ export interface Tick { ltp: number; ts: number; at: number }        // price, e
 
 const REOPEN_DELAY_MS = 250      // tokens asked for by several screens at once share one reopen
 const STALE_AFTER_MS = 20_000    // no tick (and no heartbeat) for this long: the line is treated as dead and reopened
+// The server refuses a stream of more than 400 tokens (app/live/stream.py MAX_TOKENS_PER_CLIENT), and a refused stream takes every screen of the
+// tab back to polling (20 Nov 2026: the SILVERM chain asked for 494 and the market bar lost its pushed prices too). The tab never asks for more:
+// the tokens asked for first (the market bar, then the screen's main prices) are kept, the last ones over the limit wait for a slot.
+export const MAX_STREAM_TOKENS = 400
 
 class StreamManager {
   private want = new Map<string, number>()          // "NFO:61466" -> number of screens asking for it
@@ -64,7 +68,7 @@ class StreamManager {
   }
 
   private reopen() {
-    const specs = [...this.want.keys()].sort()
+    const specs = [...this.want.keys()].slice(0, MAX_STREAM_TOKENS).sort()     // a Map keeps the order tokens were first asked for
     const key = specs.join(',')
     if (!specs.length) { this.close(); this.key = ''; this.setStatus('idle'); return }
     if (key === this.key && this.es) return

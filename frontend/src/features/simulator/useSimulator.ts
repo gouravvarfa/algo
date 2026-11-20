@@ -4,7 +4,7 @@ import type { DataSource } from '../../lib/datasource'
 import { dmy, n0, num } from '../../lib/format'
 import { fresh, useLiveTicks } from '../../lib/stream'
 import { useToast } from '../../lib/toast'
-import { MCX_SYMS, ADJ_DELTA, ADJ_MAX, ADJ_SELL_DELTA, AUTO_FLY, AUTO_FLY_ADJ, AUTO_FLY_DELTA, PRESET_RULES, pickResell, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
+import { MCX_SYMS, streamOptionTokens, ADJ_DELTA, ADJ_MAX, ADJ_SELL_DELTA, AUTO_FLY, AUTO_FLY_ADJ, AUTO_FLY_DELTA, PRESET_RULES, pickResell, planPreset, type Chain, type Margin, type Mark, type SimPos, type Sym, type Valued, type WhatIf, type Opt, type Side } from './sim'
 
 const SYMS: Sym[] = ['NIFTY', 'BANKNIFTY', 'GOLDM', 'SILVERM']
 const INDEX_SPEC: Record<string, string> = { NIFTY: 'NSE:99926000', BANKNIFTY: 'NSE:99926009' }
@@ -196,9 +196,13 @@ export function useSimulator(ds: DataSource) {
 
   // LIVE: every price of the chain is pushed by the server (SSE); the chain itself (IV, greeks, OI, the strikes around the money) is still fetched,
   // every second until the stream is up and every 5 s while it is, so nothing on screen is older than its tick
+  // only the strikes nearest the money (and every open leg) are pushed: a chain with hundreds of strikes would otherwise be refused by the stream.
+  // The ATM of the first chain of the expiry anchors the set (75 strikes either way of it is far wider than the screen): following every ATM
+  // change would reopen the stream each time the price crosses a strike's midpoint, and a reopen is itself a gap in the prices
+  const streamLegs = useMemo(() => JSON.stringify(positions.filter((p) => !p.closed).map((p) => [p.strike, p.opt, p.expiry])), [positions])
   const optionSpecs = useMemo(() => (live && chain?.mode === 'live'
-    ? [...chain.rows.flatMap((r) => [r.CE?.token, r.PE?.token]).filter((t): t is string => !!t).map((t) => `${chain.option_exch ?? 'NFO'}:${t}`), chain.underlying_spec ?? INDEX_SPEC[sym]]
-    : []), [live, chain?.mode, chain?.expiry, chain?.rows.length, sym]) // eslint-disable-line react-hooks/exhaustive-deps
+    ? [...streamOptionTokens(chain, positions).map((t) => `${chain.option_exch ?? 'NFO'}:${t}`), chain.underlying_spec ?? INDEX_SPEC[sym]]
+    : []), [live, chain?.mode, chain?.expiry, chain?.rows.length, streamLegs, sym]) // eslint-disable-line react-hooks/exhaustive-deps
   const { ticks, status: streamStatus } = useLiveTicks(optionSpecs, optionSpecs.length > 0)
   const streamLive = streamStatus === 'live'
   useEffect(() => {
