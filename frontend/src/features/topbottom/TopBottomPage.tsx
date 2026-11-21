@@ -297,8 +297,9 @@ function Content({ tabs, snap: s0, ov, idx, journal, kind, setKind, tf, pickTf, 
             <button className="btn sm" onClick={onFit}>Fit</button>
           </div>
           <span className="legend"><i style={{ background: 'var(--accent)' }} />Close <i className="dash" style={{ color: 'var(--success)' }} />Entry <i className="dash" style={{ color: 'var(--danger)' }} />Stop-loss ▲ BUY ▼ SELL <b style={{ color: 'var(--warning)' }}>●</b> latest TOP / BOTTOM</span>
-          <TradeChart snap={tf === '15m' && c15?.candles?.length ? with15m(s, c15.candles, inst.exch_seg) : s} kind={tf === '15m' ? 'candle' : kind} fitSignal={fit} liveLtp={liveLtp} />
-          {tf === '15m' && <p className="note">15-minute candles of {c15?.contract ?? inst.trading_symbol} for display (from the stored 1-minute candles and live ticks); the strategy itself still uses daily System Points.</p>}
+          {/* Line or Candles, whichever is chosen, also on 15 minutes (owner, 21 Nov 2026: the 15m view was always candles and Line did nothing) */}
+          <TradeChart snap={tf === '15m' && c15?.candles?.length ? with15m(s, c15.candles, inst.exch_seg) : s} kind={kind} fitSignal={fit} liveLtp={liveLtp} />
+          {tf === '15m' && <p className="note">15-minute chart of {c15?.contract ?? inst.trading_symbol} for display (from the stored 1-minute candles and live ticks); the strategy itself still uses daily System Points.</p>}
           {s.engine_note && <p className={`note ${s.engine_warning ? 'neg' : ''}`} style={s.engine_warning ? { fontWeight: 650 } : undefined}>{s.engine_warning ? '⚠ ' : '✔ '}{s.engine_note}</p>}
           <p className="note">Last confirmed bar {s.last_confirmed_bar.slice(0, 10)}. The rightmost point is today&apos;s forming candle (Angel One) and can still change; signals use confirmed closes and the 15-minute gap protocol.</p>
         </div>
