@@ -184,5 +184,7 @@ body { font-family: var(--font-sans); font-feature-settings: "kern", "liga", "cv
 h1 { letter-spacing: -.025em; } h2, h3 { letter-spacing: -.012em; }
 .stat .k, th, .label { letter-spacing: .04em; }
 .page { animation: pagein .24s cubic-bezier(.2, .7, .2, 1) both; }
-@keyframes pagein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* opacity only: an animated transform on .page (even one that ends at none) makes its position:fixed children, the Options Simulator's time bar,
+   sit at the end of the page instead of the bottom of the screen (owner, 23 Nov 2026) */
+@keyframes pagein { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .page { animation: none; } }

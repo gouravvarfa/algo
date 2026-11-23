@@ -167,7 +167,7 @@ label.field input, label.field select { text-transform: none; letter-spacing: 0;
 .shell:not(.console) .card-head h2, .shell:not(.console) .card h2 { font-weight: 600; }
 
 @keyframes riseIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-.shell:not(.console) .page > * { animation: riseIn .35s cubic-bezier(.2,.7,.2,1) both; }
+.shell:not(.console) .page > *:not(.actbar) { animation: riseIn .35s cubic-bezier(.2,.7,.2,1) both; }      /* the fixed time bar never rises in: a transform would unpin it */
 .shell:not(.console) .page > *:nth-child(2) { animation-delay: .04s; } .shell:not(.console) .page > *:nth-child(3) { animation-delay: .08s; }
 .shell:not(.console) .page > *:nth-child(4) { animation-delay: .12s; } .shell:not(.console) .page > *:nth-child(n+5) { animation-delay: .16s; }
 .shell:not(.console) .card, .shell:not(.console) .tbkpis .stat, .shell:not(.console) .tbhero { transition: box-shadow .2s ease, transform .2s ease, border-color .2s ease; }
