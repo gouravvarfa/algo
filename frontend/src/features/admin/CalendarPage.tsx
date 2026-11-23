@@ -10,7 +10,7 @@ interface Data { entries: Entry[]; today: { text: string }[]; sync?: { at: numbe
 const day = (d: string) => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })
 
 /** Exchange holidays and special sessions. A holiday closes the market for the strategy and real orders; a special session (Muhurat, Budget
- * Sunday) keeps them off too. Either way everybody gets a banner on the day and up to three days before ("Kal market band rahega"). */
+ * Sunday) keeps them off too. Either way everybody gets a banner on the day and up to three days before ("Tomorrow (24 Nov): NSE closed for ..."). */
 export default function CalendarPage() {
   const qc = useQueryClient()
   const toast = useToast()

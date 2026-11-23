@@ -58,7 +58,9 @@ def test_notices_come_on_the_day_and_ahead(db, new_client, monkeypatch):
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date()
     mc.put(db, (today + dt.timedelta(days=1)).isoformat(), "NSE", "holiday", None, None, "Test holiday", "admin")
     cal = cl.get("/api/announcement").json()["calendar"]
-    assert len(cal) == 1 and cal[0]["ahead"] and cal[0]["text"].startswith("Kal") and "band rahega" in cal[0]["text"]
+    assert len(cal) == 1 and cal[0]["ahead"]
+    tomorrow = (today + dt.timedelta(days=1)).strftime("%d %b")
+    assert cal[0]["text"] == f"Tomorrow ({tomorrow}): NSE closed for Test holiday. No strategy evaluation and no real order that day."      # English, the date once
 
 
 def test_only_an_admin_edits_the_calendar(db, new_client):
@@ -113,3 +115,18 @@ def test_live_logs_come_from_the_apps_own_copy_with_secrets_masked(db, new_clien
     assert login(cl, owner).status_code == 200
     d = cl.get("/api/dev/live-logs?lines=50").json()
     assert d["available"] and any("login ok" in x for x in d["lines"]) and not any("abc123SECRET" in x for x in d["lines"])
+
+
+def test_notices_further_ahead_and_special_sessions_are_in_english_with_the_date_once(db, new_client):
+    u = make_user(db, "noticeuser2", "user")
+    cl = new_client()
+    assert login(cl, u).status_code == 200
+    today = dt.datetime.now(dt.timezone(dt.timedelta(hours=5, minutes=30))).date()
+    d2, d3 = today + dt.timedelta(days=2), today + dt.timedelta(days=3)
+    mc.put(db, d2.isoformat(), "NSE", "holiday", None, None, "Guru Nanak Jayanti", "admin")
+    mc.put(db, d3.isoformat(), "MCX", "special", "18:00", "19:00", "Muhurat", "admin")
+    texts = [c["text"] for c in cl.get("/api/announcement").json()["calendar"]]
+    assert f"{d2.strftime('%a %d %b')}: NSE closed for Guru Nanak Jayanti. No strategy evaluation and no real order that day." in texts
+    assert f"{d3.strftime('%a %d %b')}: MCX special session 18:00-19:00 (Muhurat). Top-Bottom stays off in that session." in texts
+    for t in texts:
+        assert not any(w in t for w in ("Kal", "band rahega", "rahega", "mein")), t

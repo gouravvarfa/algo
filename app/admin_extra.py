@@ -263,10 +263,11 @@ def _calendar_today() -> list[dict]:
             e = market_calendar.entry(d, ex)
             if e is None:
                 continue
-            when = "Kal" if k == 1 else d.strftime("%a %d %b")
+            # in English (owner, 23 Nov 2026); the date once: "Tomorrow (24 Nov)", further ahead "Wed 25 Nov"
+            when = f"Tomorrow ({d.strftime('%d %b')})" if k == 1 else d.strftime("%a %d %b")
             what = e["note"] or ("Special session" if e["kind"] == "special" else "Market holiday")
-            text = (f"{when} ({d.strftime('%d %b')}) {ex} band rahega: {what}." if e["kind"] == "holiday"
-                    else f"{when} ({d.strftime('%d %b')}) {ex} special session {e['start_time']}-{e['end_time']}: {what}. Top-Bottom us session mein off rahega.")
+            text = (f"{when}: {ex} closed for {what}. No strategy evaluation and no real order that day." if e["kind"] == "holiday"
+                    else f"{when}: {ex} special session {e['start_time']}-{e['end_time']} ({what}). Top-Bottom stays off in that session.")
             out.append({"exchange": ex, "kind": e["kind"], "text": text, "ahead": True})
     return out
 
