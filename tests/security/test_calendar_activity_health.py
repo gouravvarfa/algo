@@ -130,3 +130,13 @@ def test_notices_further_ahead_and_special_sessions_are_in_english_with_the_date
     assert f"{d3.strftime('%a %d %b')}: MCX special session 18:00-19:00 (Muhurat). Top-Bottom stays off in that session." in texts
     for t in texts:
         assert not any(w in t for w in ("Kal", "band rahega", "rahega", "mein")), t
+
+
+def test_a_late_open_keeps_the_market_closed_until_its_start(db, new_client):
+    mc.put(db, "2026-11-24", "MCX", "late_open", "17:00", None, "Guru Nanak Jayanti", "admin")
+    assert not market_open(dt.datetime(2026, 11, 24, 10, 0), MCX)
+    assert market_open(dt.datetime(2026, 11, 24, 17, 0), MCX) and market_open(dt.datetime(2026, 11, 24, 22, 0), MCX)
+    from app.paper_trading.engine import _last_session_before
+    assert _last_session_before(dt.date(2026, 11, 25), "MCX") == dt.date(2026, 11, 24)   # still a trading day
+    with pytest.raises(ValueError):
+        mc.put(db, "2026-11-24", "MCX", "late_open", None, None, "x", "admin")

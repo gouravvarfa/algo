@@ -195,7 +195,7 @@ def _last_session_before(day: dt.date, exchange: str = "NSE") -> dt.date:
     from app.ops import market_calendar
     d = day - dt.timedelta(days=1)
     for _ in range(14):
-        if d.weekday() < 5 and market_calendar.entry(d, exchange) is None:
+        if d.weekday() < 5 and not market_calendar.closes_day(market_calendar.entry(d, exchange)):
             return d
         d -= dt.timedelta(days=1)
     return d
@@ -204,8 +204,11 @@ def _last_session_before(day: dt.date, exchange: str = "NSE") -> dt.date:
 def market_open(now: dt.datetime | None = None, session: Session = NSE) -> bool:
     now = now or now_ist()
     from app.ops import market_calendar
-    if market_calendar.entry(now.date(), session.name) is not None:
+    e = market_calendar.entry(now.date(), session.name)
+    if market_calendar.closes_day(e):
         return False                  # an exchange holiday, or a special session (Muhurat etc.) in which the strategy and real orders stay off
+    if e is not None and e.get("start_time") and now.time() < dt.time.fromisoformat(e["start_time"]):
+        return False                  # a late open (MCX from 17:00 on an NSE holiday): closed until then
     return now.weekday() < 5 and session.first_start <= now.time() <= session.close
 
 

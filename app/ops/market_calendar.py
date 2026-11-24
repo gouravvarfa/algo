@@ -3,6 +3,8 @@
   holiday  -> the market is CLOSED that day, even on a weekday: no strategy evaluation as 'open', no real order.
   special  -> a short extra session (often on a weekend). The strategy and real orders stay OFF in it (a one-hour, thin session is not a normal
               trading day for a daily-candle strategy); everybody sees a banner and the top bar says so.
+  late_open -> a normal trading day whose session starts late (MCX on an NSE holiday such as Guru Nanak Jayanti: closed in the morning, open
+              from 17:00). The market counts as closed before start_time and open as usual from it to the normal close.
 
 Read on every market-hours question, so it is cached for a minute and never raises: a missing table or a busy database means 'no entry'.
 """
@@ -13,7 +15,7 @@ import time
 
 from app.db import platform_db
 
-KINDS = ("holiday", "special")
+KINDS = ("holiday", "special", "late_open")
 EXCHANGES = ("NSE", "MCX")
 _CACHE_S = 60.0
 _cache: dict | None = None
@@ -48,6 +50,11 @@ def entry(day: dt.date, exchange: str = "NSE") -> dict | None:
     return _load().get((day.isoformat(), exchange))
 
 
+def closes_day(e: dict | None) -> bool:
+    """A holiday or a special session takes the whole day out of normal trading; a late open does not."""
+    return e is not None and e.get("kind") != "late_open"
+
+
 def today_entries(now: dt.datetime) -> list[dict]:
     d = now.date().isoformat()
     return [v for (day, _), v in _load().items() if day == d]
@@ -63,16 +70,21 @@ def upcoming(c, days: int = 90) -> list[dict]:
 def put(c, day: str, exchange: str, kind: str, start: str | None, end: str | None, note: str, actor: str) -> None:
     dt.date.fromisoformat(day)
     if exchange not in EXCHANGES or kind not in KINDS:
-        raise ValueError("exchange must be NSE or MCX; kind holiday or special")
+        raise ValueError("exchange must be NSE or MCX; kind holiday, special or late_open")
     if kind == "special":
         if not (start and end):
             raise ValueError("a special session needs a start and an end time")
         if dt.time.fromisoformat(start) >= dt.time.fromisoformat(end):
             raise ValueError("the session must end after it starts")
+    if kind == "late_open":
+        if not start:
+            raise ValueError("a late open needs the time the market opens")
+        dt.time.fromisoformat(start)
+        end = None
     c.execute("INSERT INTO market_calendar (date, exchange, kind, start_time, end_time, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?) "
               "ON CONFLICT(date, exchange) DO UPDATE SET kind=excluded.kind, start_time=excluded.start_time, end_time=excluded.end_time, note=excluded.note, "
               "created_by=excluded.created_by, created_at=excluded.created_at",
-              (day, exchange, kind, start if kind == "special" else None, end if kind == "special" else None, note.strip()[:200], actor, time.time()))
+              (day, exchange, kind, start if kind in ("special", "late_open") else None, end if kind == "special" else None, note.strip()[:200], actor, time.time()))
     c.commit()
     invalidate()
 

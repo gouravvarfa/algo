@@ -18,7 +18,7 @@ export default function CalendarPage() {
   const [f, setF] = useState({ date: '', exchange: 'NSE', kind: 'holiday', start: '', end: '', note: '' })
   const done = (d: Data) => { qc.setQueryData(['calendar'], d); void qc.invalidateQueries({ queryKey: ['announcement'] }) }
   const save = useMutation({
-    mutationFn: () => put<Data>('/api/admin/calendar', { ...f, start: f.kind === 'special' ? f.start : null, end: f.kind === 'special' ? f.end : null }),
+    mutationFn: () => put<Data>('/api/admin/calendar', { ...f, start: f.kind !== 'holiday' ? f.start : null, end: f.kind === 'special' ? f.end : null }),
     onSuccess: (d) => { toast('Saved. The banner and the market hours follow it.'); setF({ ...f, date: '', note: '' }); done(d) },
     onError: (e) => toast(e instanceof ApiError ? e.message : 'Could not save'),
   })
@@ -30,7 +30,7 @@ export default function CalendarPage() {
     mutationFn: () => post<Data>('/api/admin/calendar/sync'),
     onSuccess: (d) => { toast(d.sync?.error ? `NSE did not answer: ${d.sync.error}` : 'NSE holiday list is up to date'); done(d) },
   })
-  const ok = !!f.date && (f.kind === 'holiday' || (!!f.start && !!f.end && f.start < f.end))
+  const ok = !!f.date && (f.kind === 'holiday' || (f.kind === 'late_open' && !!f.start) || (!!f.start && !!f.end && f.start < f.end))
   const rows = q.data?.entries ?? []
   return (
     <div className="page">
@@ -50,7 +50,8 @@ export default function CalendarPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
           <label className="field">Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} required /></label>
           <label className="field">Exchange<select value={f.exchange} onChange={(e) => setF({ ...f, exchange: e.target.value })}><option value="NSE">NSE (index & stock futures)</option><option value="MCX">MCX (gold / silver)</option></select></label>
-          <label className="field">Type<select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="holiday">Holiday (closed)</option><option value="special">Special session (Muhurat…)</option></select></label>
+          <label className="field">Type<select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="holiday">Holiday (closed)</option><option value="special">Special session (Muhurat…)</option><option value="late_open">Opens late (e.g. MCX from 17:00)</option></select></label>
+          {f.kind === 'late_open' && <label className="field">Opens at<input type="time" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} /></label>}
           {f.kind === 'special' && <>
             <label className="field">Starts<input type="time" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} /></label>
             <label className="field">Ends<input type="time" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} /></label>
@@ -67,7 +68,7 @@ export default function CalendarPage() {
               <tbody>{rows.map((e) => (
                 <tr key={e.date + e.exchange}>
                   <td>{day(e.date)}</td><td>{e.exchange}</td>
-                  <td>{e.kind === 'holiday' ? <span className="chip warn">closed</span> : <span className="chip">special {e.start_time}–{e.end_time}</span>}</td>
+                  <td>{e.kind === 'holiday' ? <span className="chip warn">closed</span> : e.kind === 'late_open' ? <span className="chip">opens {e.start_time}</span> : <span className="chip">special {e.start_time}–{e.end_time}</span>}</td>
                   <td>{e.note || '–'}<div className="sub">{e.created_by === 'NSE (auto)' ? 'from NSE, automatic' : `by ${e.created_by ?? '–'}`}</div></td>
                   <td><button className="btn sm" onClick={() => { if (window.confirm(`Remove ${e.date} ${e.exchange}?`)) remove.mutate(e) }}>Remove</button></td>
                 </tr>

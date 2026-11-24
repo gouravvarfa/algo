@@ -250,7 +250,9 @@ def _calendar_today() -> list[dict]:
     out = []
     for e in market_calendar.today_entries(now):
         what = e["note"] or ("Special session" if e["kind"] == "special" else "Market holiday")
-        if e["kind"] == "special":
+        if e["kind"] == "late_open":
+            text = f"{what}: {e['exchange']} opens at {e['start_time']} today (closed until then). Top-Bottom trades from {e['start_time']}."
+        elif e["kind"] == "special":
             text = f"{what}: {e['exchange']} special session {e['start_time']}-{e['end_time']}. Top-Bottom paper and real trading stay off in it; normal trading resumes next session."
         else:
             text = f"{what}: {e['exchange']} is closed today. No strategy evaluation and no real order."
@@ -267,6 +269,7 @@ def _calendar_today() -> list[dict]:
             when = f"Tomorrow ({d.strftime('%d %b')})" if k == 1 else d.strftime("%a %d %b")
             what = e["note"] or ("Special session" if e["kind"] == "special" else "Market holiday")
             text = (f"{when}: {ex} closed for {what}. No strategy evaluation and no real order that day." if e["kind"] == "holiday"
+                    else f"{when}: {ex} opens late at {e['start_time']} ({what}); closed until then." if e["kind"] == "late_open"
                     else f"{when}: {ex} special session {e['start_time']}-{e['end_time']} ({what}). Top-Bottom stays off in that session.")
             out.append({"exchange": ex, "kind": e["kind"], "text": text, "ahead": True})
     return out
