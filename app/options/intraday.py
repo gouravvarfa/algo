@@ -18,6 +18,7 @@ from pathlib import Path
 
 from app.options import bhavcopy
 from app.options.master import IST, UnderlyingInfo
+from app.ops.circuit import CircuitOpen
 from app.providers.angelone_client import AngelOneApiError, get_candle_data
 
 DB = Path(__file__).resolve().parents[2] / "data" / "intraday" / "nifty_1m.db"
@@ -88,11 +89,28 @@ def clean_rows(raw: list[list], day_filter=None, hours: tuple[str, str] = (OPEN,
     return out, bad
 
 
+CIRCUIT_WAITS = 4                  # how many times one request waits out an open candle circuit before it counts as failed
+
+
+async def _candles(session, exch: str, token: str, a: dt.datetime, b: dt.datetime) -> list:
+    """One candle request. While Angel One's 403s keep the candle circuit open, wait it out (30 s each) instead of failing: on 25 and 26 Nov
+    2026 the circuit opened at 07:31 and the CircuitOpen (not an AngelOneApiError) ended the whole GOLDM run after 25 of 140 contracts. After
+    CIRCUIT_WAITS waits it is an AngelOneApiError, so the contract is logged as failed, the run goes on and repair_errors tries it again."""
+    for n in range(CIRCUIT_WAITS + 1):
+        try:
+            return await get_candle_data(session, exch, token, "ONE_MINUTE", a.strftime("%Y-%m-%d %H:%M"), b.strftime("%Y-%m-%d %H:%M"))
+        except CircuitOpen as exc:
+            if n == CIRCUIT_WAITS:
+                raise AngelOneApiError(str(exc), "network", retryable=True) from exc
+            await asyncio.sleep(min(max(exc.retry_in, 1.0) + 1.0, 60.0))
+    return []
+
+
 async def _fetch(session, exch: str, token: str, start: dt.datetime, end: dt.datetime, chunk_days: int = 28) -> list[list]:
     rows, a = [], start
     while a < end:
         b = min(a + dt.timedelta(days=chunk_days), end)
-        rows += await get_candle_data(session, exch, token, "ONE_MINUTE", a.strftime("%Y-%m-%d %H:%M"), b.strftime("%Y-%m-%d %H:%M"))
+        rows += await _candles(session, exch, token, a, b)
         await asyncio.sleep(0.4)            # Angel One historical endpoint rate limit
         a = b
     return rows

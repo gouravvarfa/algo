@@ -154,3 +154,33 @@ def test_eod_payoff_of_one_straddle_is_its_premium_even_with_other_years_legs_op
            _leg("SELL", "CE", 24500, "2030-11-09", 154.05), _leg("SELL", "PE", 24500, "2030-11-09", 192.25)]
     r = iclient.post("/api/options/sim/mark", json={"date": "2026-03-06", "positions": straddle + fly}).json()
     assert r["payoff"]["max_profit"] == pytest.approx(200.0 * 65) and r["payoff"]["max_profit"] > 0
+
+
+def test_an_open_candle_circuit_is_waited_out_instead_of_ending_the_collector(monkeypatch):
+    """GOLDM, 25 and 26 Nov 2026: Angel One's 403s opened the candle circuit and the CircuitOpen ended the whole run after 25 of 140 contracts."""
+    import asyncio
+    from app.ops.circuit import CircuitOpen
+    from app.options import intraday
+    from app.providers.angelone_client import AngelOneApiError
+    calls, waits = [], []
+
+    async def fake_candles(session, exch, token, iv, a, b):
+        calls.append(token)
+        if token == "open-once" and calls.count(token) == 1:
+            raise CircuitOpen("angelone.candles", 30.0)
+        if token == "always-open":
+            raise CircuitOpen("angelone.candles", 30.0)
+        return [["2026-11-26T09:00:00+05:30", 1, 2, 1, 2, 10]]
+
+    async def no_sleep(s):
+        waits.append(s)
+
+    monkeypatch.setattr(intraday, "get_candle_data", fake_candles)
+    monkeypatch.setattr(intraday.asyncio, "sleep", no_sleep)
+    a, b = dt.datetime(2026, 11, 26, 9, 0), dt.datetime(2026, 11, 26, 10, 0)
+    assert len(asyncio.run(intraday._fetch(None, "MCX", "open-once", a, b))) == 1                      # waited 31 s once, then got the data
+    assert 31.0 in waits
+    import pytest
+    with pytest.raises(AngelOneApiError):                                                           # still open after 4 waits: this contract fails,
+        asyncio.run(intraday._fetch(None, "MCX", "always-open", a, b))                               # as an error the run records and goes past
+    assert calls.count("always-open") == intraday.CIRCUIT_WAITS + 1
