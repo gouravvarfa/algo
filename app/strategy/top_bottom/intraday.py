@@ -208,12 +208,17 @@ def run_intraday(
     fresh_top: float | None = None          # after the add: the Top / Bottom price was already beyond at that moment, so it is not a fresh crossing
     fresh_bot: float | None = None
 
-    def already_beyond(price: float) -> tuple[float | None, float | None]:
-        """After an exit to FLAT (owner, 26 Nov 2026: "breakeven par turant exit, fir new entry system point par, agar uppar top hai toh uske
-        cross hone par"): a Top / Bottom the price is already beyond is not a fresh crossing. It counts again only after a minute closes back on
-        its near side, the same fresh_top / fresh_bot rule as for an added instrument. SILVERMIC 26 Nov 2026: the SELL's breakeven exit at
-        151,750 was below the latest Bottom 153,737 and a SELL was taken again the next minute at 152,281 without any crossing."""
-        return (top if top is not None and price > top else None, bot if bot is not None and price < bot else None)
+    # A Top / Bottom the price is already beyond when a position closes to FLAT is SPENT (owner, 26 Nov 2026, SILVERMIC: "fresh bottom bana hi nhi
+    # hai ... agar wah pichle bottom ke uppar niche bhi hua toh [bhi sell nahi]"): it never opens a trade again, even if price goes back across
+    # it and through it once more. Only a NEW Top / Bottom (a later confirmation) may open that side; a Top / Bottom the price has not crossed
+    # stays usable (BUY when the latest Top is crossed). Kept as the confirmation index of the spent point.
+    spent_top_ci: int | None = None
+    spent_bot_ci: int | None = None
+
+    def spend(price: float, st: int | None, sb: int | None) -> tuple[int | None, int | None]:
+        """The spent Top / Bottom after an exit to FLAT at `price` (SILVERMIC 26 Nov 2026: the breakeven exit at 151,750 was below the latest
+        Bottom 153,737, and the SELL taken again at 09:01, and later at 10:51 on a re-cross of the same Bottom, should never have been)."""
+        return (cur_top_ci if top is not None and price > top else st, cur_bot_ci if bot is not None and price < bot else sb)
     pct_stop_days: set[dt.date] = {no_entry_day} if no_entry_day else set()   # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
 
     def can_enter(ts) -> bool:
@@ -393,7 +398,7 @@ def run_intraday(
                 else:
                     flag["issues"].append("gap through the stop but the 09:15-09:30 candle is incomplete: gap protocol NOT applied, ordinary rules used")
             elif open_t is None and top is not None and bot is not None:
-                for side, lvl, anchor, ok in (("BUY", top, bot, top_ok), ("SELL", bot, top, bot_ok)):
+                for side, lvl, anchor, ok in (("BUY", top, bot, top_ok and spent_top_ci != cur_top_ci), ("SELL", bot, top, bot_ok and spent_bot_ci != cur_bot_ci)):
                     if ok and too_close and is_gap_past_system_point(side, prev_close, day_open, lvl):
                         block(first, "GAP_ENTRY", side, lvl)
                         break
@@ -480,7 +485,7 @@ def run_intraday(
                     if not at_latest:
                         # the stop was an older System Point, not the latest one: exit, stay FLAT, no reverse (owner, 26 Nov 2026)
                         block_after = None
-                        fresh_top, fresh_bot = already_beyond(fill)
+                        spent_top_ci, spent_bot_ci = spend(fill, spent_top_ci, spent_bot_ci)
                         continue
                     # decided with the user (10 Nov 2026): the gap exit REVERSES at once, at the exit price, like a stop-and-reverse
                     rev = "SELL" if buy else "BUY"
@@ -535,7 +540,7 @@ def run_intraday(
                             close_trade(open_t, c.ts, fill, stop, BREAKEVEN_EXIT)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
-                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing (26 Nov 2026)
+                            spent_top_ci, spent_bot_ci = spend(fill, spent_top_ci, spent_bot_ci)   # ...except a spent one (26 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -551,7 +556,7 @@ def run_intraday(
                             pct_stop_days.add(day)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
-                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing (26 Nov 2026)
+                            spent_top_ci, spent_bot_ci = spend(fill, spent_top_ci, spent_bot_ci)   # ...except a spent one (26 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -566,7 +571,7 @@ def run_intraday(
                             close_trade(open_t, c.ts, fill, stop, STOP_EXIT_NO_REVERSAL, ambiguous=same_candle)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable
-                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing
+                            spent_top_ci, spent_bot_ci = spend(fill, spent_top_ci, spent_bot_ci)   # ...except a spent one
                             if buy:
                                 used_low = True
                             else:
@@ -598,11 +603,11 @@ def run_intraday(
                 lifted = next_day_reentry_from is not None and day >= next_day_reentry_from and lift_day == day
                 again_buy, again_sell = lifted and stopped_side == "BUY", lifted and stopped_side == "SELL"
                 if mode == "entry" and not gap_resolved:
-                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and mode_side != "BUY" and c.high > top and not used_high and fresh_top != top
-                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and mode_side != "SELL" and c.low < bot and not used_low and fresh_bot != bot
+                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and mode_side != "BUY" and c.high > top and not used_high and fresh_top != top and spent_top_ci != cur_top_ci
+                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and mode_side != "SELL" and c.low < bot and not used_low and fresh_bot != bot and spent_bot_ci != cur_bot_ci
                 else:
-                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and c.high > top and not used_high and fresh_top != top
-                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and c.low < bot and not used_low and fresh_bot != bot
+                    cand_buy = top is not None and bot is not None and (block_after is None or cur_top_ci > block_after or again_buy) and c.high > top and not used_high and fresh_top != top and spent_top_ci != cur_top_ci
+                    cand_sell = top is not None and bot is not None and (block_after is None or cur_bot_ci > block_after or again_sell) and c.low < bot and not used_low and fresh_bot != bot and spent_bot_ci != cur_bot_ci
                 if not (cand_buy or cand_sell) or not can_enter(c.ts):
                     break
                 if too_close:   # a genuine crossing happened, but the opposing points are too close: no new entry

@@ -122,11 +122,24 @@ def test_after_a_breakeven_exit_below_the_bottom_no_sell_is_taken_without_a_fres
     assert len(res.trades) == 1                                                                   # before: SELL again at 09:21
 
 
-def test_the_bottom_counts_again_after_price_closes_back_above_it_then_crosses_down():
-    res = run([(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 21, 88.0), (9, 22, 89.0, 91.0, 89.0, 90.6),     # 09:22 closes above 90: armed
-               (9, 23, 90.5, 90.6, 89.5, 89.8)], sell_rolled(85.0))                                            # 09:23 trades below 90: SELL
+def test_a_spent_bottom_never_opens_a_sell_again_even_after_price_goes_back_above_and_below_it():
+    # owner: "fresh bottom bana hi nhi hai ... agar wah pichle bottom ke uppar niche bhi hua toh [bhi sell nahi]"
+    res = run([(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 21, 88.0), (9, 22, 89.0, 91.0, 89.0, 90.6),     # back above 90...
+               (9, 23, 90.5, 90.6, 89.5, 89.8), (9, 24, 88.0)], sell_rolled(85.0))                              # ...and below it again
+    assert len(res.trades) == 1 and res.trades[0].exit_reason == BREAKEVEN_EXIT                                # no SELL
+
+
+def test_a_sell_comes_again_only_at_a_new_bottom():
+    # the 6 Mar daily close 86 and the 9 Mar close 88 make 86 a NEW Bottom (confirmed at the 9 Mar close); on 10 Mar the SELL comes below 86
+    dates = [dt.datetime(2026, 2, 20 + k) for k in range(6)] + [dt.datetime(2026, 3, 6), dt.datetime(2026, 3, 9)]
+    closes = [100, 110, 100, 90, 100, 108, 86, 88]
+    m6 = mins(6, [(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 25, 86.0)])                           # breakeven exit at 85, Bottom 90 spent
+    m9 = mins(9, [(9, 15, 88.0), (9, 20, 89.0, 91.0, 89.0, 90.5), (9, 25, 90.0, 90.2, 88.5, 88.6)])              # around the spent 90: nothing
+    m10 = mins(10, [(9, 15, 87.0), (9, 20, 86.5, 86.6, 85.5, 85.8)])                                            # below the new Bottom 86: SELL
+    res = run_intraday("X", dates, closes, m6 + m9 + m10, initial=sell_rolled(85.0))
+    assert [t.exit_reason for t in res.trades[:1]] == [BREAKEVEN_EXIT]
     s = res.trades[-1]
-    assert s.direction == "SELL" and s.entry_date == T(6, 9, 23) and s.entry_price == 90.0
+    assert len(res.trades) == 2 and s.direction == "SELL" and s.entry_price == 86.0 and s.entry_date == T(10, 9, 20)
 
 
 def test_after_a_breakeven_exit_a_buy_comes_when_the_top_above_is_crossed():
