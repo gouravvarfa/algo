@@ -106,3 +106,30 @@ def test_a_capped_one_percent_stop_gapped_through_exits_at_the_open():
                        entry_day_stop_pct=0.01, struct_cap_distance=0.03)
     t = res.trades[0]
     assert t.exit_reason == "CAPPED_1_PERCENT_STOP_EXIT" and t.exit_price == 103.0 and t.exit_date == T(6, 9, 15)
+
+
+# ---- owner, 26 Nov 2026 (SILVERMIC): after an exit to FLAT a new entry needs a real crossing of the Top / Bottom --------------------------------
+def sell_rolled(entry):
+    """A SELL taken over at `entry` below the latest Bottom 90 (a roll), with its 2% breakeven reached: stop = entry."""
+    init = sell(entry, entry=entry, breakeven=True)
+    return init
+
+
+def test_after_a_breakeven_exit_below_the_bottom_no_sell_is_taken_without_a_fresh_crossing():
+    # breakeven stop 85 hit at 09:20 (price 85.5); the latest Bottom 90 is ABOVE the price: price staying below it is no crossing
+    res = run([(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 21, 86.0), (9, 22, 86.0, 86.5, 85.0, 85.5), (9, 23, 87.0)], sell_rolled(85.0))
+    assert res.trades[0].exit_reason == BREAKEVEN_EXIT and res.trades[0].exit_price == 85.0
+    assert len(res.trades) == 1                                                                   # before: SELL again at 09:21
+
+
+def test_the_bottom_counts_again_after_price_closes_back_above_it_then_crosses_down():
+    res = run([(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 21, 88.0), (9, 22, 89.0, 91.0, 89.0, 90.6),     # 09:22 closes above 90: armed
+               (9, 23, 90.5, 90.6, 89.5, 89.8)], sell_rolled(85.0))                                            # 09:23 trades below 90: SELL
+    s = res.trades[-1]
+    assert s.direction == "SELL" and s.entry_date == T(6, 9, 23) and s.entry_price == 90.0
+
+
+def test_after_a_breakeven_exit_a_buy_comes_when_the_top_above_is_crossed():
+    res = run([(9, 15, 84.0), (9, 20, 84.5, 85.5, 84.5, 85.2), (9, 21, 100.0), (9, 22, 109.0, 110.5, 109.0, 110.2)], sell_rolled(85.0))
+    b = res.trades[-1]
+    assert b.direction == "BUY" and b.entry_price == 110.0 and b.entry_date == T(6, 9, 22)

@@ -207,6 +207,13 @@ def run_intraday(
     flat_done = False
     fresh_top: float | None = None          # after the add: the Top / Bottom price was already beyond at that moment, so it is not a fresh crossing
     fresh_bot: float | None = None
+
+    def already_beyond(price: float) -> tuple[float | None, float | None]:
+        """After an exit to FLAT (owner, 26 Nov 2026: "breakeven par turant exit, fir new entry system point par, agar uppar top hai toh uske
+        cross hone par"): a Top / Bottom the price is already beyond is not a fresh crossing. It counts again only after a minute closes back on
+        its near side, the same fresh_top / fresh_bot rule as for an added instrument. SILVERMIC 26 Nov 2026: the SELL's breakeven exit at
+        151,750 was below the latest Bottom 153,737 and a SELL was taken again the next minute at 152,281 without any crossing."""
+        return (top if top is not None and price > top else None, bot if bot is not None and price < bot else None)
     pct_stop_days: set[dt.date] = {no_entry_day} if no_entry_day else set()   # days a 1% (entry-day) or capped stop closed a trade: no new entry for the rest of that day
 
     def can_enter(ts) -> bool:
@@ -473,6 +480,7 @@ def run_intraday(
                     if not at_latest:
                         # the stop was an older System Point, not the latest one: exit, stay FLAT, no reverse (owner, 26 Nov 2026)
                         block_after = None
+                        fresh_top, fresh_bot = already_beyond(fill)
                         continue
                     # decided with the user (10 Nov 2026): the gap exit REVERSES at once, at the exit price, like a stop-and-reverse
                     rev = "SELL" if buy else "BUY"
@@ -527,6 +535,7 @@ def run_intraday(
                             close_trade(open_t, c.ts, fill, stop, BREAKEVEN_EXIT)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
+                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing (26 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -542,6 +551,7 @@ def run_intraday(
                             pct_stop_days.add(day)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable (decided 10 Nov 2026)
+                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing (26 Nov 2026)
                             if buy:
                                 used_low = True
                             else:
@@ -556,6 +566,7 @@ def run_intraday(
                             close_trade(open_t, c.ts, fill, stop, STOP_EXIT_NO_REVERSAL, ambiguous=same_candle)
                             open_t = None
                             block_after = None      # the existing Top / Bottom stay usable
+                            fresh_top, fresh_bot = already_beyond(fill)   # ...but only by a fresh crossing
                             if buy:
                                 used_low = True
                             else:
