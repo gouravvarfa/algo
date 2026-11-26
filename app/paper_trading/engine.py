@@ -695,7 +695,7 @@ class PaperEngine:
                 row["status"], row["exit_reason"] = "BEFORE_ADDED", "NOT_TAKEN_OVER"
 
         # After a 2%-breakeven exit the strategy stays flat and waits for a NEW System Point (no reversal).
-        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") in ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT", "NOT_TAKEN_OVER")
+        waiting = position is None and bool(rows) and rows[-1].get("exit_reason") in ("BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT", "STOP_EXIT_NO_REVERSAL", "NOT_TAKEN_OVER")
         live_closed = [r for r in rows if r["live"] and r["status"] != "OPEN"]
         wins = [r for r in live_closed if r["pnl_amount"] > 0]
         stats = {

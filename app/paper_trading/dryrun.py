@@ -29,7 +29,7 @@ DEFAULT_STOP_LIMIT_POINTS = 1.0
 
 LATE_AFTER_SECONDS = 120            # a signal noticed more than this after its candle closed is "late"
 # exits made by the stop order already resting on the exchange; the others (gap exit, roll) need an exit order from the app
-STOP_EXITS = {"TRAILING_STOP_REVERSAL", "STOP_LOSS_REVERSAL", "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT"}
+STOP_EXITS = {"TRAILING_STOP_REVERSAL", "STOP_LOSS_REVERSAL", "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", "ENTRY_DAY_STOP_EXIT", "CAPPED_1_PERCENT_STOP_EXIT", "STOP_EXIT_NO_REVERSAL"}
 NO_ORDER_EXITS = {"END_OF_BACKTEST"}    # the position is only being marked, nothing was closed
 
 

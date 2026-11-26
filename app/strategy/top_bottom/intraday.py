@@ -19,7 +19,9 @@ Rules reused unchanged from the daily engine (backtest.py):
   - The stop only ever trails forward (BUY up / SELL down) when a new opposite
     swing confirms - at the next day's open here, since swings confirm on
     daily closes.
-  - ALWAYS-REVERSING: when a stop is hit the position exits and the opposite
+  - REVERSING only at the latest System Point (owner, 26 Nov 2026): when a stop is hit the position exits; the opposite side is entered at the
+    same price only if the stop IS the latest opposite Top / Bottom; a stop at an older or nearer level exits FLAT (STOP_EXIT_NO_REVERSAL)
+    and waits for the latest Top / Bottom to be crossed. Otherwise as before: the opposite
     side is entered at the same price (the stop level becomes the new SELL/BUY
     system point), if the opposite anchor exists. After a GAP exit there is no
     automatic reverse - a fresh entry needs a genuine system-point crossing.
@@ -67,6 +69,7 @@ BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
 ENTRY_DAY_STOP_EXIT = "ENTRY_DAY_STOP_EXIT"
 ENTRY_DAY_STOP_PCT = 0.01   # the live engine passes this: entry-day stop = entry price -/+ 1%
 CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
+STOP_EXIT_NO_REVERSAL = "STOP_EXIT_NO_REVERSAL"   # the stop was not the latest opposite System Point: exit, stay FLAT (owner, 26 Nov 2026)
 NOT_TAKEN_OVER = "NOT_TAKEN_OVER"   # history's position at the moment the instrument was added: never shown as a live trade
 NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
 STRUCT_CAP_DISTANCE = 0.02  # structural stop this far (or farther) from the entry price -> the 1% stop stays instead
@@ -359,7 +362,10 @@ def run_intraday(
         # its window never completes, so the ordinary rules are used there, as before.
         forming = day == last_day and day_min[-1].ts.time() < d_second
         if prev_close is not None:
-            if open_t is not None and is_gap_through_stop(open_t.direction, day_open, open_t.active_stop):
+            # the 15-minute gap rule only protects a stop that IS the latest opposite System Point (owner, 26 Nov 2026). A breakeven, 1% or
+            # older-level stop gapped through exits at once at the open by the ordinary rules below (breakeven / 1%: flat; older level: flat).
+            sp_stop = open_t is not None and (bot if open_t.direction == "BUY" else top) is not None and abs(open_t.active_stop - (bot if open_t.direction == "BUY" else top)) <= 1e-6
+            if open_t is not None and sp_stop and is_gap_through_stop(open_t.direction, day_open, open_t.active_stop):
                 if first15_ok:
                     mode, mode_side = "exit", open_t.direction
                     mode_level = open_t.active_stop
@@ -524,6 +530,19 @@ def run_intraday(
                                 used_high = True
                             break
                         same_candle = open_t.entry_date == c.ts or stopouts > 0
+                        rev_level = bot if buy else top
+                        if rev_level is None or abs(stop - rev_level) > 1e-6:
+                            # The stop is an older / nearer level, not the LATEST opposite System Point: the stop-out stands, but no reversal.
+                            # CANBK 26 Nov 2026: the SELL's stop 134.41 (the 17 Nov Top) was hit and a BUY was taken at 134.41 while the latest
+                            # Top was 138.44 (owner: "top toh 138 hai, entry hi nhi honi chahiye thi"). Flat now; a BUY needs 138.44 crossed.
+                            close_trade(open_t, c.ts, fill, stop, STOP_EXIT_NO_REVERSAL, ambiguous=same_candle)
+                            open_t = None
+                            block_after = None      # the existing Top / Bottom stay usable
+                            if buy:
+                                used_low = True
+                            else:
+                                used_high = True
+                            break
                         close_trade(open_t, c.ts, fill, stop, "STOP_LOSS_REVERSAL", ambiguous=same_candle)
                         stopouts += 1
                         if buy:
