@@ -1199,3 +1199,60 @@ async def test_no_correction_when_angel_one_shows_a_position_held_by_hand(env, m
     assert env.fb.last("entry")[0] is None and not a["position"] and any("not done" in m["reason"] for m in a["missed"])
     await env.rt.tick(secs(10))
     assert env.fb.last("entry")[0] is None                                                             # started once: never tried again
+
+
+# ---- owner, 26 Nov 2026: a stop-out reverses only at the latest System Point; a breakeven / 1% stop gapped through exits at the open ----------
+def _limit_sells(env):
+    return [c[1] for c in env.fb.calls if c[0] == "place" and c[1]["ordertype"] in ("LIMIT", "MARKET") and c[1]["transactiontype"] == "SELL"]
+
+
+@async_test
+async def test_a_stop_exit_without_reversal_closes_by_our_stop_and_enters_nothing(env):
+    sid = await open_long(env)
+    env.sync(None, secs(60))
+    await go(env, env.ev("EXIT", "BUY", now=secs(60), reason="STOP_EXIT_NO_REVERSAL", exit_price=49500.0), now=secs(60))
+    assert env.fb.orders[sid]["status"] == "trigger pending"                                     # our own stop is expected to fill
+    env.fb.fill(sid, 49499.0)
+    await env.rt.tick(secs(62))
+    await env.rt.tick(secs(70))
+    a = env.state()
+    assert a["position"] is None and a["pending_entry"] is None
+    assert env.fb.last("entry") == (None, None) and env.fb.n_open() == 0                       # flat: no SELL entry after it
+
+
+@async_test
+async def test_a_15_minute_gap_exit_without_reversal_exits_at_once_and_enters_nothing(env):
+    sid = await open_long(env)
+    await _new_day_without_yesterdays_stop(env, sid)
+    env.fb.ltp_value = 49300.0
+    env.sync({**PAPER_BUY, "gap_state": "GAP_PENDING"}, TUE)
+    await env.rt.tick(TUE)
+    t930 = TUE.replace(minute=30, second=20)
+    env.fb.ltp_value = 49140.0
+    await go(env, env.ev("EXIT", "BUY", now=t930, reason="GAP_EXIT_15M_NO_REVERSAL", exit_price=49150.0), now=t930, position=None)
+    ex = _limit_sells(env)
+    assert len(ex) == 1 and ex[0]["ordertype"] == "LIMIT" and env.fb.last("stop") == (None, None)
+    env.fb.fill(env.fb.last("entry")[0], 49140.0)
+    await env.rt.tick(t930 + dt.timedelta(seconds=2))
+    a = env.state()
+    assert a["position"] is None and a["pending_entry"] is None and env.fb.n_open() == 0     # no SELL after it
+
+
+@async_test
+async def test_a_breakeven_stop_gapped_through_at_the_open_is_exited_at_once_not_after_15_minutes(env):
+    sid = await open_long(env)                                                               # BUY 50,002.5, breakeven stop at the entry
+    await _new_day_without_yesterdays_stop(env, sid)
+    be = {"direction": "BUY", "entry_price": 50000.0, "active_stop": 50000.0, "breakeven": True}
+    env.fb.ltp_value = 49300.0                                                               # opens below the breakeven stop
+    env.sync(be, TUE)
+    await env.rt.tick(TUE)                                                                   # the strategy has not seen the first minute: the real side waits
+    t916 = TUE.replace(minute=16, second=5)                                                  # the strategy exits at the open (breakeven): flat, no reversal
+    await go(env, env.ev("EXIT", "BUY", now=t916, reason="BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT", exit_price=49300.0), now=t916, position=None)
+    await env.rt.tick(t916 + dt.timedelta(seconds=4))                                         # no stop is resting: after the 3 s grace an exit LIMIT goes out
+    ex = _limit_sells(env)
+    assert len(ex) == 1 and ex[0]["ordertype"] == "LIMIT"
+    env.fb.fill(env.fb.last("entry")[0], 49300.0)
+    await env.rt.tick(t916 + dt.timedelta(seconds=6))
+    a = env.state()
+    assert a["position"] is None and a["pending_entry"] is None and env.fb.n_open() == 0
+    assert (t916 + dt.timedelta(seconds=6)) < TUE.replace(minute=30)                         # well before the 15-minute candle completes

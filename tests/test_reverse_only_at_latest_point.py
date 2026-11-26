@@ -70,3 +70,39 @@ def test_a_gap_through_a_stop_at_the_latest_top_waits_for_the_15_minute_candle()
     t = res.trades[0]
     assert t.exit_date is None or t.exit_date >= T(6, 9, 30)
     assert t.exit_reason != BREAKEVEN_EXIT
+
+
+def first15(open_, high, low, close):
+    """A complete first 15 minutes (09:15-09:29): the 09:15 candle carries the high / low, the rest sit at `close`."""
+    return [(9, 15, open_, high, low, close)] + [(9, m, close) for m in range(16, 30)]
+
+
+def test_a_gap_through_an_older_system_point_stop_uses_the_15_minute_rule():
+    # stop 104 is an older Top (latest Top 110): it IS a System Point, so the gap open 106 does not exit at the open; the first 15 minutes
+    # (high 106.5) hold, so the SELL is still open after 09:30 (CANBK 25 Nov 2026: opened 135.71 above its stop 134.41, gap held at 136.5)
+    res = run(first15(106.0, 106.5, 105.0, 105.5) + [(9, 30, 105.4), (9, 40, 105.2)], sell(104.0))
+    t = res.trades[0]
+    assert t.exit_reason == "END_OF_BACKTEST" and len(res.trades) == 1
+
+
+def test_the_15_minute_exit_of_an_older_system_point_stop_does_not_reverse():
+    # same gap; at 09:40 price breaks the 15-minute high 106.5: exit at 106.5, FLAT (the stop 104 was not the latest Top 110), no BUY
+    res = run(first15(106.0, 106.5, 105.0, 105.5) + [(9, 30, 105.4), (9, 40, 106.0, 107.0, 106.0, 106.8), (9, 45, 107.0)], sell(104.0))
+    t = res.trades[0]
+    assert t.exit_reason == "GAP_EXIT_15M_NO_REVERSAL" and t.exit_price == 106.5 and len(res.trades) == 1
+
+
+def test_the_15_minute_exit_of_a_latest_system_point_stop_still_reverses():
+    res = run(first15(112.0, 112.5, 111.0, 111.5) + [(9, 30, 111.4), (9, 40, 112.0, 113.0, 112.0, 112.8)], sell(110.0))
+    assert res.trades[0].exit_reason == "GAP_EXIT_15M" and res.trades[1].direction == "BUY"
+
+
+def test_a_capped_one_percent_stop_gapped_through_exits_at_the_open():
+    # SELL at 100 whose structural stop 110 is 10% away: capped at 101 (entry + 1%). Opens 103: exit at the open, no 15-minute wait
+    init = sell(110.0)
+    init.trade.entry_day_sl = 101.0
+    d, c = daily()
+    res = run_intraday("X", d, c, mins(6, first15(103.0, 103.5, 102.0, 102.5) + [(9, 30, 102.4)]), initial=init,
+                       entry_day_stop_pct=0.01, struct_cap_distance=0.03)
+    t = res.trades[0]
+    assert t.exit_reason == "CAPPED_1_PERCENT_STOP_EXIT" and t.exit_price == 103.0 and t.exit_date == T(6, 9, 15)

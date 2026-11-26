@@ -69,6 +69,7 @@ BREAKEVEN_EXIT = "BREAKEVEN_EXIT_AFTER_2_PERCENT_PROFIT"
 ENTRY_DAY_STOP_EXIT = "ENTRY_DAY_STOP_EXIT"
 ENTRY_DAY_STOP_PCT = 0.01   # the live engine passes this: entry-day stop = entry price -/+ 1%
 CAPPED_STOP_EXIT = "CAPPED_1_PERCENT_STOP_EXIT"
+GAP_EXIT_NO_REVERSAL = "GAP_EXIT_15M_NO_REVERSAL"   # a gap exit (15-minute rule) of a stop at an older System Point: exit, stay FLAT (owner, 26 Nov 2026)
 STOP_EXIT_NO_REVERSAL = "STOP_EXIT_NO_REVERSAL"   # the stop was not the latest opposite System Point: exit, stay FLAT (owner, 26 Nov 2026)
 NOT_TAKEN_OVER = "NOT_TAKEN_OVER"   # history's position at the moment the instrument was added: never shown as a live trade
 NEXT_DAY_REENTRY_FROM = dt.date(2026, 10, 27)   # from this day on, a position stopped out on its entry day may be re-entered NEXT day at the same System Point (earlier days keep their recorded result)
@@ -109,6 +110,16 @@ def _f(v: float) -> str:
 
 
 @tracked("top_bottom.run_intraday")
+def stop_is_breakeven(t: Trade) -> bool:
+    """The 2%-profit breakeven stop (the entry price), not a System Point."""
+    return t.breakeven_date is not None and abs(t.active_stop - t.entry_price) <= 1e-6
+
+
+def stop_is_percent(t: Trade) -> bool:
+    """A 1% stop (the entry-day stop, or the capped stop while the structural one is too far), not a System Point."""
+    return t.entry_day_sl is not None and abs(t.active_stop - t.entry_day_sl) <= 1e-6
+
+
 def run_intraday(
     symbol: str,
     daily_dates: list[dt.datetime],
@@ -362,9 +373,10 @@ def run_intraday(
         # its window never completes, so the ordinary rules are used there, as before.
         forming = day == last_day and day_min[-1].ts.time() < d_second
         if prev_close is not None:
-            # the 15-minute gap rule only protects a stop that IS the latest opposite System Point (owner, 26 Nov 2026). A breakeven, 1% or
-            # older-level stop gapped through exits at once at the open by the ordinary rules below (breakeven / 1%: flat; older level: flat).
-            sp_stop = open_t is not None and (bot if open_t.direction == "BUY" else top) is not None and abs(open_t.active_stop - (bot if open_t.direction == "BUY" else top)) <= 1e-6
+            # the 15-minute gap rule only protects a stop that sits at a System Point (a Top / Bottom, owner, 26 Nov 2026: "15 minute wale rules bus
+            # jab system point par hamara stop loss ho"). A breakeven stop or a 1% (entry-day / capped) stop gapped through exits at once at the
+            # open by the ordinary rules below, and the strategy stays FLAT until the latest Top / Bottom is crossed.
+            sp_stop = open_t is not None and not stop_is_breakeven(open_t) and not stop_is_percent(open_t)
             if open_t is not None and sp_stop and is_gap_through_stop(open_t.direction, day_open, open_t.active_stop):
                 if first15_ok:
                     mode, mode_side = "exit", open_t.direction
@@ -454,8 +466,14 @@ def run_intraday(
                     })
                     open_t.gap_state = "GAP_EXITED"
                     open_t.gap_first_high, open_t.gap_first_low = fc.high, fc.low
-                    close_trade(open_t, c.ts, fill, level, "GAP_EXIT_15M")
+                    latest_sp = bot if buy else top
+                    at_latest = latest_sp is not None and abs(mode_level - latest_sp) <= 1e-6
+                    close_trade(open_t, c.ts, fill, level, "GAP_EXIT_15M" if at_latest else GAP_EXIT_NO_REVERSAL)
                     open_t, mode, gap_resolved = None, None, True
+                    if not at_latest:
+                        # the stop was an older System Point, not the latest one: exit, stay FLAT, no reverse (owner, 26 Nov 2026)
+                        block_after = None
+                        continue
                     # decided with the user (10 Nov 2026): the gap exit REVERSES at once, at the exit price, like a stop-and-reverse
                     rev = "SELL" if buy else "BUY"
                     anchor = top if rev == "SELL" else bot
